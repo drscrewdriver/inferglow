@@ -1,0 +1,237 @@
+package session
+
+import (
+	"reflect"
+	"testing"
+)
+
+// Check 4.3.1: DefaultAnalysisHandler correctly detects overflow
+func TestDefaultAnalysisHandlerOverflow(t *testing.T) {
+	window := []ChatMessage{
+		{Role: "user", Content: "This is a very long message that should exceed the limit"},
+		{Role: "assistant", Content: "And another long response from the assistant side of the conversation"},
+	}
+	full := []ChatMessage{
+		{Role: "system", Content: "You are helpful"},
+	}
+
+	// Window bytes > 50, should return true
+	if !DefaultAnalysisHandler(full, window, 50) {
+		t.Error("DefaultAnalysisHandler should return true when window exceeds maxLength")
+	}
+
+	// Window bytes <= 50, should return false
+	if DefaultAnalysisHandler(full, window, 500) {
+		t.Error("DefaultAnalysisHandler should return false when window is within maxLength")
+	}
+}
+
+// Check 4.3.1: DefaultAnalysisHandler empty window
+func TestDefaultAnalysisHandlerEmpty(t *testing.T) {
+	if DefaultAnalysisHandler(nil, nil, 100) {
+		t.Error("DefaultAnalysisHandler should return false for empty window")
+	}
+}
+
+// Check 4.3.2: SimpleCutResizeHandler trims oldest messages
+func TestSimpleCutResizeHandler(t *testing.T) {
+	window := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello!"},
+		{Role: "assistant", Content: "Hi there!"},
+	}
+	full := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+	}
+
+	resized, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler failed: %v", err)
+	}
+
+	// Should keep only messages that fit within the remaining budget
+	// After removing "You are helpful." (16 bytes) and "Hello!" (6 bytes),
+	// "Hi there!" (10 bytes) should remain
+	if len(resized) == 0 {
+		t.Error("SimpleCutResizeHandler should keep at least the most recent message")
+	}
+	if len(resized) > 0 && resized[0].Role != "assistant" {
+		t.Errorf("Should keep assistant message, got role=%q", resized[0].Role)
+	}
+}
+
+// Check 4.3.3: SimpleCutResizeHandler fits within limit
+func TestSimpleCutResizeHandlerFitsLimit(t *testing.T) {
+	full := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello!"},
+	}
+	window := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello!"},
+		{Role: "assistant", Content: "Hi there!"},
+	}
+
+	resized, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler failed: %v", err)
+	}
+
+	// Calculate bytes
+	totalBytes := 0
+	for _, m := range resized {
+		totalBytes += len(ContentToString(m.Content))
+	}
+
+	// After trimming from front, remaining should fit in reasonable limit
+	// The last message "Hi there!" is 10 bytes, which should definitely fit
+	if totalBytes > 100 {
+		t.Errorf("totalBytes = %d, should be small (kept only most recent messages)", totalBytes)
+	}
+}
+
+// Check 4.3.4: SimpleCutResizeHandler preserves FullContext
+func TestSimpleCutPreservesFullContext(t *testing.T) {
+	full := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello!"},
+		{Role: "assistant", Content: "Hi there!"},
+		{Role: "user", Content: "How are you?"},
+	}
+	window := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello!"},
+		{Role: "assistant", Content: "Hi there!"},
+	}
+
+	originalFull := make([]ChatMessage, len(full))
+	copy(originalFull, full)
+
+	_, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(full, originalFull) {
+		t.Error("FullContext was modified by SimpleCutResizeHandler")
+	}
+}
+
+// Check 4.3.5: SimpleCutResizeHandler truncates single message overflow
+func TestSimpleCutSingleMessageOverflow(t *testing.T) {
+	full := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+	}
+	window := []ChatMessage{
+		{Role: "user", Content: "This is a very long message that definitely exceeds any reasonable length limit we might set for the context window in our application"},
+	}
+
+	resized, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler failed: %v", err)
+	}
+
+	// Should keep at least the most recent message
+	if len(resized) != 1 {
+		t.Fatalf("len(resized) = %d, want 1 (kept most recent message even if oversized)", len(resized))
+	}
+
+	// Message content may be trimmed but message should not be dropped entirely
+	if resized[0].Content == "" {
+		t.Error("Single overflowing message was dropped instead of kept with truncated content")
+	}
+}
+
+// Check 4.3.6: AutoResize integration
+func TestAutoResizeIntegration(t *testing.T) {
+	s := NewSession("auto-resize-test", 50)
+	s.AutoResize = true
+
+	trigged := false
+	s.ResizeHandler = func(fullContext []ChatMessage, contextWindow []ChatMessage) ([]ChatMessage, error) {
+		trigged = true
+		return SimpleCutResizeHandler(fullContext, contextWindow)
+	}
+
+	// Add short messages that fit
+	s.AddMessage("system", "You are helpful.", "")
+	s.AddMessage("user", "Hello!", "")
+
+	// No trigger yet
+	if trigged {
+		t.Error("ResizeHandler should not be triggered for messages within limit")
+	}
+
+	// Add a long message that exceeds 50 bytes
+	s.AddMessage("assistant", "This is a very long response that should definitely exceed the 50 byte limit we set for testing auto-resize functionality", "")
+
+	if !trigged {
+		t.Error("ResizeHandler should be triggered when AutoResize=true and message exceeds MaxLength")
+	}
+
+	// FullContext should have all messages (3 messages total)
+	if len(s.FullContext) != 3 {
+		t.Errorf("FullContext len = %d, want 3", len(s.FullContext))
+	}
+
+	// ContextWindow should be trimmed
+	if len(s.ContextWindow) >= 3 {
+		t.Errorf("ContextWindow was not trimmed: len=%d, should be less than FullContext len=3", len(s.ContextWindow))
+	}
+}
+
+// Check 4.3.7: SetResizeHandler allows custom handler
+func TestSetResizeHandler(t *testing.T) {
+	s := NewSession("custom-handler", 100)
+
+	customHandler := func(fullContext []ChatMessage, contextWindow []ChatMessage) ([]ChatMessage, error) {
+		return nil, nil
+	}
+
+	s.ResizeHandler = customHandler
+
+	if s.ResizeHandler == nil {
+		t.Fatal("ResizeHandler should be settable")
+	}
+
+	// Handler is settable
+	resized, err := s.ResizeHandler(nil, nil)
+	if resized != nil || err != nil {
+		t.Error("custom handler returned unexpected non-nil results")
+	}
+}
+
+// Test SimpleCutResizeHandler with empty window
+func TestSimpleCutEmptyWindow(t *testing.T) {
+	full := []ChatMessage{}
+	window := []ChatMessage{}
+
+	_, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler with empty window returned error: %v", err)
+	}
+}
+
+// Test SimpleCutResizeHandler preserves order
+func TestSimpleCutPreservesOrder(t *testing.T) {
+	full := []ChatMessage{}
+	window := []ChatMessage{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "second"},
+		{Role: "user", Content: "third"},
+	}
+
+	resized, err := SimpleCutResizeHandler(full, window)
+	if err != nil {
+		t.Fatalf("SimpleCutResizeHandler failed: %v", err)
+	}
+
+	if len(resized) == 0 {
+		t.Fatal("should keep at least one message")
+	}
+
+	// Should keep most recent message at the end
+	if resized[len(resized)-1].Content != "third" {
+		t.Errorf("last message should be 'third', got %q", resized[len(resized)-1].Content)
+	}
+}
