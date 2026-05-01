@@ -20,6 +20,11 @@ type ModelRequest struct {
 	Options       map[string]any
 	Model         string
 	Temperature   float64
+	// TemperatureSet indicates that the caller explicitly set Temperature (even
+	// to 0). When false (zero value), providers may apply their own default.
+	// This allows callers to request deterministic temperature=0 without it
+	// being silently overridden by the provider default.
+	TemperatureSet bool
 }
 
 // ModelResponse 模型响应结果
@@ -47,6 +52,7 @@ type RequestData struct {
 	Messages    []ChatMessage
 	Tools       []ToolDefinition
 	Temperature float64
+	MaxTokens   int
 	Options     map[string]any
 }
 

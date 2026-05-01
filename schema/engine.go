@@ -95,8 +95,9 @@ func (ce *ContractEngine) validateData(data any, ensureKeys map[string]EnsurePol
 
 	dict, ok := data.(map[string]any)
 	if !ok {
-		// 非 map 类型，跳过校验
-		return nil
+		// 非 map 类型一律视为校验失败：之前直接返回 nil 会让完全错误
+		// 的响应格式（字符串、数组、数字）通过校验。
+		return fmt.Errorf("expected map[string]any, got %T", data)
 	}
 
 	if len(ensureKeys) == 0 {

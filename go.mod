@@ -1,4 +1,4 @@
-﻿module github.com/inferglow/model
+module github.com/inferglow/model
 
 go 1.25.0
 

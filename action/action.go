@@ -44,12 +44,16 @@ type ActionExecutor interface {
 // ActionResult is the structured outcome of an Action execution.
 //
 // Status is one of "success", "error", or "blocked". When OK is false,
-// Error carries a human-readable message.
+// Error carries a human-readable message. Metadata is an optional
+// side-channel for executor-specific extras that don't fit into the
+// primary Result (e.g. MCP resource links collected during a
+// tools/call response). Executors MAY leave Metadata nil.
 type ActionResult struct {
-	OK     bool
-	Status string // "success" | "error" | "blocked"
-	Result any
-	Error  string
+	OK       bool
+	Status   string         // "success" | "error" | "blocked"
+	Result   any
+	Error    string
+	Metadata map[string]any
 }
 
 // ActionRegistry is a concurrency-safe catalog of Actions keyed by Name.

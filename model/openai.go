@@ -8,7 +8,20 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// DefaultMaxTokens is the default max_tokens value sent to OpenAI-compatible
+// APIs when the caller does not specify one. Chosen to match the OpenAI
+// DEFAULT_SETTINGS entry.
+const DefaultMaxTokens = 4096
+
+// DefaultTemperature is the default temperature used when the caller does not
+// explicitly set Temperature on ModelRequest.
+const DefaultTemperature = 0.7
+
+// DefaultOpenAIBaseURL is the default OpenAI-compatible API endpoint.
+const DefaultOpenAIBaseURL = "https://api.openai.com/v1"
 
 // OpenAICompatibleProvider OpenAI 兼容协议的 Provider 实现
 // 支持 OpenAI / DeepSeek / Qwen / Ollama 等兼容 API
@@ -17,11 +30,53 @@ type OpenAICompatibleProvider struct {
 	APIKey     string
 	HTTPClient *http.Client
 	Model      string
+	// ProviderName overrides the value returned by Name(). Defaults to
+	// "openai-compatible" when empty so existing behavior is preserved.
+	ProviderName string
+	// RoleMapping maps request roles (e.g. "developer") to provider-specific
+	// roles. If a role is not present in the map, it is used unchanged.
+	// Example: DeepSeek/Qwen/GLM/Kimi do not accept "developer"; mapping it
+	// to "system" causes the developer content to be merged into the system
+	// message instead of being emitted as a separate "developer" message.
+	RoleMapping map[string]string
 }
 
 // Name 返回 Provider 名称
 func (p *OpenAICompatibleProvider) Name() string {
+	if p.ProviderName != "" {
+		return p.ProviderName
+	}
 	return "openai-compatible"
+}
+
+// CacheCapability returns the prefix-cache profile for this provider.
+// Looks up ProviderCacheProfiles[p.Name()] and returns the matching profile
+// (or the conservative default if the name is unknown). Providers that set
+// ProviderName to a known profile name (e.g., "deepseek", "qwen", "openai")
+// pick up the corresponding capability automatically.
+func (p *OpenAICompatibleProvider) CacheCapability() CacheCapability {
+	return CacheCapabilityFor(p.Name())
+}
+
+// mapRole applies RoleMapping to the given role. If no mapping exists, the
+// role is returned unchanged.
+func (p *OpenAICompatibleProvider) mapRole(role string) string {
+	if p.RoleMapping == nil {
+		return role
+	}
+	if mapped, ok := p.RoleMapping[role]; ok && mapped != "" {
+		return mapped
+	}
+	return role
+}
+
+// effectiveHTTPClient returns the configured HTTPClient or a sane fallback
+// with a 5-minute timeout (long enough for streaming responses).
+func (p *OpenAICompatibleProvider) effectiveHTTPClient() *http.Client {
+	if p.HTTPClient != nil {
+		return p.HTTPClient
+	}
+	return &http.Client{Timeout: 5 * time.Minute}
 }
 
 // GenerateRequestData 将 ModelRequest 转换为 OpenAI API 格式
@@ -43,9 +98,27 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 		messages = append(messages, ChatMessage{Role: "system", Content: req.System})
 	}
 
-	// 开发消息
+	// 开发消息 - apply role mapping. If mapped to "system", merge into the
+	// existing system message (or create one if missing) instead of emitting
+	// a separate developer message. This is required for DeepSeek/Qwen/GLM/
+	// Kimi which reject the "developer" role.
 	if req.Developer != "" {
-		messages = append(messages, ChatMessage{Role: "developer", Content: req.Developer})
+		developerRole := p.mapRole("developer")
+		if developerRole == "system" {
+			merged := false
+			for i, m := range messages {
+				if m.Role == "system" {
+					messages[i].Content = m.Content + "\n" + req.Developer
+					merged = true
+					break
+				}
+			}
+			if !merged {
+				messages = append(messages, ChatMessage{Role: "system", Content: req.Developer})
+			}
+		} else {
+			messages = append(messages, ChatMessage{Role: developerRole, Content: req.Developer})
+		}
 	}
 
 	// 聊天历史
@@ -80,9 +153,29 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 		}
 	}
 
+	// Temperature: respect the caller's value. If TemperatureSet=true, even 0
+	// is honored (deterministic). Otherwise the legacy behavior applies: 0 is
+	// treated as "unset" and replaced with DefaultTemperature.
 	temperature := req.Temperature
-	if temperature == 0 {
-		temperature = 0.7
+	if !req.TemperatureSet {
+		if temperature == 0 {
+			temperature = DefaultTemperature
+		}
+	}
+
+	// MaxTokens: prefer caller-provided Options["max_tokens"], else default.
+	maxTokens := DefaultMaxTokens
+	if req.Options != nil {
+		if v, ok := req.Options["max_tokens"]; ok {
+			switch n := v.(type) {
+			case int:
+				maxTokens = n
+			case int64:
+				maxTokens = int(n)
+			case float64:
+				maxTokens = int(n)
+			}
+		}
 	}
 
 	return &RequestData{
@@ -90,8 +183,24 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 		Messages:    messages,
 		Tools:       tools,
 		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Options:     req.Options,
 	}, nil
+}
+
+// openAITool is the OpenAI API tool envelope: {"type":"function","function":{...}}
+// ToolDefinition is the inner "function" spec.
+type openAITool struct {
+	Type     string         `json:"type"`
+	Function ToolDefinition `json:"function"`
+}
+
+// openAIToolState accumulates streaming tool_call deltas (id, name, and
+// partial JSON arguments) across SSE chunks per tool index.
+type openAIToolState struct {
+	ID   string
+	Name string
+	Args strings.Builder
 }
 
 // RequestModel 发送 HTTP POST 请求，支持 SSE 流式
@@ -100,12 +209,17 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 		return nil, fmt.Errorf("request data cannot be nil")
 	}
 
-	client := p.HTTPClient
-	if client == nil {
-		client = &http.Client{}
+	// M-HIGH-4: validate BaseURL — without it the URL becomes relative
+	// ("/chat/completions") and the request silently fails or hits an
+	// unexpected host.
+	baseURL := p.BaseURL
+	if baseURL == "" {
+		return nil, fmt.Errorf("OpenAICompatibleProvider.BaseURL is empty; configure base_url or use a factory function")
 	}
 
-	url := strings.TrimRight(p.BaseURL, "/") + "/chat/completions"
+	client := p.effectiveHTTPClient()
+
+	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
 
 	// 构建请求体
 	reqBody := map[string]any{
@@ -116,13 +230,26 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 	if data.Temperature > 0 {
 		reqBody["temperature"] = data.Temperature
 	}
+	// M-CRITICAL-1: wrap each tool in the OpenAI envelope.
 	if len(data.Tools) > 0 {
-		reqBody["tools"] = data.Tools
+		tools := make([]openAITool, len(data.Tools))
+		for i, t := range data.Tools {
+			tools[i] = openAITool{Type: "function", Function: t}
+		}
+		reqBody["tools"] = tools
+	}
+	// M-HIGH-10: explicit max_tokens takes precedence over Options.
+	if data.MaxTokens > 0 {
+		reqBody["max_tokens"] = data.MaxTokens
 	}
 	if len(data.Options) > 0 {
 		for k, v := range data.Options {
 			reqBody[k] = v
 		}
+	}
+	// Re-apply max_tokens after Options loop so it wins over Options["max_tokens"].
+	if data.MaxTokens > 0 {
+		reqBody["max_tokens"] = data.MaxTokens
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -157,41 +284,160 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 		defer close(stream)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
+		// Use bufio.Reader so we can poll ctx.Done() between reads.
+		reader := bufio.NewReader(resp.Body)
 		var usage *UsageInfo
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
 
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				continue
-			}
+		// M-CRITICAL-2: accumulate streaming tool_call arguments per index.
+		toolStates := make(map[int]*openAIToolState)
 
-			var chunk openAIChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue
-			}
-
-			schunk := toStreamChunk(chunk, usage)
-			stream <- schunk
-
-			if schunk.IsDone {
-				break
+		emit := func(schunk *StreamChunk) {
+			select {
+			case stream <- schunk:
+			case <-ctx.Done():
 			}
 		}
 
-		if err := scanner.Err(); err != nil {
-			stream <- &StreamChunk{
-				IsDone: true,
-				Meta:   map[string]any{"error": err.Error()},
+		for {
+			// M-CRITICAL-3: poll context before each read so a cancelled
+			// consumer doesn't leak this goroutine.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					if strings.TrimSpace(line) != "" {
+						if processed := p.processOpenAILine(line, usage, toolStates, emit); processed != nil {
+							usage = processed
+						}
+					}
+					return
+				}
+				emit(&StreamChunk{
+					IsDone: true,
+					Meta:   map[string]any{"error": err.Error()},
+				})
+				return
+			}
+
+			if u := p.processOpenAILine(line, usage, toolStates, emit); u != nil {
+				usage = u
 			}
 		}
 	}()
 
 	return stream, nil
+}
+
+// processOpenAILine parses one SSE line and emits any resulting StreamChunk
+// via emit. Returns the updated usage pointer (nil if unchanged). On
+// FinishReason=="tool_calls" it emits the accumulated tool calls.
+func (p *OpenAICompatibleProvider) processOpenAILine(
+	line string,
+	usage *UsageInfo,
+	toolStates map[int]*openAIToolState,
+	emit func(*StreamChunk),
+) *UsageInfo {
+	if !strings.HasPrefix(line, "data: ") {
+		return nil
+	}
+
+	data := strings.TrimPrefix(line, "data: ")
+	data = strings.TrimSpace(data)
+	if data == "[DONE]" || data == "" {
+		return nil
+	}
+
+	var chunk openAIChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return nil
+	}
+
+	if chunk.Usage != nil {
+		usage = chunk.Usage
+	}
+
+	if len(chunk.Choices) == 0 {
+		emit(&StreamChunk{IsDone: true, Usage: usage})
+		return usage
+	}
+
+	c := chunk.Choices[0]
+	result := &StreamChunk{
+		Usage: usage,
+	}
+
+	if c.Delta.Content != nil {
+		result.Delta = *c.Delta.Content
+	}
+
+	if c.Delta.Reasoning != nil {
+		result.Reasoning = *c.Delta.Reasoning
+	}
+
+	// Accumulate tool_call deltas per index. The name and id arrive in the
+	// first chunk; arguments arrive in pieces across subsequent chunks.
+	for _, tc := range c.Delta.ToolCalls {
+		st, ok := toolStates[tc.Index]
+		if !ok {
+			st = &openAIToolState{}
+			toolStates[tc.Index] = st
+		}
+		if tc.ID != "" {
+			st.ID = tc.ID
+		}
+		if tc.Function.Name != "" {
+			st.Name = tc.Function.Name
+		}
+		if tc.Function.Arguments != "" {
+			st.Args.WriteString(tc.Function.Arguments)
+		}
+	}
+
+	if c.FinishReason == "tool_calls" {
+		// Emit accumulated tool calls.
+		// Iterate by sorted index for deterministic order.
+		indices := make([]int, 0, len(toolStates))
+		for idx := range toolStates {
+			indices = append(indices, idx)
+		}
+		// Simple insertion sort for small slices.
+		for i := 1; i < len(indices); i++ {
+			for j := i; j > 0 && indices[j] < indices[j-1]; j-- {
+				indices[j], indices[j-1] = indices[j-1], indices[j]
+			}
+		}
+		tools := make([]ToolCall, 0, len(indices))
+		for _, idx := range indices {
+			st := toolStates[idx]
+			args := map[string]any{}
+			if st.Args.Len() > 0 {
+				if err := json.Unmarshal([]byte(st.Args.String()), &args); err != nil {
+					args = map[string]any{"_raw": st.Args.String()}
+				}
+			}
+			tools = append(tools, ToolCall{
+				ID:        st.ID,
+				Name:      st.Name,
+				Arguments: args,
+			})
+		}
+		result.Tools = tools
+		result.IsDone = true
+		// Clear toolStates so a subsequent stream doesn't reuse them.
+		for k := range toolStates {
+			delete(toolStates, k)
+		}
+	} else if c.FinishReason != "" {
+		result.IsDone = true
+	}
+
+	emit(result)
+	return usage
 }
 
 // BroadcastResponse 将 SSE 流转换为 ResultEvent 流
@@ -285,6 +531,9 @@ type functionCall struct {
 	Arguments string `json:"arguments"`
 }
 
+// toStreamChunk is retained for backward compatibility with existing tests
+// that construct openAIChunk values directly. New streaming code uses
+// processOpenAILine above which properly accumulates tool_call arguments.
 func toStreamChunk(chunk openAIChunk, usage *UsageInfo) *StreamChunk {
 	if len(chunk.Choices) == 0 {
 		return &StreamChunk{IsDone: true, Usage: usage}

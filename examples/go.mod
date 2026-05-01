@@ -1,4 +1,4 @@
-﻿module github.com/inferglow/examples
+module github.com/inferglow/examples
 
 go 1.25.0
 

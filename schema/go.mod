@@ -1,4 +1,4 @@
-﻿module github.com/inferglow/schema
+module github.com/inferglow/schema
 
 go 1.25.0
 

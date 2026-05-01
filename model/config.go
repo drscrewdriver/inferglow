@@ -180,11 +180,25 @@ var DEFAULT_SETTINGS = map[string]map[string]any{
 	},
 	"deepseek": {
 		"model":       "deepseek-chat",
+		"base_url":     "https://api.deepseek.com/v1",
 		"temperature": 0.7,
 		"max_tokens":  4096,
 	},
 	"qwen": {
 		"model":       "qwen-max",
+		"base_url":     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	"glm": {
+		"model":       "glm-4",
+		"base_url":     "https://open.bigmodel.cn/api/paas/v4",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	"kimi": {
+		"model":       "moonshot-v1-8k",
+		"base_url":     "https://api.moonshot.cn/v1",
 		"temperature": 0.7,
 		"max_tokens":  4096,
 	},

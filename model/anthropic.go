@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // AnthropicCompatibleProvider Anthropic Claude Messages API 兼容 Provider 实现
@@ -22,6 +23,30 @@ type AnthropicCompatibleProvider struct {
 // Name 返回 Provider 名称
 func (p *AnthropicCompatibleProvider) Name() string {
 	return "anthropic"
+}
+
+// CacheCapability returns the prefix-cache profile for this provider.
+// Looks up ProviderCacheProfiles[p.Name()] and returns the matching profile
+// (or the conservative default if the name is unknown).
+func (p *AnthropicCompatibleProvider) CacheCapability() CacheCapability {
+	return CacheCapabilityFor(p.Name())
+}
+
+// effectiveHTTPClient returns the configured HTTPClient or a sane fallback
+// with a 5-minute timeout (long enough for streaming responses).
+func (p *AnthropicCompatibleProvider) effectiveHTTPClient() *http.Client {
+	if p.HTTPClient != nil {
+		return p.HTTPClient
+	}
+	return &http.Client{Timeout: 5 * time.Minute}
+}
+
+// anthropicBlockState tracks the current content block during SSE parsing.
+type anthropicBlockState struct {
+	Type string
+	ID   string
+	Name string
+	Args strings.Builder
 }
 
 // GenerateRequestData 将 ModelRequest 转换为 Anthropic API 格式
@@ -107,10 +132,7 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		baseURL = "https://api.anthropic.com"
 	}
 
-	client := p.HTTPClient
-	if client == nil {
-		client = &http.Client{}
-	}
+	client := p.effectiveHTTPClient()
 
 	url := strings.TrimRight(baseURL, "/") + "/v1/messages"
 
@@ -180,115 +202,147 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		defer close(stream)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
-		// 增大 buffer 以支持长 tool_use arguments
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		// M-CRITICAL-3: use bufio.Reader so we can poll ctx.Done() between reads.
+		reader := bufio.NewReader(resp.Body)
 
 		// 跟踪当前 content block 状态
-		type blockState struct {
-			Type string
-			ID   string
-			Name string
-			Args strings.Builder
+		blocks := make(map[int]*anthropicBlockState)
+
+		// M-CRITICAL-4: emit selects on ctx.Done() so the goroutine exits
+		// even if the channel buffer is full and the consumer has stopped.
+		emit := func(schunk *StreamChunk) {
+			select {
+			case stream <- schunk:
+			case <-ctx.Done():
+			}
 		}
-		blocks := make(map[int]*blockState)
 
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
+		for {
+			// M-CRITICAL-3: poll context before each read so a cancelled
+			// consumer doesn't leak this goroutine.
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
 
-			payload := strings.TrimPrefix(line, "data: ")
-			if payload == "" {
-				continue
-			}
-
-			var event anthropicEvent
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
-				continue
-			}
-
-			switch event.Type {
-			case "content_block_start":
-				if event.ContentBlock != nil {
-					blocks[event.Index] = &blockState{
-						Type: event.ContentBlock.Type,
-						ID:   event.ContentBlock.ID,
-						Name: event.ContentBlock.Name,
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					if strings.TrimSpace(line) != "" {
+						p.processAnthropicLine(line, blocks, emit)
 					}
+					return
 				}
-
-			case "content_block_delta":
-				if event.Delta == nil {
-					continue
-				}
-				switch event.Delta.Type {
-				case "text_delta":
-					stream <- &StreamChunk{Delta: event.Delta.Text}
-				case "thinking_delta":
-					stream <- &StreamChunk{Reasoning: event.Delta.Thinking}
-				case "input_json_delta":
-					if b, ok := blocks[event.Index]; ok {
-						b.Args.WriteString(event.Delta.PartialJSON)
-					}
-				}
-
-			case "content_block_stop":
-				b, ok := blocks[event.Index]
-				if !ok {
-					continue
-				}
-				if b.Type == "tool_use" {
-					var args map[string]any
-					if b.Args.Len() > 0 {
-						if err := json.Unmarshal([]byte(b.Args.String()), &args); err != nil {
-							args = map[string]any{"_raw": b.Args.String()}
-						}
-					}
-					stream <- &StreamChunk{
-						Tools: []ToolCall{{
-							ID:        b.ID,
-							Name:      b.Name,
-							Arguments: args,
-						}},
-					}
-				}
-				delete(blocks, event.Index)
-
-			case "message_delta":
-				var usage *UsageInfo
-				if event.Usage != nil {
-					usage = &UsageInfo{
-						PromptTokens:     event.Usage.InputTokens,
-						CompletionTokens: event.Usage.OutputTokens,
-						TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
-					}
-				}
-				if event.Delta != nil && event.Delta.StopReason != "" {
-					stream <- &StreamChunk{
-						Usage: usage,
-						Meta:  map[string]any{"stop_reason": event.Delta.StopReason},
-					}
-				} else if usage != nil {
-					stream <- &StreamChunk{Usage: usage}
-				}
-
-			case "message_stop":
-				stream <- &StreamChunk{IsDone: true}
+				emit(&StreamChunk{
+					IsDone: true,
+					Meta:   map[string]any{"error": err.Error()},
+				})
 				return
 			}
-		}
 
-		if err := scanner.Err(); err != nil {
-			stream <- &StreamChunk{
-				IsDone: true,
-				Meta:   map[string]any{"error": err.Error()},
+			stop := p.processAnthropicLine(line, blocks, emit)
+			if stop {
+				return
 			}
 		}
 	}()
 
 	return stream, nil
+}
+
+// processAnthropicLine parses one SSE line and emits any resulting
+// StreamChunk via emit. Returns true if the goroutine should stop (message_stop).
+func (p *AnthropicCompatibleProvider) processAnthropicLine(
+	line string,
+	blocks map[int]*anthropicBlockState,
+	emit func(*StreamChunk),
+) bool {
+	if !strings.HasPrefix(line, "data: ") {
+		return false
+	}
+
+	payload := strings.TrimPrefix(line, "data: ")
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return false
+	}
+
+	var event anthropicEvent
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return false
+	}
+
+	switch event.Type {
+	case "content_block_start":
+		if event.ContentBlock != nil {
+			blocks[event.Index] = &anthropicBlockState{
+				Type: event.ContentBlock.Type,
+				ID:   event.ContentBlock.ID,
+				Name: event.ContentBlock.Name,
+			}
+		}
+
+	case "content_block_delta":
+		if event.Delta == nil {
+			return false
+		}
+		switch event.Delta.Type {
+		case "text_delta":
+			emit(&StreamChunk{Delta: event.Delta.Text})
+		case "thinking_delta":
+			emit(&StreamChunk{Reasoning: event.Delta.Thinking})
+		case "input_json_delta":
+			if b, ok := blocks[event.Index]; ok {
+				b.Args.WriteString(event.Delta.PartialJSON)
+			}
+		}
+
+	case "content_block_stop":
+		b, ok := blocks[event.Index]
+		if !ok {
+			return false
+		}
+		if b.Type == "tool_use" {
+			var args map[string]any
+			if b.Args.Len() > 0 {
+				if err := json.Unmarshal([]byte(b.Args.String()), &args); err != nil {
+					args = map[string]any{"_raw": b.Args.String()}
+				}
+			}
+			emit(&StreamChunk{
+				Tools: []ToolCall{{
+					ID:        b.ID,
+					Name:      b.Name,
+					Arguments: args,
+				}},
+			})
+		}
+		delete(blocks, event.Index)
+
+	case "message_delta":
+		var usage *UsageInfo
+		if event.Usage != nil {
+			usage = &UsageInfo{
+				PromptTokens:     event.Usage.InputTokens,
+				CompletionTokens: event.Usage.OutputTokens,
+				TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
+			}
+		}
+		if event.Delta != nil && event.Delta.StopReason != "" {
+			emit(&StreamChunk{
+				Usage: usage,
+				Meta:  map[string]any{"stop_reason": event.Delta.StopReason},
+			})
+		} else if usage != nil {
+			emit(&StreamChunk{Usage: usage})
+		}
+
+	case "message_stop":
+		emit(&StreamChunk{IsDone: true})
+		return true
+	}
+	return false
 }
 
 // BroadcastResponse 将 SSE 流转换为 ResultEvent 流

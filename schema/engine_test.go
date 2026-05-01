@@ -165,9 +165,9 @@ func TestValidateResultNestedEnsureAll(t *testing.T) {
 // Test ContractEngine with empty EnsureAll
 func TestContractEngineEmptyEnsureAll(t *testing.T) {
 	ce := &ContractEngine{
-		EnsureKeys:  nil,
-		EnsureAll:   false,
-		InputSchema: nil,
+		EnsureKeys:   nil,
+		EnsureAll:    false,
+		InputSchema:  nil,
 		ResultSchema: nil,
 	}
 
@@ -228,5 +228,60 @@ func TestContractEngineHasJSONSchemaMethod(t *testing.T) {
 	schema := ce.GenerateJSONSchema()
 	if schema == nil {
 		t.Error("GenerateJSONSchema() should not return nil")
+	}
+}
+
+// TestValidateData_NonMapReturnsError is a regression test for SC-HIGH-1:
+// validateData previously returned nil for any non-map data, so string,
+// array, or number responses silently passed validation. The fix returns
+// an error describing the actual type received.
+func TestValidateData_NonMapReturnsError(t *testing.T) {
+	ce := &ContractEngine{
+		EnsureKeys: map[string]EnsurePolicy{
+			"name": EnsurePresence,
+		},
+		EnsureAll: true,
+	}
+
+	cases := []struct {
+		name string
+		data any
+	}{
+		{"string", "not a map"},
+		{"int", 42},
+		{"slice", []any{"a", "b"}},
+		{"struct", struct{ X int }{X: 1}},
+		{"bool", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ce.ValidateResult(tc.data); err == nil {
+				t.Errorf("ValidateResult(%v) = nil, want error for %s", tc.data, tc.name)
+			} else if !findSubstring(err.Error(), "expected map[string]any") {
+				t.Errorf("ValidateResult(%v) error = %q, want it to contain 'expected map[string]any'", tc.data, err.Error())
+			}
+			// ValidateInput shares the same code path.
+			if err := ce.ValidateInput(tc.data); err == nil {
+				t.Errorf("ValidateInput(%v) = nil, want error for %s", tc.data, tc.name)
+			}
+		})
+	}
+}
+
+// TestValidateData_NilStillPasses confirms the SC-HIGH-1 fix preserves the
+// documented "nil data short-circuits to nil" behavior, which existing
+// callers (e.g. optional response fields) rely on.
+func TestValidateData_NilStillPasses(t *testing.T) {
+	ce := &ContractEngine{
+		EnsureKeys: map[string]EnsurePolicy{
+			"name": EnsurePresence,
+		},
+		EnsureAll: true,
+	}
+	if err := ce.ValidateResult(nil); err != nil {
+		t.Errorf("ValidateResult(nil) = %v, want nil", err)
+	}
+	if err := ce.ValidateInput(nil); err != nil {
+		t.Errorf("ValidateInput(nil) = %v, want nil", err)
 	}
 }
