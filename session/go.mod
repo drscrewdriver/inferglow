@@ -1,4 +1,4 @@
-﻿module github.com/inferglow/session
+module github.com/inferglow/session
 
 go 1.25.0
 

@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -101,7 +102,7 @@ func ContentToString(c any) string {
 				}
 			}
 		}
-		return ""
+		return strings.Join(parts, "")
 	default:
 		return ""
 	}
@@ -209,7 +210,7 @@ func contentToPromptString(content any) string {
 				parts = append(parts, fmt.Sprintf("[%s referenced]", block.Type))
 			}
 		}
-		return ""
+		return strings.Join(parts, "")
 	default:
 		return ""
 	}
@@ -221,13 +222,15 @@ func (s *Session) PreparePrompt() []ChatMessage {
 	for i, msg := range s.ContextWindow {
 		prompt[i] = msg
 		if blocks, ok := msg.Content.([]ContentBlock); ok {
+			var parts []string
 			for _, block := range blocks {
 				if block.Type == "text" {
 					if s, ok := block.Data.(string); ok {
-						prompt[i].Content = s
+						parts = append(parts, s)
 					}
 				}
 			}
+			prompt[i].Content = strings.Join(parts, "")
 		}
 	}
 	return prompt
