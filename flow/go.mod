@@ -1,4 +1,4 @@
-﻿module github.com/inferglow/flow
+module github.com/inferglow/flow
 
 go 1.25.0
 

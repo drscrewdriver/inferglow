@@ -166,15 +166,15 @@ func extractInput(data *TriggerFlowRuntimeData) any {
 // TriggerFlowBlueprint 是 flow 包的 TriggerFlow 定义期表示。
 // 持有 chunks/handlers/chunkRegistry/definition 四类数据：
 //   - chunks: 用户通过 CreateChunk 注册的 chunk 列表
-//   - handlers: 编译后的三层 handler 映射（event/flow_data/runtime_data）
+//   - handlers: 编译后的三层 handler 映射（kind -> opID -> layer -> Handler）
 //   - chunkRegistry: 可导出 handler 注册表
 //   - definition: 算子列表定义
 type TriggerFlowBlueprint struct {
 	mu            sync.RWMutex
 	chunks        map[string]*TriggerFlowChunk
 	definition    *FlowTriggerFlowDefinition
-	handlers      map[string]map[string]Handler // event/flow_data/runtime_data 三层
-	chunkRegistry map[string]any                // 可导出 handler 注册表
+	handlers      map[string]map[string]map[string]Handler // kind -> opID -> layer -> Handler
+	chunkRegistry map[string]any                           // 可导出 handler 注册表
 	compiled      bool
 }
 
@@ -182,7 +182,7 @@ type TriggerFlowBlueprint struct {
 func NewTriggerFlowBlueprint() *TriggerFlowBlueprint {
 	return &TriggerFlowBlueprint{
 		chunks:        make(map[string]*TriggerFlowChunk),
-		handlers:      make(map[string]map[string]Handler),
+		handlers:      make(map[string]map[string]map[string]Handler),
 		chunkRegistry: make(map[string]any),
 		definition:    NewFlowTriggerFlowDefinition(""),
 	}
@@ -281,6 +281,8 @@ func (bp *TriggerFlowBlueprint) Compile() error {
 // _compileDefinition 实际编译逻辑。
 // 遍历 definition.Operators，为每个 Kind 解析默认 OperatorHandler，
 // 然后包装为 Handler 存入三层 handlers 映射。
+// 映射结构为 kind -> opID -> layer -> Handler，这样同一 Kind 的多个
+// Operator 不会互相覆盖。
 func (bp *TriggerFlowBlueprint) _compileDefinition() error {
 	if bp == nil {
 		return fmt.Errorf("blueprint is nil")
@@ -291,7 +293,7 @@ func (bp *TriggerFlowBlueprint) _compileDefinition() error {
 		return fmt.Errorf("no definition to compile")
 	}
 	// 重置 handlers
-	bp.handlers = make(map[string]map[string]Handler)
+	bp.handlers = make(map[string]map[string]map[string]Handler)
 	for _, op := range bp.definition.Operators {
 		if op == nil {
 			continue
@@ -302,12 +304,22 @@ func (bp *TriggerFlowBlueprint) _compileDefinition() error {
 		}
 		// 包装 OperatorHandler 为 Handler
 		wrapped := wrapOperatorHandlerAsHandler(handler, op)
-		key := string(op.Kind)
-		bp.handlers[key] = map[string]Handler{
-			"event":        wrapped,
-			"flow_data":    wrapped,
-			"runtime_data": wrapped,
+		kindKey := string(op.Kind)
+		if bp.handlers[kindKey] == nil {
+			bp.handlers[kindKey] = make(map[string]map[string]Handler)
 		}
+		// Use op.ID as the composite key. If ID is empty, fall back to op.Name
+		// to avoid silently merging distinct operators without IDs.
+		opKey := op.ID
+		if opKey == "" {
+			opKey = op.Name
+		}
+		if bp.handlers[kindKey][opKey] == nil {
+			bp.handlers[kindKey][opKey] = make(map[string]Handler)
+		}
+		bp.handlers[kindKey][opKey]["event"] = wrapped
+		bp.handlers[kindKey][opKey]["flow_data"] = wrapped
+		bp.handlers[kindKey][opKey]["runtime_data"] = wrapped
 	}
 	bp.compiled = true
 	return nil
@@ -328,13 +340,41 @@ func wrapOperatorHandlerAsHandler(h OperatorHandler, op *Operator) Handler {
 
 // GetHandler 按 kind 和 layer 返回编译后的 handler。
 // layer 取值："event" / "flow_data" / "runtime_data"。
+// 注意：当同一 Kind 存在多个 Operator 时，本方法返回其中任意一个
+// （map 迭代顺序不确定）。需要精确查找请使用 GetHandlerByID。
 func (bp *TriggerFlowBlueprint) GetHandler(kind OperatorKind, layer string) (Handler, bool) {
 	if bp == nil {
 		return nil, false
 	}
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
-	layers, ok := bp.handlers[string(kind)]
+	ops, ok := bp.handlers[string(kind)]
+	if !ok {
+		return nil, false
+	}
+	for _, layers := range ops {
+		if h, ok := layers[layer]; ok {
+			return h, true
+		}
+	}
+	return nil, false
+}
+
+// GetHandlerByID 按 kind、opID 和 layer 返回编译后的 handler。
+// opID 对应 Operator.ID（若 ID 为空则编译期回退到 Operator.Name）。
+// layer 取值："event" / "flow_data" / "runtime_data"。
+// 用于同一 Kind 存在多个 Operator 时精确查找。
+func (bp *TriggerFlowBlueprint) GetHandlerByID(kind OperatorKind, opID, layer string) (Handler, bool) {
+	if bp == nil {
+		return nil, false
+	}
+	bp.mu.RLock()
+	defer bp.mu.RUnlock()
+	ops, ok := bp.handlers[string(kind)]
+	if !ok {
+		return nil, false
+	}
+	layers, ok := ops[opID]
 	if !ok {
 		return nil, false
 	}

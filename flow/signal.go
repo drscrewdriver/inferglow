@@ -172,29 +172,27 @@ func (sn *SignalNet) ClearNonDurable() {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
 
+	// First, build the new index from the EXISTING dynamicIndex, keeping only
+	// entries whose binding is still present (i.e. durable ones, since we
+	// haven't deleted anything yet). Doing this BEFORE clearing dynamicIndex
+	// is critical — otherwise newIndex is always empty.
+	newIndex := make(map[string][]string)
+	for event, ids := range sn.dynamicIndex {
+		for _, id := range ids {
+			if binding, exists := sn.dynamicBindings[id]; exists && binding.Durable {
+				newIndex[event] = append(newIndex[event], id)
+			}
+		}
+	}
+
+	// Now remove non-durable bindings from dynamicBindings.
 	for id, binding := range sn.dynamicBindings {
 		if !binding.Durable {
 			delete(sn.dynamicBindings, id)
 		}
 	}
-	// 重建索引
-	sn.dynamicIndex = make(map[string][]string)
-	for id, binding := range sn.dynamicBindings {
-		// 需要知道 triggerEvent，但 DynamicBinding 不存储它
-		// 所以需要遍历旧索引中仍然存在的
-		_ = binding
-		_ = id
-	}
-	// 由于 DynamicBinding 不存储 triggerEvent，需要从旧索引中保留 durable 的
-	// 重新构建：遍历 dynamicIndex，只保留 dynamicBindings 中仍存在的
-	newIndex := make(map[string][]string)
-	for event, ids := range sn.dynamicIndex {
-		for _, id := range ids {
-			if _, exists := sn.dynamicBindings[id]; exists {
-				newIndex[event] = append(newIndex[event], id)
-			}
-		}
-	}
+
+	// Finally, replace the index with the durable-only index built above.
 	sn.dynamicIndex = newIndex
 }
 

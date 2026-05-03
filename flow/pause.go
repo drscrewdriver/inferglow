@@ -14,13 +14,20 @@ type PausePoint struct {
 
 // Pause captures the current execution state and transitions to paused status
 func (e *Execution) Pause(reason string) *PausePoint {
-	// Find the last executed step from StepLog
+	// Identify the LAST executed step deterministically. StepExecLog records
+	// step names in execution order; fall back to map iteration only when
+	// StepExecLog is empty (e.g. Execution constructed directly without
+	// running Execute — see TestPauseCreatesPausePoint).
 	lastStepName := ""
-	lastStepInput := e.State.Result
-	for name := range e.State.StepLog {
-		lastStepName = name
+	if n := len(e.State.StepExecLog); n > 0 {
+		lastStepName = e.State.StepExecLog[n-1]
+	} else {
+		for name := range e.State.StepLog {
+			lastStepName = name
+		}
 	}
 	// The last step's input is the last entry in StepLog
+	lastStepInput := e.State.Result
 	if entry := e.State.StepLog[lastStepName]; entry != nil {
 		lastStepInput = entry.Input
 	}

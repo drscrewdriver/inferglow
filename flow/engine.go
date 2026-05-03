@@ -32,6 +32,10 @@ type ExecutionState struct {
 	Result  any
 	Errors  []error
 	StepLog map[string]*StepLogEntry
+	// StepExecLog records step names in execution order. Used by Pause to
+	// identify the LAST executed step deterministically (StepLog is a map
+	// and cannot be relied on for ordering).
+	StepExecLog []string
 }
 
 // Execution holds the result of a flow execution
@@ -89,6 +93,7 @@ func (f *Flow) Execute(ctx context.Context, input any) *Execution {
 			Duration: duration,
 			Error:    err,
 		}
+		exec.State.StepExecLog = append(exec.State.StepExecLog, step.Name)
 
 		if err != nil {
 			exec.State.Status = StatusFailed
@@ -102,10 +107,20 @@ func (f *Flow) Execute(ctx context.Context, input any) *Execution {
 			return exec
 		}
 		if branchStepName != "" {
-			// Branch was executed; continue from the branch step
-			// The branch step's output is already in `output`
+			// Branch was already executed inside handleBranches. Skip
+			// re-execution of the branch step and continue from the NEXT
+			// step after it (following the edges). Setting currentStepName
+			// to branchStepName would re-execute the branch step on the
+			// next loop iteration.
+			nextAfterBranch := f.findNextStep(branchStepName)
+			if nextAfterBranch == "" {
+				// No further steps — execution complete.
+				exec.State.Result = output
+				exec.State.Status = StatusCompleted
+				return exec
+			}
 			currentInput = output
-			currentStepName = branchStepName
+			currentStepName = nextAfterBranch
 			continue
 		}
 
@@ -143,6 +158,7 @@ func (f *Flow) handleBranches(exec *Execution, fromStepName string, output any, 
 				Duration: duration,
 				Error:    err,
 			}
+			exec.State.StepExecLog = append(exec.State.StepExecLog, branch.TrueStep.Name)
 			if err != nil {
 				exec.State.Status = StatusFailed
 				exec.State.Errors = append(exec.State.Errors, err)
@@ -161,6 +177,7 @@ func (f *Flow) handleBranches(exec *Execution, fromStepName string, output any, 
 			Duration: duration,
 			Error:    err,
 		}
+		exec.State.StepExecLog = append(exec.State.StepExecLog, branch.FalseStep.Name)
 		if err != nil {
 			exec.State.Status = StatusFailed
 			exec.State.Errors = append(exec.State.Errors, err)
