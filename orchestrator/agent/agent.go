@@ -1,4 +1,4 @@
-﻿package agent
+package agent
 
 import (
 	"context"
@@ -17,6 +17,15 @@ type Agent struct {
 	session   *SessionExtension
 	actionExt *ActionExtension
 	engine    *Engine
+	// maxRounds is the persisted default for executeLoop. It is set via
+	// WithMaxRounds passed to New and used by Run when the caller does
+	// not override it with a per-call WithMaxRounds. A zero value means
+	// "use the runConfig default of 10".
+	maxRounds int
+	// systemPrompt is the persisted default system prompt. It is set via
+	// WithSystemPrompt passed to New and used by Run when the caller
+	// does not override it with a per-call WithSystemPrompt.
+	systemPrompt string
 }
 
 // RunOption configures Agent.Run behavior.
@@ -41,7 +50,9 @@ func WithSystemPrompt(prompt string) RunOption {
 	}
 }
 
-// New creates an Agent from the given components.
+// New creates an Agent from the given components. Options applied here
+// (e.g. WithMaxRounds, WithSystemPrompt) are persisted on the Agent and
+// used by subsequent Run calls unless overridden by a per-call option.
 func New(sess *session.Session, actionExt *ActionExtension, modelReq model.ModelRequester, opts ...RunOption) *Agent {
 	sessionExt := NewSessionExtension(sess)
 	engine := NewEngine(sessionExt, actionExt, modelReq)
@@ -52,15 +63,28 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 	}
 
 	return &Agent{
-		session:   sessionExt,
-		actionExt: actionExt,
-		engine:    engine,
+		session:      sessionExt,
+		actionExt:    actionExt,
+		engine:       engine,
+		maxRounds:    c.maxRounds,
+		systemPrompt: c.systemPrompt,
 	}
 }
 
 // Run executes the full PLAN → EXECUTE loop and returns the final response.
+// The Agent's persisted maxRounds and systemPrompt (set via WithMaxRounds /
+// WithSystemPrompt on New) are used as defaults; explicit per-call options
+// override them.
 func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) (string, error) {
 	c := &runConfig{maxRounds: 10}
+	// Apply persisted Agent-level defaults first so per-call opts can
+	// still override them. A zero persisted maxRounds keeps the default
+	// of 10; an empty persisted systemPrompt keeps the default empty
+	// prompt.
+	if a.maxRounds != 0 {
+		c.maxRounds = a.maxRounds
+	}
+	c.systemPrompt = a.systemPrompt
 	for _, opt := range opts {
 		opt(c)
 	}

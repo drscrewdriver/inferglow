@@ -24,7 +24,7 @@ func (a *Agent) StreamRun(ctx context.Context, userMessage string, opts ...RunOp
 		tools = append(tools, model.ToolDefinition{
 			Name:        a["name"].(string),
 			Description: a["description"].(string),
-			Parameters:  a["schema"],
+			Parameters:  a["schema"].(map[string]any),
 		})
 	}
 
