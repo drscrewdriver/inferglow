@@ -109,8 +109,8 @@ func TestAnthropicRequestBodyStructure(t *testing.T) {
 		if r.Header.Get("x-api-key") != "anthropic-key" {
 			t.Errorf("x-api-key = %q, want \"anthropic-key\"", r.Header.Get("x-api-key"))
 		}
-		if r.Header.Get("anthropic-version") != "2023-06-01" {
-			t.Errorf("anthropic-version = %q, want \"2023-06-01\"", r.Header.Get("anthropic-version"))
+		if r.Header.Get("anthropic-version") != "2024-10-22" {
+			t.Errorf("anthropic-version = %q, want \"2024-10-22\"", r.Header.Get("anthropic-version"))
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("Content-Type = %q", r.Header.Get("Content-Type"))

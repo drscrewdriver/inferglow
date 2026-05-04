@@ -31,7 +31,36 @@ func ExtractJSON(text string, schemas ...*OutputSchema) (map[string]any, error) 
 		}
 	}
 
+	// 策略4：尝试修复截断 JSON（适用于 LLM 输出被截断的场景）
+	if repaired, ok := tryRepairTruncatedFromText(text); ok {
+		if result, err := parseJSON(repaired); err == nil {
+			return result, nil
+		}
+	}
+
 	return nil, fmt.Errorf("no valid JSON found in text")
+}
+
+// tryRepairTruncatedFromText 从文本中找到首个 JSON 起始字符（{ 或 [），
+// 从该位置开始用 RepairTruncatedJSON 修复，并验证修复结果可被解析。
+func tryRepairTruncatedFromText(text string) (string, bool) {
+	startIdx := -1
+	for i, c := range text {
+		if c == '{' || c == '[' {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx == -1 {
+		return "", false
+	}
+	repaired := RepairTruncatedJSON(text[startIdx:])
+	// 验证修复结果确实是合法 JSON
+	var tmp any
+	if err := json.Unmarshal([]byte(repaired), &tmp); err != nil {
+		return "", false
+	}
+	return repaired, true
 }
 
 // extractDirect 尝试直接解析整段文本为 JSON
@@ -41,7 +70,18 @@ func extractDirect(text string) (map[string]any, error) {
 	trimmed = stripCodeBlock(trimmed)
 
 	if len(trimmed) > 0 && trimmed[0] == '{' {
-		return parseJSON(trimmed)
+		result, err := parseJSON(trimmed)
+		if err == nil {
+			return result, nil
+		}
+		// 尝试修复截断 JSON 后再解析
+		repaired := RepairTruncatedJSON(trimmed)
+		if repaired != trimmed {
+			if result, err := parseJSON(repaired); err == nil {
+				return result, nil
+			}
+		}
+		return nil, fmt.Errorf("text does not start with JSON")
 	}
 	return nil, fmt.Errorf("text does not start with JSON")
 }
@@ -133,4 +173,109 @@ func RepairJSONFragment(text string) string {
 	text = re.ReplaceAllString(text, `$1,$2$3`)
 
 	return text
+}
+
+// RepairTruncatedJSON 修复因截断而不完整的 JSON 文本。
+// 处理以下场景：
+//   - 未闭合的字符串（添加结尾 "）
+//   - 未闭合的数组/对象（按嵌套顺序添加 ] 或 }）
+//   - 末尾多余逗号（在闭合括号前删除）
+//
+// 输入若已是合法 JSON 则原样返回。
+func RepairTruncatedJSON(text string) string {
+	if text == "" {
+		return text
+	}
+
+	// 先用 json.Unmarshal 探测是否已合法
+	var tmp any
+	if err := json.Unmarshal([]byte(text), &tmp); err == nil {
+		return text
+	}
+
+	// 找到第一个 JSON 起始位置（{ 或 [）
+	startIdx := -1
+	for i, c := range text {
+		if c == '{' || c == '[' {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx == -1 {
+		return text
+	}
+
+	// 用栈跟踪未闭合的容器；同时跟踪是否在字符串内
+	type frame struct {
+		open  byte // '{' or '['
+		index int  // position in text where the open char appears
+	}
+	var stack []frame
+	inString := false
+	escaped := false
+
+	for i := startIdx; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, frame{open: c, index: i})
+		case '}', ']':
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				if (c == '}' && top.open == '{') || (c == ']' && top.open == '[') {
+					stack = stack[:len(stack)-1]
+				}
+			}
+		}
+	}
+
+	// 截取从第一个 JSON 字符到末尾
+	endIdx := len(text)
+	suffix := strings.Builder{}
+
+	// 若字符串未闭合，先闭合字符串
+	if inString {
+		suffix.WriteByte('"')
+	}
+
+	// 移除末尾多余的逗号（仅看 text 末尾，因为 suffix 目前只是 "）
+	trimmed := strings.TrimRight(text[startIdx:endIdx], " \t\r\n")
+	// 移除末尾的逗号
+	for len(trimmed) > 0 && (trimmed[len(trimmed)-1] == ',' || trimmed[len(trimmed)-1] == ' ' || trimmed[len(trimmed)-1] == '\t' || trimmed[len(trimmed)-1] == '\r' || trimmed[len(trimmed)-1] == '\n') {
+		if trimmed[len(trimmed)-1] == ',' {
+			trimmed = trimmed[:len(trimmed)-1]
+			break
+		}
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+
+	// 倒序闭合栈中的容器
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch stack[i].open {
+		case '{':
+			suffix.WriteByte('}')
+		case '[':
+			suffix.WriteByte(']')
+		}
+	}
+
+	// 拼接：前缀 + 修剪后的主体 + 后缀
+	prefix := text[:startIdx]
+	return prefix + trimmed + suffix.String()
 }

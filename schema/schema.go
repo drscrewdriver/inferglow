@@ -47,6 +47,10 @@ type FieldDef struct {
 	RequiredFields []string
 	Children      map[string]*FieldDef
 	ItemDef       *FieldDef
+	// OneOf 表示字段必须匹配其中一个子 schema（对应 JSON Schema 的 oneOf 关键字）。
+	OneOf []*FieldDef
+	// AnyOf 表示字段至少匹配其中一个子 schema（对应 JSON Schema 的 anyOf 关键字）。
+	AnyOf []*FieldDef
 }
 
 // OutputSchema 定义输出契约

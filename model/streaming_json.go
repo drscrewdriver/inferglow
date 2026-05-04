@@ -340,6 +340,18 @@ func (p *StreamingJSONParser) drainTokens() error {
 			if len(pathStack) > 0 && !pathStack[len(pathStack)-1].isArr {
 				key = pathStack[len(pathStack)-1].key
 			}
+			// M-HIGH-11: numbers are ambiguous under incremental feeding.
+			// json.Decoder returns a number as soon as it sees a complete
+			// prefix, so feeding "3" then "0" produces two value events
+			// (3 and 30) for the same logical slot. Defer emitting a number
+			// when the buffer ends right after it (no confirming delimiter)
+			// or when the next byte could extend the number, unless input
+			// has been closed (in which case the number is final).
+			if _, isNumber := t.(float64); isNumber && !p.closed {
+				if postOffset >= len(p.buffer) || isNumberExtender(p.buffer[postOffset]) {
+					return nil
+				}
+			}
 			addToParent(t)
 			consumeParentSlot()
 			emitIfNew(postOffset, JSONParseEvent{Type: ParseValue, Key: key, Value: t, Path: path})
@@ -364,4 +376,21 @@ func (e JSONParseEvent) String() string {
 		sb.WriteString(e.Path)
 	}
 	return sb.String()
+}
+
+// isNumberExtender reports whether b could extend a JSON number token
+// (digit, decimal point, exponent marker, or sign). Used by drainTokens
+// to decide whether a number value returned by json.Decoder is final or
+// could grow as more bytes arrive.
+//
+// M-HIGH-11: incremental parsing must not emit duplicate value events
+// for the same logical slot when a number is fed character-by-character.
+func isNumberExtender(b byte) bool {
+	switch {
+	case b >= '0' && b <= '9':
+		return true
+	case b == '.' || b == 'e' || b == 'E' || b == '+' || b == '-':
+		return true
+	}
+	return false
 }

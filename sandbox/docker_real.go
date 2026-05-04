@@ -3,13 +3,17 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // realDockerClient implements DockerClient using the real Docker SDK.
@@ -31,16 +35,16 @@ func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *
 	}
 
 	// Add port bindings
-	for portStr, mappings := range hostConfig.PortBindings {
-		for _, m := range mappings {
-			dockerHostConfig.PortBindings = map[string][]container.PortBinding{}
-			if dockerHostConfig.PortBindings == nil {
-				dockerHostConfig.PortBindings = map[string][]container.PortBinding{}
+	if len(hostConfig.PortBindings) > 0 {
+		dockerHostConfig.PortBindings = nat.PortMap{}
+		for portStr, mappings := range hostConfig.PortBindings {
+			port := nat.Port(portStr)
+			for _, m := range mappings {
+				dockerHostConfig.PortBindings[port] = append(
+					dockerHostConfig.PortBindings[port],
+					nat.PortBinding{HostIP: m.HostIP, HostPort: m.HostPort},
+				)
 			}
-			dockerHostConfig.PortBindings[portStr] = append(
-				dockerHostConfig.PortBindings[portStr],
-				container.PortBinding{HostIP: m.HostIP, HostPort: m.HostPort},
-			)
 		}
 	}
 
@@ -57,7 +61,17 @@ func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *
 		}
 	}
 
-	resp, err := r.Client.ContainerCreate(nil, dockerConfig, dockerHostConfig, nil, nil, "")
+	// 构建 NetworkingConfig（Docker SDK v27.5.1 需要 *network.NetworkingConfig）
+	var netConfig *network.NetworkingConfig
+	if networkingConfig != nil && len(networkingConfig.Networks) > 0 {
+		endpoints := make(map[string]*network.EndpointSettings)
+		for name, ep := range networkingConfig.Networks {
+			endpoints[name] = &network.EndpointSettings{IPAddress: ep.IPAddress}
+		}
+		netConfig = &network.NetworkingConfig{EndpointsConfig: endpoints}
+	}
+
+	resp, err := r.Client.ContainerCreate(context.Background(), dockerConfig, dockerHostConfig, netConfig, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +80,7 @@ func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *
 
 // ContainerStart wraps the Docker SDK call.
 func (r *realDockerClient) ContainerStart(containerID string, opts ...any) error {
-	return r.Client.ContainerStart(nil, containerID, container.StartOptions{})
+	return r.Client.ContainerStart(context.Background(), containerID, container.StartOptions{})
 }
 
 // CreateExec wraps the Docker SDK call.
@@ -75,11 +89,11 @@ func (r *realDockerClient) CreateExec(containerID string, opts CreateExecOptions
 		Cmd:          opts.Cmd,
 		AttachStdout: opts.Stdout,
 		AttachStderr: opts.Stderr,
-		Stdin:        opts.Stdin,
+		AttachStdin:  opts.Stdin,
 		Tty:          opts.Tty,
 		WorkingDir:   opts.WorkingDir,
 	}
-	resp, err := r.Client.ContainerExecCreate(nil, containerID, execConfig)
+	resp, err := r.Client.ContainerExecCreate(context.Background(), containerID, execConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +102,7 @@ func (r *realDockerClient) CreateExec(containerID string, opts CreateExecOptions
 
 // StartExec wraps the Docker SDK call.
 func (r *realDockerClient) StartExec(execID string, opts StartExecOptions) error {
-	return r.Client.ContainerExecStart(nil, execID, container.ExecStartOptions{
+	return r.Client.ContainerExecStart(context.Background(), execID, container.ExecStartOptions{
 		Detach: !opts.Stdout && !opts.Stderr,
 		Tty:    opts.Tty,
 	})
@@ -97,19 +111,19 @@ func (r *realDockerClient) StartExec(execID string, opts StartExecOptions) error
 // StopContainer wraps the Docker SDK call.
 func (r *realDockerClient) StopContainer(containerID string, timeout uint) error {
 	timeoutSec := int(timeout)
-	return r.Client.ContainerStop(nil, containerID, container.StopOptions{
+	return r.Client.ContainerStop(context.Background(), containerID, container.StopOptions{
 		Timeout: &timeoutSec,
 	})
 }
 
 // RemoveContainer wraps the Docker SDK call.
 func (r *realDockerClient) RemoveContainer(opts ...any) error {
-	return r.Client.ContainerRemove(nil, "", container.RemoveOptions{Force: true})
+	return r.Client.ContainerRemove(context.Background(), "", container.RemoveOptions{Force: true})
 }
 
 // InspectContainer wraps the Docker SDK call.
 func (r *realDockerClient) InspectContainer(containerID string) (*ContainerInspectResult, error) {
-	info, err := r.Client.ContainerInspect(nil, containerID)
+	info, err := r.Client.ContainerInspect(context.Background(), containerID)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +136,7 @@ func (r *realDockerClient) InspectContainer(containerID string) (*ContainerInspe
 
 // InspectExec wraps the Docker SDK call.
 func (r *realDockerClient) InspectExec(execID string) (*ExecInspectResult, error) {
-	info, err := r.Client.ContainerExecInspect(nil, execID)
+	info, err := r.Client.ContainerExecInspect(context.Background(), execID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +155,7 @@ func newRealDockerClientImpl() (DockerClient, error) {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
 	// Verify connectivity
-	ping, err := dc.Ping(nil)
+	ping, err := dc.Ping(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("docker daemon not reachable: %w", err)
 	}
@@ -151,6 +165,9 @@ func newRealDockerClientImpl() (DockerClient, error) {
 
 // Ensure realDockerClient implements DockerClient.
 var _ DockerClient = (*realDockerClient)(nil)
+
+// Ensure ocispec.Platform is referenced (used by ContainerCreate signature).
+var _ *ocispec.Platform = (*ocispec.Platform)(nil)
 
 // ReadAll is a helper to read all bytes from an io.Reader.
 func ReadAll(r io.Reader) ([]byte, error) {

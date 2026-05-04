@@ -100,6 +100,9 @@ func (p *OllamaProvider) GenerateRequestData(ctx context.Context, req *ModelRequ
 		Messages:    messages,
 		Temperature: temperature,
 		Options:     req.Options,
+		// M-MEDIUM-9: pass through Output schema so RequestModel can enable
+		// Ollama JSON mode (format: "json").
+		Output: req.Output,
 	}, nil
 }
 
@@ -125,9 +128,20 @@ func (p *OllamaProvider) RequestModel(ctx context.Context, data *RequestData) (<
 		reqBody["temperature"] = data.Temperature
 	}
 	if len(data.Options) > 0 {
+		// M-MEDIUM-3: Ollama /api/chat expects Options nested under an
+		// "options" sub-object (e.g. {"options":{"top_p":0.9,"seed":42}}).
+		// Top-level expansion is silently ignored by the server.
+		opts := make(map[string]any, len(data.Options))
 		for k, v := range data.Options {
-			reqBody[k] = v
+			opts[k] = v
 		}
+		reqBody["options"] = opts
+	}
+	// M-MEDIUM-9: Ollama JSON mode — when caller specifies an Output schema,
+	// enable structured JSON output via format:"json". Ollama has no native
+	// response_format; format:"json" is the documented way to request JSON.
+	if data.Output != nil {
+		reqBody["format"] = "json"
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -161,7 +175,8 @@ func (p *OllamaProvider) RequestModel(ctx context.Context, data *RequestData) (<
 		defer resp.Body.Close()
 
 		// M-CRITICAL-3: use bufio.Reader so we can poll ctx.Done() between reads.
-		reader := bufio.NewReader(resp.Body)
+		// M-MEDIUM-6: 1MB buffer for large SSE lines.
+		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
 		var usage *UsageInfo
 
 		// M-CRITICAL-4: emit selects on ctx.Done() so the goroutine exits

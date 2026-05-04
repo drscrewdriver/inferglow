@@ -26,12 +26,29 @@ type TypeAdapter interface {
 type StringTypeAdapter struct{}
 
 // Adapt 验证 value 为 string。若 value 不是 string 返回 error。
+// 支持底层类型为 string 的命名类型（如 type MyString string）。
 func (a *StringTypeAdapter) Adapt(value any) (any, error) {
 	if a == nil {
 		return nil, fmt.Errorf("string adapter is nil")
 	}
 	if s, ok := value.(string); ok {
 		return s, nil
+	}
+	// 处理底层类型为 string 的命名类型（type MyString string 等）
+	if value != nil {
+		rv := reflect.ValueOf(value)
+		if rv.IsValid() {
+			// 解引用指针
+			for rv.Kind() == reflect.Ptr {
+				if rv.IsNil() {
+					return nil, fmt.Errorf("expected string, got nil pointer")
+				}
+				rv = rv.Elem()
+			}
+			if rv.Kind() == reflect.String && rv.Type() != reflect.TypeOf("") {
+				return rv.String(), nil
+			}
+		}
 	}
 	return nil, fmt.Errorf("expected string, got %T", value)
 }
@@ -52,6 +69,7 @@ func (a *StringTypeAdapter) Validate(value any) error {
 type NumberTypeAdapter struct{}
 
 // Adapt 验证 value 为数字类型，并归一化为 float64。
+// 支持底层类型为数值的命名类型（如 type MyInt int）。
 func (a *NumberTypeAdapter) Adapt(value any) (any, error) {
 	if a == nil {
 		return nil, fmt.Errorf("number adapter is nil")
@@ -82,6 +100,26 @@ func (a *NumberTypeAdapter) Adapt(value any) (any, error) {
 	case float64:
 		return v, nil
 	}
+	// 处理底层类型为数值的命名类型
+	if value != nil {
+		rv := reflect.ValueOf(value)
+		if rv.IsValid() {
+			for rv.Kind() == reflect.Ptr {
+				if rv.IsNil() {
+					return nil, fmt.Errorf("expected number, got nil pointer")
+				}
+				rv = rv.Elem()
+			}
+			switch rv.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				return float64(rv.Int()), nil
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				return float64(rv.Uint()), nil
+			case reflect.Float32, reflect.Float64:
+				return rv.Float(), nil
+			}
+		}
+	}
 	return nil, fmt.Errorf("expected number, got %T", value)
 }
 
@@ -99,12 +137,28 @@ func (a *NumberTypeAdapter) Validate(value any) error {
 type BooleanTypeAdapter struct{}
 
 // Adapt 验证 value 为 bool。
+// 支持底层类型为 bool 的命名类型（如 type MyBool bool）。
 func (a *BooleanTypeAdapter) Adapt(value any) (any, error) {
 	if a == nil {
 		return nil, fmt.Errorf("boolean adapter is nil")
 	}
 	if b, ok := value.(bool); ok {
 		return b, nil
+	}
+	// 处理底层类型为 bool 的命名类型
+	if value != nil {
+		rv := reflect.ValueOf(value)
+		if rv.IsValid() {
+			for rv.Kind() == reflect.Ptr {
+				if rv.IsNil() {
+					return nil, fmt.Errorf("expected bool, got nil pointer")
+				}
+				rv = rv.Elem()
+			}
+			if rv.Kind() == reflect.Bool && rv.Type() != reflect.TypeOf(false) {
+				return rv.Bool(), nil
+			}
+		}
 	}
 	return nil, fmt.Errorf("expected bool, got %T", value)
 }

@@ -23,6 +23,25 @@ const DefaultTemperature = 0.7
 // DefaultOpenAIBaseURL is the default OpenAI-compatible API endpoint.
 const DefaultOpenAIBaseURL = "https://api.openai.com/v1"
 
+// reservedFields lists request body fields that must NOT be overridden by
+// ModelRequest.Options expansion. These fields are managed explicitly by the
+// provider (model/messages/stream/tools/tool_choice/response_format/
+// max_tokens/temperature) and allowing Options to overwrite them would
+// silently break the request (e.g. Options["model"]="gpt-4o" overriding the
+// configured provider model).
+//
+// M-HIGH-2: whitelist filter prevents reserved field override.
+var reservedFields = map[string]bool{
+	"model":           true,
+	"messages":        true,
+	"stream":          true,
+	"tools":           true,
+	"tool_choice":     true,
+	"response_format": true,
+	"max_tokens":      true,
+	"temperature":     true,
+}
+
 // OpenAICompatibleProvider OpenAI 兼容协议的 Provider 实现
 // 支持 OpenAI / DeepSeek / Qwen / Ollama 等兼容 API
 type OpenAICompatibleProvider struct {
@@ -178,14 +197,56 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 		}
 	}
 
+	// O-CRITICAL-1: when the caller requests JSON output (via Options
+	// ["force_json"]=true or by setting req.Output), surface that as a
+	// response_format hint in the Options map. The actual translation to
+	// the OpenAI "response_format" request-body field happens in
+	// RequestModel so it stays close to where the body is built.
+	opts := req.Options
+	if shouldForceJSON(req) {
+		// Copy the caller's Options so we don't mutate their map.
+		opts = make(map[string]any, len(req.Options)+1)
+		for k, v := range req.Options {
+			opts[k] = v
+		}
+		opts["response_format"] = map[string]any{"type": "json_object"}
+	}
+
 	return &RequestData{
 		Model:       model,
 		Messages:    messages,
 		Tools:       tools,
 		Temperature: temperature,
 		MaxTokens:   maxTokens,
-		Options:     req.Options,
+		Options:     opts,
+		// M-MEDIUM-1: pass through tool_choice.
+		ToolChoice: req.ToolChoice,
 	}, nil
+}
+
+// shouldForceJSON reports whether the caller wants the OpenAI-compatible API
+// to enforce JSON-object output via response_format. Triggered by either:
+//   - req.Options["force_json"] == true, or
+//   - req.Output != nil (an OutputSchema signals a structured-output request)
+//
+// Both conditions are checked here so GenerateRequestData can compute the
+// flag once and the RequestModel builder can consult the resulting Options
+// map without re-parsing the original ModelRequest.
+func shouldForceJSON(req *ModelRequest) bool {
+	if req == nil {
+		return false
+	}
+	if req.Output != nil {
+		return true
+	}
+	if req.Options != nil {
+		if v, ok := req.Options["force_json"]; ok {
+			if b, ok := v.(bool); ok && b {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // openAITool is the OpenAI API tool envelope: {"type":"function","function":{...}}
@@ -244,12 +305,31 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 	}
 	if len(data.Options) > 0 {
 		for k, v := range data.Options {
+			// M-HIGH-2: skip reserved fields so Options cannot override
+			// model/messages/stream/tools/etc. managed by the provider.
+			if reservedFields[k] {
+				continue
+			}
 			reqBody[k] = v
 		}
 	}
 	// Re-apply max_tokens after Options loop so it wins over Options["max_tokens"].
 	if data.MaxTokens > 0 {
 		reqBody["max_tokens"] = data.MaxTokens
+	}
+	// O-CRITICAL-1: response_format is in reservedFields (so Options can't
+	// override it arbitrarily), but GenerateRequestData intentionally sets
+	// Options["response_format"] when the caller requests force_json or sets
+	// req.Output. Re-apply it here so the OpenAI-compatible API enforces
+	// JSON-object output. Caller-supplied Options["response_format"] (when
+	// not via force_json/Output) is also honored since GenerateRequestData
+	// passes opts through unchanged.
+	if rf, ok := data.Options["response_format"]; ok {
+		reqBody["response_format"] = rf
+	}
+	// M-MEDIUM-1: tool_choice support — pass through to request body when set.
+	if data.ToolChoice != nil {
+		reqBody["tool_choice"] = data.ToolChoice
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -285,7 +365,9 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 		defer resp.Body.Close()
 
 		// Use bufio.Reader so we can poll ctx.Done() between reads.
-		reader := bufio.NewReader(resp.Body)
+		// M-MEDIUM-6: increase buffer to 1MB so large SSE lines (e.g. tool_call
+		// arguments with big JSON payloads) don't trigger excessive refills.
+		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
 		var usage *UsageInfo
 
 		// M-CRITICAL-2: accumulate streaming tool_call arguments per index.
@@ -361,8 +443,9 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 		usage = chunk.Usage
 	}
 
+	// M-MEDIUM-4: empty-choices chunks carry usage or keepalive data, not a
+	// finish signal. Update usage but do not emit an IsDone chunk.
 	if len(chunk.Choices) == 0 {
-		emit(&StreamChunk{IsDone: true, Usage: usage})
 		return usage
 	}
 
@@ -432,7 +515,10 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 		for k := range toolStates {
 			delete(toolStates, k)
 		}
-	} else if c.FinishReason != "" {
+	} else if c.FinishReason != "" && c.FinishReason != "length" {
+		// M-MEDIUM-5: "length" indicates truncation by max_tokens — the
+		// response is incomplete. Don't mark IsDone; let the stream
+		// terminate naturally via [DONE] / EOF.
 		result.IsDone = true
 	}
 
@@ -448,8 +534,14 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 
 		var fullContent strings.Builder
 		var fullReasoning strings.Builder
+		// M-MEDIUM-10: track the last seen Usage so it can be propagated to
+		// the final ModelResponse (EventDone payload).
+		var lastUsage *UsageInfo
 
 		for chunk := range stream {
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
 			if chunk.IsDone {
 				if meta, ok := chunk.Meta["error"]; ok {
 					events <- &ResultEvent{
@@ -458,12 +550,16 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 					}
 					continue
 				}
+				resp := &ModelResponse{
+					Content:   fullContent.String(),
+					Reasoning: fullReasoning.String(),
+				}
+				if lastUsage != nil {
+					resp.Usage = *lastUsage
+				}
 				events <- &ResultEvent{
 					EventType: EventDone,
-					Payload: &ModelResponse{
-						Content:   fullContent.String(),
-						Reasoning: fullReasoning.String(),
-					},
+					Payload:   resp,
 				}
 				continue
 			}
@@ -535,13 +631,18 @@ type functionCall struct {
 // that construct openAIChunk values directly. New streaming code uses
 // processOpenAILine above which properly accumulates tool_call arguments.
 func toStreamChunk(chunk openAIChunk, usage *UsageInfo) *StreamChunk {
+	// M-MEDIUM-4: an empty-choices chunk carries usage or keepalive data,
+	// not a finish signal. Return nil so callers can skip emission.
 	if len(chunk.Choices) == 0 {
-		return &StreamChunk{IsDone: true, Usage: usage}
+		return nil
 	}
 
 	c := chunk.Choices[0]
 	result := &StreamChunk{
-		IsDone: c.FinishReason != "",
+		// M-MEDIUM-5: "length" indicates the response was truncated by
+		// max_tokens — not a successful completion. Only genuine completion
+		// signals mark IsDone.
+		IsDone: c.FinishReason != "" && c.FinishReason != "length",
 		Usage:  usage,
 	}
 

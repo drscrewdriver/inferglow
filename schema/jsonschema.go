@@ -79,5 +79,23 @@ func fieldToJSONSchema(field *FieldDef) map[string]any {
 		result["description"] = field.Description
 	}
 
+	// oneOf：字段必须匹配其中一个子 schema
+	if len(field.OneOf) > 0 {
+		oneOf := make([]map[string]any, 0, len(field.OneOf))
+		for _, sub := range field.OneOf {
+			oneOf = append(oneOf, fieldToJSONSchema(sub))
+		}
+		result["oneOf"] = oneOf
+	}
+
+	// anyOf：字段至少匹配其中一个子 schema
+	if len(field.AnyOf) > 0 {
+		anyOf := make([]map[string]any, 0, len(field.AnyOf))
+		for _, sub := range field.AnyOf {
+			anyOf = append(anyOf, fieldToJSONSchema(sub))
+		}
+		result["anyOf"] = anyOf
+	}
+
 	return result
 }

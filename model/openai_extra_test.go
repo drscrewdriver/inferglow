@@ -178,7 +178,7 @@ func TestRequestModelConnectionError(t *testing.T) {
 	}
 }
 
-// Check: toStreamChunk 无 choices 返回 IsDone
+// Check: toStreamChunk 无 choices 返回 nil（M-MEDIUM-4：空 choices 不再视为完成）
 func TestToStreamChunkEmptyChoices(t *testing.T) {
 	// 模拟空 choices 的 chunk
 	chunk := openAIChunk{
@@ -195,8 +195,8 @@ func TestToStreamChunkEmptyChoices(t *testing.T) {
 	}
 
 	result := toStreamChunk(chunk, nil)
-	if !result.IsDone {
-		t.Error("expected IsDone=true for empty choices")
+	if result != nil {
+		t.Errorf("expected nil for empty choices; got %+v", result)
 	}
 }
 
@@ -337,7 +337,8 @@ func TestRequestModelWithOptions(t *testing.T) {
 		Model:       "gpt-4",
 		Messages:    []ChatMessage{{Role: "user", Content: "test"}},
 		Temperature: 0.8,
-		Options:     map[string]any{"max_tokens": 500, "stop": []string{"\n\n"}},
+		MaxTokens:   500,
+		Options:     map[string]any{"stop": []string{"\n\n"}},
 	}
 
 	_, err := provider.RequestModel(context.Background(), data)
@@ -345,7 +346,8 @@ func TestRequestModelWithOptions(t *testing.T) {
 		t.Fatalf("RequestModel failed: %v", err)
 	}
 
-	// 验证 options 被传递
+	// M-HIGH-2: max_tokens is a reserved field — set via RequestData.MaxTokens,
+	// not Options["max_tokens"]. Non-reserved fields (stop) still expand.
 	if receivedBody["max_tokens"] == nil {
 		t.Error("expected max_tokens in request body")
 	}

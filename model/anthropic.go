@@ -103,8 +103,24 @@ func (p *AnthropicCompatibleProvider) GenerateRequestData(ctx context.Context, r
 	}
 
 	// System 消息存入 Options["_anthropic_system"]
-	if req.System != "" {
-		options["_anthropic_system"] = req.System
+	// M-MEDIUM-9: Anthropic has no native response_format. When the caller
+	// specifies an Output schema, inject a JSON instruction into the system
+	// message so the model emits JSON matching the requested shape.
+	systemMsg := req.System
+	if req.Output != nil {
+		jsonInstr := "Respond with a JSON object matching this schema: type=" + req.Output.Type
+		if len(req.Output.Required) > 0 {
+			jsonInstr += ", required=" + strings.Join(req.Output.Required, ",")
+		}
+		jsonInstr += ". Output ONLY valid JSON, no prose."
+		if systemMsg == "" {
+			systemMsg = jsonInstr
+		} else {
+			systemMsg = systemMsg + "\n\n" + jsonInstr
+		}
+	}
+	if systemMsg != "" {
+		options["_anthropic_system"] = systemMsg
 	}
 
 	// max_tokens 默认 1024，可被 req.Options["max_tokens"] 覆盖
@@ -118,6 +134,10 @@ func (p *AnthropicCompatibleProvider) GenerateRequestData(ctx context.Context, r
 		Tools:       tools,
 		Temperature: temperature,
 		Options:     options,
+		// M-MEDIUM-1: pass through tool_choice.
+		ToolChoice: req.ToolChoice,
+		// M-MEDIUM-9: pass through Output schema for downstream use.
+		Output: req.Output,
 	}, nil
 }
 
@@ -171,6 +191,10 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		}
 		reqBody["tools"] = toolsList
 	}
+	// M-MEDIUM-1: tool_choice support — pass through to request body when set.
+	if data.ToolChoice != nil {
+		reqBody["tool_choice"] = data.ToolChoice
+	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -184,7 +208,9 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	// M-MEDIUM-2: anthropic-version updated from outdated "2023-06-01" to
+	// "2024-10-22" (Messages API current versioned release).
+	httpReq.Header.Set("anthropic-version", "2024-10-22")
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -203,7 +229,8 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		defer resp.Body.Close()
 
 		// M-CRITICAL-3: use bufio.Reader so we can poll ctx.Done() between reads.
-		reader := bufio.NewReader(resp.Body)
+		// M-MEDIUM-6: 1MB buffer for large SSE lines.
+		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
 
 		// 跟踪当前 content block 状态
 		blocks := make(map[int]*anthropicBlockState)
@@ -274,6 +301,20 @@ func (p *AnthropicCompatibleProvider) processAnthropicLine(
 	}
 
 	switch event.Type {
+	case "message_start":
+		// M-MEDIUM-11: message_start carries the initial usage (input_tokens)
+		// at the start of the response. Capture and emit it so consumers see
+		// prompt token counts even when message_delta is missing/partial.
+		// The usage is nested under event.message.usage in the Anthropic API.
+		if event.Message != nil && event.Message.Usage != nil {
+			usage := &UsageInfo{
+				PromptTokens:     event.Message.Usage.InputTokens,
+				CompletionTokens: event.Message.Usage.OutputTokens,
+				TotalTokens:      event.Message.Usage.InputTokens + event.Message.Usage.OutputTokens,
+			}
+			emit(&StreamChunk{Usage: usage})
+		}
+
 	case "content_block_start":
 		if event.ContentBlock != nil {
 			blocks[event.Index] = &anthropicBlockState{
@@ -354,8 +395,14 @@ func (p *AnthropicCompatibleProvider) BroadcastResponse(ctx context.Context, str
 
 		var fullContent strings.Builder
 		var fullReasoning strings.Builder
+		// M-MEDIUM-10: track the last seen Usage so it can be propagated to
+		// the final ModelResponse (EventDone payload).
+		var lastUsage *UsageInfo
 
 		for chunk := range stream {
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
 			if chunk.IsDone {
 				if meta, ok := chunk.Meta["error"]; ok {
 					events <- &ResultEvent{
@@ -364,12 +411,16 @@ func (p *AnthropicCompatibleProvider) BroadcastResponse(ctx context.Context, str
 					}
 					continue
 				}
+				resp := &ModelResponse{
+					Content:   fullContent.String(),
+					Reasoning: fullReasoning.String(),
+				}
+				if lastUsage != nil {
+					resp.Usage = *lastUsage
+				}
 				events <- &ResultEvent{
 					EventType: EventDone,
-					Payload: &ModelResponse{
-						Content:   fullContent.String(),
-						Reasoning: fullReasoning.String(),
-					},
+					Payload:   resp,
 				}
 				continue
 			}
@@ -416,6 +467,15 @@ type anthropicEvent struct {
 	ContentBlock *anthropicContentBlock `json:"content_block,omitempty"`
 	Delta        *anthropicDelta        `json:"delta,omitempty"`
 	Usage        *anthropicUsage        `json:"usage,omitempty"`
+	// M-MEDIUM-11: message_start carries the initial usage nested under
+	// message.usage.
+	Message *anthropicMessage `json:"message,omitempty"`
+}
+
+// anthropicMessage is the inner "message" object of message_start events.
+type anthropicMessage struct {
+	ID    string          `json:"id,omitempty"`
+	Usage *anthropicUsage `json:"usage,omitempty"`
 }
 
 type anthropicContentBlock struct {

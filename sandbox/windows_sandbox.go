@@ -187,39 +187,53 @@ func (h *WindowsSandboxHandle) Status() HandleStatus {
 }
 
 // generateWSConfig generates a WSConfig.xml for Windows Sandbox.
-// In production, this would create proper XML configuration with:
-//   - SharedFolder elements for host-to-sandbox mappings
-//   - <Networking> element for network isolation
-//   - <MappedFolders> for shared directories
+// Reference: https://learn.microsoft.com/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file
+// 
+// Valid XML elements (no declaration line, no SandboxFolder/DesktopAttachmentsFolder):
+//   <Configuration>
+//     <VGpu>Disable</VGpu>
+//     <Networking>Disable</Networking>
+//     <MappedFolders>
+//       <MappedFolder>
+//         <HostFolder>C:\path</HostFolder>
+//         <ReadOnly>true</ReadOnly>
+//       </MappedFolder>
+//     </MappedFolders>
+//     <LogonCommand>
+//       <Command>cmd /c echo test</Command>
+//     </LogonCommand>
+//   </Configuration>
 func (h *WindowsSandboxHandle) generateWSConfig() (string, error) {
-	// Build XML configuration
 	var xml bytes.Buffer
-	xml.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	xml.WriteString(`<Configuration>\n`)
-
-	// Add shared folders
-	if len(h.sharedFolders) > 0 {
-		xml.WriteString(`  <MappedFolders>\n`)
-		for _, sf := range h.sharedFolders {
-			xml.WriteString(fmt.Sprintf(`    <MappedFolder>\n`))
-			xml.WriteString(fmt.Sprintf(`      <HostFolder>%s</HostFolder>\n`, sanitizeXML(sf.HostPath)))
-			xml.WriteString(fmt.Sprintf(`      <SandboxFolder>%s</SandboxFolder>\n`, sanitizeXML(sf.SandboxPath)))
-			if sf.ReadOnly {
-				xml.WriteString(`      <ReadOnly>true</ReadOnly>\n`)
-			}
-			xml.WriteString(`    </MappedFolder>\n`)
-		}
-		xml.WriteString(`  </MappedFolders>\n`)
-	}
+	xml.WriteString(`<Configuration>`)
 
 	// Network isolation
 	if h.networkIsolation {
-		xml.WriteString(`  <Networking>Disable</Networking>\n`)
+		xml.WriteString(`  <Networking>Disable</Networking>`)
 	}
 
-	// Sandbox directory
+	// Add shared folders (only HostFolder and ReadOnly are valid)
+	if len(h.sharedFolders) > 0 {
+		xml.WriteString(`  <MappedFolders>`)
+		for _, sf := range h.sharedFolders {
+			xml.WriteString(`    <MappedFolder>`)
+			xml.WriteString(fmt.Sprintf(`<HostFolder>%s</HostFolder>`, sanitizeXML(sf.HostPath)))
+			if sf.ReadOnly {
+				xml.WriteString(`<ReadOnly>true</ReadOnly>`)
+			}
+			xml.WriteString(`    </MappedFolder>`)
+		}
+		xml.WriteString(`  </MappedFolders>`)
+	}
+
+	// LogonCommand: write startup timestamp to host-shared folder
 	if h.sandboxDir != "" {
-		xml.WriteString(fmt.Sprintf(`  <DesktopAttachmentsFolder>%s</DesktopAttachmentsFolder>\n`, sanitizeXML(h.sandboxDir)))
+		xml.WriteString(`  <LogonCommand>`)
+		xml.WriteString(fmt.Sprintf(`<Command>powershell -Command "echo 'Sandbox started at %s' | Out-File -FilePath '%s\log.txt' -Encoding utf8"</Command>`,
+			time.Now().Format("2006-01-02 15:04:05"),
+			sanitizeXML(h.sandboxDir),
+		))
+		xml.WriteString(`  </LogonCommand>`)
 	}
 
 	xml.WriteString(`</Configuration>`)

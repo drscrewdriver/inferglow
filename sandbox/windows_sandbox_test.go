@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -97,7 +98,7 @@ func TestWindowsSandboxHandleExecuteNotRunning(t *testing.T) {
 	}
 
 	_, err := handle.Execute(ctx, &Command{Argv: []string{"cmd", "/c", "echo hello"}})
-	if err != ErrHandleNotRunning {
+	if !errors.Is(err, ErrHandleNotRunning) {
 		t.Errorf("expected ErrHandleNotRunning, got: %v", err)
 	}
 }

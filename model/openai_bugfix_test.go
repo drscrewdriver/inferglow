@@ -349,3 +349,168 @@ func TestOpenAIFallbackHTTPClientHasTimeout(t *testing.T) {
 		t.Errorf("expected non-zero Timeout on fallback http.Client, got %v", client.Timeout)
 	}
 }
+
+// O-CRITICAL-1: when the caller sets Options["force_json"]=true, the
+// provider must include response_format={"type":"json_object"} in the
+// HTTP request body so OpenAI-compatible APIs enforce JSON-object output.
+// This protects Agent.Run against LLMs that would otherwise emit prose
+// around the JSON decision.
+func TestOpenAIForceJSONSetsResponseFormatInBody(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	provider := &OpenAICompatibleProvider{BaseURL: server.URL, Model: "gpt-4"}
+	req := &ModelRequest{
+		Input:   "test",
+		Options: map[string]any{"force_json": true},
+	}
+
+	data, err := provider.GenerateRequestData(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateRequestData failed: %v", err)
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	rf, ok := receivedBody["response_format"]
+	if !ok {
+		t.Fatal("expected response_format in request body when force_json=true")
+	}
+	rfMap, ok := rf.(map[string]any)
+	if !ok {
+		t.Fatalf("response_format should be a map, got %T", rf)
+	}
+	if rfMap["type"] != "json_object" {
+		t.Errorf("response_format.type = %v, want \"json_object\"", rfMap["type"])
+	}
+}
+
+// O-CRITICAL-1: setting req.Output (an OutputSchema) should also trigger
+// response_format in the request body, even without explicit force_json.
+func TestOpenAIOutputSchemaTriggersResponseFormat(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	provider := &OpenAICompatibleProvider{BaseURL: server.URL, Model: "gpt-4"}
+	req := &ModelRequest{
+		Input: "test",
+		Output: &OutputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"next_action": map[string]any{"type": "string"},
+			},
+		},
+	}
+
+	data, err := provider.GenerateRequestData(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateRequestData failed: %v", err)
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	rf, ok := receivedBody["response_format"]
+	if !ok {
+		t.Fatal("expected response_format in request body when Output schema is set")
+	}
+	rfMap, ok := rf.(map[string]any)
+	if !ok {
+		t.Fatalf("response_format should be a map, got %T", rf)
+	}
+	if rfMap["type"] != "json_object" {
+		t.Errorf("response_format.type = %v, want \"json_object\"", rfMap["type"])
+	}
+}
+
+// O-CRITICAL-1: when neither force_json nor Output is set, response_format
+// must NOT appear in the request body (preserves existing behavior for
+// callers that want free-form text).
+func TestOpenAINoForceJSONNoResponseFormat(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	provider := &OpenAICompatibleProvider{BaseURL: server.URL, Model: "gpt-4"}
+	req := &ModelRequest{Input: "test"}
+
+	data, err := provider.GenerateRequestData(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateRequestData failed: %v", err)
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	if rf, ok := receivedBody["response_format"]; ok {
+		t.Errorf("expected no response_format in body, got %v", rf)
+	}
+}
+
+// O-CRITICAL-1: GenerateRequestData must not mutate the caller's Options
+// map when adding response_format. The caller's map should remain
+// untouched.
+func TestOpenAIForceJSONDoesNotMutateCallerOptions(t *testing.T) {
+	provider := &OpenAICompatibleProvider{Model: "gpt-4"}
+	callerOpts := map[string]any{"force_json": true, "custom": "value"}
+
+	req := &ModelRequest{
+		Input:   "test",
+		Options: callerOpts,
+	}
+
+	data, err := provider.GenerateRequestData(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateRequestData failed: %v", err)
+	}
+
+	// Caller's map should still have only the original keys.
+	if _, ok := callerOpts["response_format"]; ok {
+		t.Error("GenerateRequestData mutated caller's Options map (added response_format)")
+	}
+	if len(callerOpts) != 2 {
+		t.Errorf("caller's Options map size = %d, want 2", len(callerOpts))
+	}
+
+	// The resulting RequestData.Options should have response_format.
+	rf, ok := data.Options["response_format"]
+	if !ok {
+		t.Fatal("expected response_format in data.Options")
+	}
+	rfMap, ok := rf.(map[string]any)
+	if !ok {
+		t.Fatalf("response_format should be a map, got %T", rf)
+	}
+	if rfMap["type"] != "json_object" {
+		t.Errorf("response_format.type = %v, want \"json_object\"", rfMap["type"])
+	}
+}

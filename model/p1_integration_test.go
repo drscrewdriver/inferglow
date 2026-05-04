@@ -85,8 +85,8 @@ func TestP1Integration_ConfigProviderToAnthropicProvider(t *testing.T) {
 	if receivedAPIKey != "test-key" {
 		t.Errorf("x-api-key header = %q, want \"test-key\"", receivedAPIKey)
 	}
-	if receivedAnthropicVersion != "2023-06-01" {
-		t.Errorf("anthropic-version header = %q, want \"2023-06-01\"", receivedAnthropicVersion)
+	if receivedAnthropicVersion != "2024-10-22" {
+		t.Errorf("anthropic-version header = %q, want \"2024-10-22\"", receivedAnthropicVersion)
 	}
 }
 

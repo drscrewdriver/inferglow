@@ -3,6 +3,8 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"time"
 )
 
 // fieldDefDTO 是 FieldDef 的可序列化表示。
@@ -166,3 +168,129 @@ var (
 	_ json.Marshaler   = (*OutputSchema)(nil)
 	_ json.Unmarshaler = (*OutputSchema)(nil)
 )
+
+// SerializeValue 将任意值归一化后再交由调用方序列化。
+// 主要解决 time.Time 时区信息丢失问题：
+//   - time.Time → 调用 .UTC() 转 UTC 后返回
+//   - *time.Time → 解引用后转 UTC（非 nil 时），nil 原样返回
+//   - struct → 递归处理每个导出字段，遇到 time.Time/*time.Time 时转 UTC
+//   - slice/array → 递归处理每个元素
+//   - map → 递归处理每个 value（key 保持不变）
+//   - 其他类型 → 原样返回
+//
+// 调用方应在 json.Marshal 之前调用本函数：
+//
+//	normalized := schema.SerializeValue(value)
+//	data, err := json.Marshal(normalized)
+func SerializeValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Invalid:
+		return value
+	}
+	return normalizeValue(rv).Interface()
+}
+
+// normalizeValue 递归归一化 reflect.Value，返回新的 reflect.Value。
+// 对 time.Time/*time.Time 调用 .UTC()；对容器类型递归处理子元素。
+func normalizeValue(rv reflect.Value) reflect.Value {
+	if !rv.IsValid() {
+		return rv
+	}
+
+	// 解引用接口和指针以判断具体类型，但返回时需保持原指针语义
+	switch rv.Kind() {
+	case reflect.Interface:
+		return normalizeValue(rv.Elem())
+	case reflect.Ptr:
+		if rv.IsNil() {
+			return rv
+		}
+		// time.Time 指针
+		if rv.Type() == reflect.TypeOf((*time.Time)(nil)) {
+			t := rv.Elem().Interface().(time.Time).UTC()
+			ptr := reflect.New(reflect.TypeOf(t))
+			ptr.Elem().Set(reflect.ValueOf(t))
+			return ptr
+		}
+		// 其他指针：解引用递归处理后再封装回指针
+		normalized := normalizeValue(rv.Elem())
+		// 如果元素类型未变，直接返回原指针（避免无谓分配）
+		if normalized.Elem().Type() == rv.Elem().Type() {
+			// 复制一份到新指针，避免修改原值
+			ptr := reflect.New(rv.Elem().Type())
+			ptr.Elem().Set(normalized.Elem())
+			return ptr
+		}
+		// 类型变化（如 struct 内部字段被替换为 map），返回 normalized 本身
+		return normalized
+	}
+
+	// 直接处理 time.Time
+	if rv.Type() == reflect.TypeOf(time.Time{}) {
+		t := rv.Interface().(time.Time).UTC()
+		return reflect.ValueOf(t)
+	}
+
+	// 容器类型递归处理
+	switch rv.Kind() {
+	case reflect.Struct:
+		out := reflect.New(rv.Type()).Elem()
+		for i := 0; i < rv.NumField(); i++ {
+			field := rv.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			normalized := normalizeValue(field)
+			if normalized.IsValid() && out.Field(i).CanSet() {
+				if normalized.Type() == out.Field(i).Type() {
+					out.Field(i).Set(normalized)
+				} else {
+					// 类型变化（罕见），尽量赋值
+					if normalized.Type().ConvertibleTo(out.Field(i).Type()) {
+						out.Field(i).Set(normalized.Convert(out.Field(i).Type()))
+					}
+				}
+			}
+		}
+		return out
+	case reflect.Slice:
+		if rv.IsNil() {
+			return rv
+		}
+		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			normalized := normalizeValue(rv.Index(i))
+			if normalized.IsValid() {
+				out.Index(i).Set(normalized)
+			}
+		}
+		return out
+	case reflect.Array:
+		out := reflect.New(rv.Type()).Elem()
+		for i := 0; i < rv.Len(); i++ {
+			normalized := normalizeValue(rv.Index(i))
+			if normalized.IsValid() && out.Index(i).CanSet() {
+				out.Index(i).Set(normalized)
+			}
+		}
+		return out
+	case reflect.Map:
+		if rv.IsNil() {
+			return rv
+		}
+		out := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			normalized := normalizeValue(iter.Value())
+			out.SetMapIndex(iter.Key(), normalized)
+		}
+		return out
+	}
+
+	// 其他类型原样返回
+	return rv
+}

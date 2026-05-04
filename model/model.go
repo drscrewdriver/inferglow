@@ -25,6 +25,12 @@ type ModelRequest struct {
 	// This allows callers to request deterministic temperature=0 without it
 	// being silently overridden by the provider default.
 	TemperatureSet bool
+	// ToolChoice controls tool selection behavior. May be a string
+	// ("auto"/"none"/"required") or a structured object
+	// ({"type":"function","function":{"name":"..."}} for OpenAI,
+	// {"type":"auto"|"any"|"tool","name":...} for Anthropic).
+	// M-MEDIUM-1: pass through to provider request body.
+	ToolChoice any
 }
 
 // ModelResponse 模型响应结果
@@ -54,6 +60,15 @@ type RequestData struct {
 	Temperature float64
 	MaxTokens   int
 	Options     map[string]any
+	// ToolChoice is the provider-agnostic form of ModelRequest.ToolChoice;
+	// providers copy it into their request body when non-nil.
+	// M-MEDIUM-1: tool_choice support.
+	ToolChoice any
+	// Output is the optional structured-output schema. Providers use it to
+	// enable JSON mode (e.g. Ollama format=json, OpenAI response_format,
+	// Anthropic system-prompt instruction).
+	// M-MEDIUM-9: provider handling of Options/Output.
+	Output *OutputSchema
 }
 
 // OutputSchema 定义期望的输出格式
