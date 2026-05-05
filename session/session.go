@@ -2,8 +2,10 @@ package session
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,6 +33,8 @@ type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) 
 type AnalysisHandler func(full []ChatMessage, window []ChatMessage, memo map[string]any) (string, error)
 
 type Session struct {
+	mu sync.RWMutex
+
 	ID            string
 	FullContext   []ChatMessage
 	ContextWindow []ChatMessage
@@ -61,16 +65,22 @@ func NewSession(id string, maxLength int) *Session {
 
 // RegisterResizeHandler 注册一个命名 resize 策略。
 func (s *Session) RegisterResizeHandler(name string, handler ResizeHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.resizeHandlers[name] = handler
 }
 
 // RegisterAnalysisHandler 追加一个 AnalysisHandler，按注册顺序调用。
 func (s *Session) RegisterAnalysisHandler(handler AnalysisHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.analysisHandlers = append(s.analysisHandlers, handler)
 }
 
 // ListResizeHandlers 返回已注册策略名（按字母升序排序）。
 func (s *Session) ListResizeHandlers() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	names := make([]string, 0, len(s.resizeHandlers))
 	for name := range s.resizeHandlers {
 		names = append(names, name)
@@ -81,6 +91,8 @@ func (s *Session) ListResizeHandlers() []string {
 
 // SetDefaultResizeHandler 设置默认 resize 策略。若 name 未注册则返回错误。
 func (s *Session) SetDefaultResizeHandler(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.resizeHandlers[name]; !ok {
 		return fmt.Errorf("resize handler %q not registered", name)
 	}
@@ -109,6 +121,8 @@ func ContentToString(c any) string {
 }
 
 func (s *Session) AddMessage(role string, content any, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	msg := ChatMessage{
 		Role:      role,
 		Content:   content,
@@ -121,7 +135,40 @@ func (s *Session) AddMessage(role string, content any, name string) {
 	if !s.AutoResize {
 		return
 	}
+	s.applyResizeLocked()
+}
 
+// AddChatHistory appends multiple messages to both FullContext and ContextWindow
+func (s *Session) AddChatHistory(messages []ChatMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, msg := range messages {
+		s.FullContext = append(s.FullContext, ChatMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Name:      msg.Name,
+			Timestamp: msg.Timestamp,
+		})
+	}
+	s.ContextWindow = append(s.ContextWindow, s.copyMessages(messages)...)
+
+	if !s.AutoResize {
+		return
+	}
+	s.applyResizeLocked()
+}
+
+// SetChatHistory replaces the current history in ContextWindow only
+func (s *Session) SetChatHistory(messages []ChatMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ContextWindow = s.copyMessages(messages)
+}
+
+// applyResizeLocked 在持有写锁的前提下执行 resize 调度。
+// 调用方必须已持有 s.mu。
+// ResizeHandler 返回 error 时记录日志并保留原始 ContextWindow（回退）。
+func (s *Session) applyResizeLocked() {
 	// 新路径：analysisHandlers 非空时优先走多策略调度
 	if len(s.analysisHandlers) > 0 {
 		// 注入 memo["max_length"] 供策略使用
@@ -141,18 +188,22 @@ func (s *Session) AddMessage(role string, content any, name string) {
 			// 找到策略，执行 resize
 			if handler, ok := s.resizeHandlers[strategyName]; ok {
 				resized, err := handler(s.FullContext, s.ContextWindow)
-				if err == nil {
-					s.ContextWindow = resized
+				if err != nil {
+					log.Printf("session resize handler %q returned error: %v (falling back to original window)", strategyName, err)
+					return
 				}
+				s.ContextWindow = resized
 				return
 			}
 			// 策略名未注册，回退到 defaultResizeName
 			if s.defaultResizeName != "" {
 				if handler, ok := s.resizeHandlers[s.defaultResizeName]; ok {
 					resized, err := handler(s.FullContext, s.ContextWindow)
-					if err == nil {
-						s.ContextWindow = resized
+					if err != nil {
+						log.Printf("session default resize handler %q returned error: %v (falling back to original window)", s.defaultResizeName, err)
+						return
 					}
+					s.ContextWindow = resized
 					return
 				}
 			}
@@ -168,29 +219,13 @@ func (s *Session) AddMessage(role string, content any, name string) {
 		}
 		if totalBytes > s.MaxLength {
 			resized, err := s.ResizeHandler(s.FullContext, s.ContextWindow)
-			if err == nil {
-				s.ContextWindow = resized
+			if err != nil {
+				log.Printf("session resize handler returned error: %v (falling back to original window)", err)
+				return
 			}
+			s.ContextWindow = resized
 		}
 	}
-}
-
-// AddChatHistory appends multiple messages to both FullContext and ContextWindow
-func (s *Session) AddChatHistory(messages []ChatMessage) {
-	for _, msg := range messages {
-		s.FullContext = append(s.FullContext, ChatMessage{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Name:      msg.Name,
-			Timestamp: msg.Timestamp,
-		})
-	}
-	s.ContextWindow = append(s.ContextWindow, s.copyMessages(messages)...)
-}
-
-// SetChatHistory replaces the current history in ContextWindow only
-func (s *Session) SetChatHistory(messages []ChatMessage) {
-	s.ContextWindow = s.copyMessages(messages)
 }
 
 // contentToPromptString 将单个消息的 content 字段转换为 prompt 字符串
@@ -218,6 +253,8 @@ func contentToPromptString(content any) string {
 
 // PreparePrompt returns a copy of ContextWindow, serializing ContentBlock to string
 func (s *Session) PreparePrompt() []ChatMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	prompt := make([]ChatMessage, len(s.ContextWindow))
 	for i, msg := range s.ContextWindow {
 		prompt[i] = msg
@@ -238,15 +275,20 @@ func (s *Session) PreparePrompt() []ChatMessage {
 
 // GetFullContext returns the full history as a copy
 func (s *Session) GetFullContext() []ChatMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.copyMessages(s.FullContext)
 }
 
 // GetContextWindow returns the current window as a copy
 func (s *Session) GetContextWindow() []ChatMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.copyMessages(s.ContextWindow)
 }
 
-// copyMessages creates a shallow copy of a ChatMessage slice
+// copyMessages creates a shallow copy of a ChatMessage slice.
+// Caller must hold the appropriate lock (RLock or Lock) on s.mu.
 func (s *Session) copyMessages(msgs []ChatMessage) []ChatMessage {
 	result := make([]ChatMessage, len(msgs))
 	copy(result, msgs)
