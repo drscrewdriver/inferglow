@@ -1,9 +1,11 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // SignalType 信号触发类型
@@ -30,6 +32,13 @@ type TriggerFlowRuntimeData struct {
 	FlowData    map[string]any // 不可变流数据（flow-level）
 	Signal      *Signal        // 当前触发的信号
 	Result      any            // 累积结果
+
+	// 以下字段用于将外层 context/SignalNet/EmitSignal 透传给 wrapOperatorHandlerAsHandler
+	// 包装的 OperatorHandler。零值（nil）时包装器回退到 context.Background()。
+	// 这些字段不参与 JSON 序列化（runtime-only）。
+	Ctx        context.Context  `json:"-" yaml:"-"`
+	SignalNet  *SignalNet       `json:"-" yaml:"-"`
+	EmitSignal func(Signal)     `json:"-" yaml:"-"`
 }
 
 // Handler 信号处理函数。
@@ -84,7 +93,23 @@ type SignalNet struct {
 
 	// bindingID 生成器
 	bindingCounter uint64
+
+	// BUG-14/F-MEDIUM-4: signalAccepted TTL 清理。
+	// acceptedOrder 记录信号接受顺序（FIFO），用于大小上限驱逐。
+	// acceptedAt 记录每个信号的接受时间，用于 TTL 过期判断。
+	// maxAccepted 为 0 表示无大小上限；acceptedTTL 为 0 表示无 TTL。
+	// 默认 maxAccepted=10000，acceptedTTL=1 小时。
+	acceptedOrder []string
+	acceptedAt    map[string]time.Time
+	maxAccepted   int
+	acceptedTTL   time.Duration
 }
+
+// 默认的 signalAccepted 清理参数。
+const (
+	defaultMaxAcceptedSignals = 10000
+	defaultAcceptedSignalsTTL = time.Hour
+)
 
 // NewSignalNet 创建信号网络。
 func NewSignalNet() *SignalNet {
@@ -93,7 +118,106 @@ func NewSignalNet() *SignalNet {
 		dynamicBindings: make(map[string]*DynamicBinding),
 		dynamicIndex:    make(map[string][]string),
 		signalAccepted:  make(map[string]*signalAcceptedEntry),
+		acceptedAt:      make(map[string]time.Time),
+		maxAccepted:     defaultMaxAcceptedSignals,
+		acceptedTTL:     defaultAcceptedSignalsTTL,
 	}
+}
+
+// SetAcceptedSignalsLimit 设置 signalAccepted 的最大条目数。
+// n=0 表示无大小上限。超过上限时按 FIFO 顺序驱逐最旧条目。
+func (sn *SignalNet) SetAcceptedSignalsLimit(n int) {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	sn.maxAccepted = n
+	// 立即应用新的上限
+	sn.evictOversizeLocked()
+}
+
+// GetAcceptedSignalsLimit 返回当前 signalAccepted 的最大条目数（0=无上限）。
+func (sn *SignalNet) GetAcceptedSignalsLimit() int {
+	sn.mu.RLock()
+	defer sn.mu.RUnlock()
+	return sn.maxAccepted
+}
+
+// SetAcceptedSignalsTTL 设置 signalAccepted 的 TTL。
+// ttl=0 表示无 TTL（不会因过期被清理）。
+func (sn *SignalNet) SetAcceptedSignalsTTL(ttl time.Duration) {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	sn.acceptedTTL = ttl
+}
+
+// GetAcceptedSignalsTTL 返回当前 signalAccepted 的 TTL（0=无 TTL）。
+func (sn *SignalNet) GetAcceptedSignalsTTL() time.Duration {
+	sn.mu.RLock()
+	defer sn.mu.RUnlock()
+	return sn.acceptedTTL
+}
+
+// AcceptedSignalsCount 返回当前 signalAccepted 中的条目数。
+func (sn *SignalNet) AcceptedSignalsCount() int {
+	sn.mu.RLock()
+	defer sn.mu.RUnlock()
+	return len(sn.signalAccepted)
+}
+
+// CleanupAcceptedSignals 显式清理 signalAccepted：
+//   - 移除超过 TTL 的条目（若 TTL > 0）
+//   - 若条目数超过 maxAccepted，按 FIFO 顺序驱逐最旧条目
+//
+// 此方法在每次 AcceptSignal 时也会自动调用，因此大多数情况下无需手动调用。
+func (sn *SignalNet) CleanupAcceptedSignals() {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	sn.evictExpiredLocked(time.Now())
+	sn.evictOversizeLocked()
+}
+
+// evictExpiredLocked 移除超过 TTL 的条目。调用者必须持有 sn.mu。
+func (sn *SignalNet) evictExpiredLocked(now time.Time) {
+	if sn.acceptedTTL <= 0 {
+		return
+	}
+	for _, id := range sn.acceptedOrder {
+		if acceptedAt, ok := sn.acceptedAt[id]; ok {
+			if now.Sub(acceptedAt) > sn.acceptedTTL {
+				delete(sn.signalAccepted, id)
+				delete(sn.acceptedAt, id)
+			}
+		}
+	}
+	sn.rebuildAcceptedOrderLocked()
+}
+
+// evictOversizeLocked 若条目数超过 maxAccepted，按 FIFO 顺序驱逐最旧条目。
+// 调用者必须持有 sn.mu。
+func (sn *SignalNet) evictOversizeLocked() {
+	if sn.maxAccepted <= 0 {
+		return
+	}
+	for len(sn.signalAccepted) > sn.maxAccepted {
+		if len(sn.acceptedOrder) == 0 {
+			break
+		}
+		oldest := sn.acceptedOrder[0]
+		sn.acceptedOrder = sn.acceptedOrder[1:]
+		delete(sn.signalAccepted, oldest)
+		delete(sn.acceptedAt, oldest)
+	}
+}
+
+// rebuildAcceptedOrderLocked 重建 acceptedOrder，移除已被删除的 signalID。
+// 调用者必须持有 sn.mu。
+func (sn *SignalNet) rebuildAcceptedOrderLocked() {
+	newOrder := make([]string, 0, len(sn.acceptedOrder))
+	for _, id := range sn.acceptedOrder {
+		if _, ok := sn.signalAccepted[id]; ok {
+			newOrder = append(newOrder, id)
+		}
+	}
+	sn.acceptedOrder = newOrder
 }
 
 // RegisterStaticHandler 注册静态 handler。
@@ -223,13 +347,44 @@ func (sn *SignalNet) Route(sig *Signal) []Handler {
 }
 
 // AcceptSignal 记录信号已被接受，并初始化尝试追踪器。
+//
+// F-MEDIUM-3: 若信号已存在，保留原 tracker（Attempts + LastError）以保留
+// 尝试历史。仅替换 signal 引用为新的 Signal，并刷新 acceptedAt 时间戳。
+//
+// BUG-14/F-MEDIUM-4: 每次接受新信号时顺带清理过期条目并 enforcing 大小上限。
 func (sn *SignalNet) AcceptSignal(sig *Signal) {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
-	sn.signalAccepted[sig.ID] = &signalAcceptedEntry{
-		signal:  sig,
-		tracker: &SignalAttemptTracker{Attempts: 0},
+	now := time.Now()
+	// 清理过期条目（TTL）
+	sn.evictExpiredLocked(now)
+
+	// F-MEDIUM-3: 若信号已存在，保留原 tracker（Attempts + LastError）。
+	// 仅替换 signal 引用并刷新 acceptedAt；不重置尝试历史。
+	var preservedTracker *SignalAttemptTracker
+	if existing, exists := sn.signalAccepted[sig.ID]; exists {
+		preservedTracker = existing.tracker
+		// 移除旧条目（更新接受顺序与时间），但 tracker 已保留
+		delete(sn.signalAccepted, sig.ID)
+		delete(sn.acceptedAt, sig.ID)
+		// 从 acceptedOrder 中移除（稍后 rebuild 会处理）
 	}
+
+	if preservedTracker != nil {
+		sn.signalAccepted[sig.ID] = &signalAcceptedEntry{
+			signal:  sig,
+			tracker: preservedTracker,
+		}
+	} else {
+		sn.signalAccepted[sig.ID] = &signalAcceptedEntry{
+			signal:  sig,
+			tracker: &SignalAttemptTracker{Attempts: 0},
+		}
+	}
+	sn.acceptedAt[sig.ID] = now
+	sn.acceptedOrder = append(sn.acceptedOrder, sig.ID)
+	// Enforce 大小上限（FIFO 驱逐）
+	sn.evictOversizeLocked()
 }
 
 // IsAccepted 检查信号是否已被接受。

@@ -2,7 +2,10 @@ package flow
 
 import (
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 )
 
 // ============================================================================
@@ -34,6 +37,7 @@ type WorkerPool struct {
 	taskWg   sync.WaitGroup
 	stopOnce sync.Once
 	stopped  chan struct{}
+	started  atomic.Bool
 }
 
 // NewWorkerPool 创建一个 WorkerPool 实例。
@@ -57,8 +61,13 @@ func NewWorkerPool(maxWorkers, queueSize int) *WorkerPool {
 
 // Start 启动所有 worker goroutine。
 // 重复调用是幂等的：第二次及以后调用不会启动额外 worker。
+// 内部通过 atomic.Bool guard 保证幂等性。
 func (p *WorkerPool) Start() {
 	if p == nil {
+		return
+	}
+	// CAS：从 false 切换到 true；若已 true 则直接返回，不启动额外 worker。
+	if !p.started.CompareAndSwap(false, true) {
 		return
 	}
 	for i := 0; i < p.workers; i++ {
@@ -79,8 +88,18 @@ func (p *WorkerPool) worker() {
 }
 
 // runTask 执行单个任务并保证 taskWg.Done() 被调用。
+//
+// F-MEDIUM-9: 在 task panic 时通过 defer recover() 捕获 panic，
+// 防止 panic 向上传播杀死 worker goroutine（Go 中未 recover 的 panic
+// 会终止整个程序）。recover 时记录 panic 值与堆栈，便于排查。
+// taskWg.Done() 仍由独立 defer 保证调用，避免 Wait() 死锁。
 func (p *WorkerPool) runTask(task func()) {
 	defer p.taskWg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("workerpool: task panic recovered: %v\n%s", r, debug.Stack())
+		}
+	}()
 	if task != nil {
 		task()
 	}

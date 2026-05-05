@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -228,6 +229,12 @@ func (h *BatchCollectHandler) Execute(oc *OperatorContext) (any, error) {
 		signalIDs[i] = "BatchItem[" + strconv.Itoa(i) + "]"
 	}
 
+	// 解析父 context（缺省 context.Background()）
+	ctx := context.Background()
+	if oc.Ctx != nil {
+		ctx = oc.Ctx
+	}
+
 	const pollInterval = 10 * time.Millisecond
 	const maxWait = 30 * time.Second
 	deadline := time.Now().Add(maxWait)
@@ -246,7 +253,12 @@ func (h *BatchCollectHandler) Execute(oc *OperatorContext) (any, error) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("batch_collect handler: timed out waiting for %d batch items", expected)
 		}
-		time.Sleep(pollInterval)
+		// 等待 pollInterval 或 ctx 取消，二者先到先返回
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("batch_collect handler: context cancelled: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
 	}
 
 	results := make([]any, expected)
@@ -445,6 +457,12 @@ func (h *ForEachCollectHandler) Execute(oc *OperatorContext) (any, error) {
 		signalIDs[i] = "BatchItem[" + strconv.Itoa(i) + "]"
 	}
 
+	// 解析父 context（缺省 context.Background()）
+	ctx := context.Background()
+	if oc.Ctx != nil {
+		ctx = oc.Ctx
+	}
+
 	const pollInterval = 10 * time.Millisecond
 	const maxWait = 30 * time.Second
 	deadline := time.Now().Add(maxWait)
@@ -463,7 +481,12 @@ func (h *ForEachCollectHandler) Execute(oc *OperatorContext) (any, error) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("for_each_collect handler: timed out waiting for %d items", expected)
 		}
-		time.Sleep(pollInterval)
+		// 等待 pollInterval 或 ctx 取消，二者先到先返回
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("for_each_collect handler: context cancelled: %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
 	}
 
 	results := make([]any, expected)
@@ -637,7 +660,8 @@ type CollectBranchHandler struct{}
 func (h *CollectBranchHandler) Kind() OperatorKind { return OpCollectBranch }
 
 // Execute 并行执行所有分支，聚合结果为 map[branchID]any。
-// 任一分支失败则整体失败。
+// 任一分支失败则整体失败。并发度限制为 8（WorkerPool）；父 context 取消时
+// 立即返回 ctx.Err()，所有未完成的分支任务在 WorkerPool.Stop 后退出。
 func (h *CollectBranchHandler) Execute(oc *OperatorContext) (any, error) {
 	if oc == nil {
 		return nil, fmt.Errorf("collect_branch handler: nil operator context")
@@ -650,48 +674,108 @@ func (h *CollectBranchHandler) Execute(oc *OperatorContext) (any, error) {
 		return map[string]any{}, nil
 	}
 
+	// 解析父 context（缺省 context.Background()）
+	parentCtx := context.Background()
+	if oc.Ctx != nil {
+		parentCtx = oc.Ctx
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
+	// 收集 branch id（排序后保证可确定性）
+	ids := make([]string, 0, len(branches))
+	for id := range branches {
+		ids = append(ids, id)
+	}
+
 	type branchResult struct {
 		id     string
 		result any
 		err    error
 	}
 
-	ids := make([]string, 0, len(branches))
-	for id := range branches {
-		ids = append(ids, id)
+	// 使用 WorkerPool 限制并发度为 8
+	const maxConcurrency = 8
+	workers := maxConcurrency
+	if workers > len(ids) {
+		workers = len(ids)
 	}
+	pool := NewWorkerPool(workers, len(ids))
+	pool.Start()
 
 	resultsCh := make(chan branchResult, len(ids))
+	submitted := 0
 	for _, id := range ids {
-		go func(branchID string, handler Handler) {
+		idx := id
+		handler := branches[idx]
+		// 提交前先检查 ctx 是否已取消
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		subErr := pool.Submit(func() {
+			// 二次检查 ctx
+			if err := ctx.Err(); err != nil {
+				resultsCh <- branchResult{id: idx, result: nil, err: err}
+				return
+			}
 			rd := &TriggerFlowRuntimeData{
 				RuntimeData: map[string]any{},
 				FlowData:    map[string]any{},
 				Signal: &Signal{
-					ID:           "CollectBranch[" + branchID + "]",
-					TriggerEvent: "CollectBranch[" + branchID + "]",
+					ID:           "CollectBranch[" + idx + "]",
+					TriggerEvent: "CollectBranch[" + idx + "]",
 					TriggerType:  SignalEvent,
 					Value:        oc.Input,
 				},
 				Result: oc.Input,
 			}
 			r, err := handler(rd)
-			resultsCh <- branchResult{id: branchID, result: r, err: err}
-		}(id, branches[id])
-	}
-
-	out := make(map[string]any, len(ids))
-	var firstErr error
-	for i := 0; i < len(ids); i++ {
-		br := <-resultsCh
-		if br.err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("branch %q failed: %w", br.id, br.err)
+			// 检查 ctx 是否在 handler 执行期间被取消
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				resultsCh <- branchResult{id: idx, result: nil, err: ctxErr}
+				return
 			}
+			resultsCh <- branchResult{id: idx, result: r, err: err}
+		})
+		if subErr != nil {
+			// pool 已被停止（通常因 ctx 取消）
+			resultsCh <- branchResult{id: idx, result: nil, err: ctx.Err()}
 			continue
 		}
-		out[br.id] = br.result
+		submitted++
 	}
+
+	// 监听 ctx 取消 + 结果到达
+	out := make(map[string]any, len(ids))
+	var firstErr error
+	collected := 0
+	ctxCancelled := false
+	for collected < submitted {
+		select {
+		case <-ctx.Done():
+			// 父 ctx 已取消，标记后跳出循环。不直接 return 是因为需要
+			// 在后台启动 pool.Stop() 清理 goroutine。
+			ctxCancelled = true
+			goto collectDone
+		case br := <-resultsCh:
+			collected++
+			if br.err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("branch %q failed: %w", br.id, br.err)
+				}
+				continue
+			}
+			out[br.id] = br.result
+		}
+	}
+collectDone:
+	if ctxCancelled {
+		// 在后台清理 pool（等待 in-flight 任务完成），避免阻塞 Execute 返回
+		go pool.Stop()
+		return nil, ctx.Err()
+	}
+	// 正常完成：同步等待 pool.Stop() 退出所有 worker
+	pool.Stop()
 	if firstErr != nil {
 		return nil, firstErr
 	}
@@ -751,8 +835,11 @@ func (h *InterventionPointHandler) Execute(oc *OperatorContext) (any, error) {
 	}
 
 	// 2. 等待恢复信号
+	// BUG-22: 超时从 Options["timeout"] 读取（默认 5 分钟）。
+	// 支持 time.Duration 或 string（time.ParseDuration 解析）。
 	const pollInterval = 10 * time.Millisecond
-	const maxWait = 5 * time.Minute
+	maxWait := readInterventionTimeout(oc.Operator)
+
 	deadline := time.Now().Add(maxWait)
 	for {
 		if oc.SignalNet.IsAccepted(resumeSigID) {
@@ -778,6 +865,51 @@ func (h *InterventionPointHandler) Execute(oc *OperatorContext) (any, error) {
 		return resumeSig.Value, nil
 	}
 	return oc.Input, nil
+}
+
+// readInterventionTimeout 从 Options["timeout"] 读取超时。
+// 接受 time.Duration 或 string（time.ParseDuration 解析）。
+// 默认 5 分钟。非法值回退到默认。
+// BUG-22: 让 InterventionPoint 超时可配置。
+func readInterventionTimeout(op *Operator) time.Duration {
+	const defaultTimeout = 5 * time.Minute
+	if op == nil || op.Options == nil {
+		return defaultTimeout
+	}
+	raw, ok := op.Options["timeout"]
+	if !ok || raw == nil {
+		return defaultTimeout
+	}
+	switch v := raw.(type) {
+	case time.Duration:
+		if v <= 0 {
+			return defaultTimeout
+		}
+		return v
+	case string:
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return defaultTimeout
+		}
+		return d
+	case int:
+		if v <= 0 {
+			return defaultTimeout
+		}
+		return time.Duration(v)
+	case int64:
+		if v <= 0 {
+			return defaultTimeout
+		}
+		return time.Duration(v)
+	case float64:
+		if v <= 0 {
+			return defaultTimeout
+		}
+		return time.Duration(v)
+	default:
+		return defaultTimeout
+	}
 }
 
 // readResumeSignalID 从 Options["resume_signal"] 读取恢复信号 ID。

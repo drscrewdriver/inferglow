@@ -103,24 +103,29 @@ func (m *LifecycleMachine) Seal() error {
 //   - failed -> closed（终止）
 //   - waiting -> closed（取消等待）
 // reason 写入 errorInfo（仅在 from != sealed 时）。
+//
+// BUG-13/F-MEDIUM-2 修复：check-and-set 必须原子。原实现先在锁内读取
+// m.current 解锁后再调用 m.Transition 重新加锁，存在 TOCTOU 窗口——其他
+// goroutine 可在窗口内把状态改为另一个可 closeable 状态，导致 Close 用
+// 过期的 from 调用 Transition 而失败。现直接在持锁状态下完成检查与转换。
 func (m *LifecycleMachine) Close(reason string) error {
 	if m == nil {
 		return fmt.Errorf("lifecycle machine is nil")
 	}
 	m.mu.Lock()
-	current := m.current
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 
+	current := m.current
 	validFroms := []LifecycleState{LifecycleOpen, LifecycleSealed, LifecycleRunning, LifecycleFailed, LifecycleWaiting}
 	for _, from := range validFroms {
 		if current == from {
-			if err := m.Transition(from, LifecycleClosed); err != nil {
-				return err
+			if !isValidTransition(from, LifecycleClosed) {
+				return fmt.Errorf("invalid transition: %s -> %s", from, LifecycleClosed)
 			}
+			m.current = LifecycleClosed
+			m.history = append(m.history, LifecycleClosed)
 			if from != LifecycleSealed && reason != "" {
-				m.mu.Lock()
 				m.errorInfo = reason
-				m.mu.Unlock()
 			}
 			return nil
 		}
@@ -129,23 +134,25 @@ func (m *LifecycleMachine) Close(reason string) error {
 }
 
 // Fail 将 execution 从 running/waiting 转为 failed，并记录错误信息。
+//
+// BUG-13/F-MEDIUM-2 修复：同 Close，check-and-set 原子化。
 func (m *LifecycleMachine) Fail(reason string) error {
 	if m == nil {
 		return fmt.Errorf("lifecycle machine is nil")
 	}
 	m.mu.Lock()
-	current := m.current
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 
+	current := m.current
 	validFroms := []LifecycleState{LifecycleRunning, LifecycleWaiting}
 	for _, from := range validFroms {
 		if current == from {
-			if err := m.Transition(from, LifecycleFailed); err != nil {
-				return err
+			if !isValidTransition(from, LifecycleFailed) {
+				return fmt.Errorf("invalid transition: %s -> %s", from, LifecycleFailed)
 			}
-			m.mu.Lock()
+			m.current = LifecycleFailed
+			m.history = append(m.history, LifecycleFailed)
 			m.errorInfo = reason
-			m.mu.Unlock()
 			return nil
 		}
 	}

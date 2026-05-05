@@ -327,12 +327,26 @@ func (bp *TriggerFlowBlueprint) _compileDefinition() error {
 
 // wrapOperatorHandlerAsHandler 将 OperatorHandler 包装为 Handler。
 // 包装后的 Handler 会构造 OperatorContext 并调用 Execute。
+//
+// 透传 TriggerFlowRuntimeData 中的 Ctx/SignalNet/EmitSignal 到 OperatorContext,
+// 使得编译期注册的 OperatorHandler 能在运行时访问外层 context 和信号网络。
+// 当 TriggerFlowRuntimeData 未携带这些字段（nil）时，Ctx 回退到 context.Background(),
+// SignalNet/EmitSignal 保持 nil（与历史行为一致，向后兼容）。
 func wrapOperatorHandlerAsHandler(h OperatorHandler, op *Operator) Handler {
 	return func(data *TriggerFlowRuntimeData) (any, error) {
 		ctx := &OperatorContext{
-			Ctx:      context.Background(),
-			Operator: op,
-			Input:    extractInput(data),
+			Ctx:        context.Background(),
+			Operator:   op,
+			Input:      extractInput(data),
+			SignalNet:  nil,
+			EmitSignal: nil,
+		}
+		if data != nil {
+			if data.Ctx != nil {
+				ctx.Ctx = data.Ctx
+			}
+			ctx.SignalNet = data.SignalNet
+			ctx.EmitSignal = data.EmitSignal
 		}
 		return h.Execute(ctx)
 	}
@@ -488,6 +502,14 @@ func (f *TriggerFlow[InputT, StreamT, ResultT]) Run(input InputT) (ResultT, erro
 	if def == nil {
 		return zero, fmt.Errorf("no definition")
 	}
+	// 创建本次执行的 SignalNet 和 EmitSignal 函数。
+	// EmitSignal 将信号接受到 SignalNet，使 SignalGate/BatchCollect 等算子
+	// 能在单进程内观察到上游算子发射的信号。
+	signalNet := NewSignalNet()
+	emitSignal := func(s Signal) {
+		sig := s
+		signalNet.AcceptSignal(&sig)
+	}
 	var currentInput any = input
 	for _, op := range def.Operators {
 		if op == nil {
@@ -501,9 +523,11 @@ func (f *TriggerFlow[InputT, StreamT, ResultT]) Run(input InputT) (ResultT, erro
 			return zero, fmt.Errorf("operator %s: %w", op.Name, err)
 		}
 		ctx := &OperatorContext{
-			Ctx:      context.Background(),
-			Operator: op,
-			Input:    currentInput,
+			Ctx:        context.Background(),
+			Operator:   op,
+			Input:      currentInput,
+			SignalNet:  signalNet,
+			EmitSignal: emitSignal,
 		}
 		out, err := h.Execute(ctx)
 		if err != nil {

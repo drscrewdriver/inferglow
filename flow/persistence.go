@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,17 +33,17 @@ type ExecutionSnapshot struct {
 	CreatedAt     time.Time                        `json:"created_at" yaml:"created_at"`
 
 	// 扩展字段（v2）：补充 Execution 状态恢复所需的完整信息。
-	RunContext    map[string]any      `json:"run_context,omitempty" yaml:"run_context,omitempty"`
-	Interrupts    []InterruptRecord   `json:"interrupts,omitempty" yaml:"interrupts,omitempty"`
-	Intervention  *InterventionState  `json:"intervention,omitempty" yaml:"intervention,omitempty"`
-	SubFlowFrames []*SubFlowFrame     `json:"sub_flow_frames,omitempty" yaml:"sub_flow_frames,omitempty"`
-	LastSignal    *SignalEventRecord  `json:"last_signal,omitempty" yaml:"last_signal,omitempty"`
-	DurableState  map[string]any      `json:"durable_system_state,omitempty" yaml:"durable_system_state,omitempty"`
-	ResourceReqs  map[string]any      `json:"resource_requirements,omitempty" yaml:"resource_requirements,omitempty"`
-	Compaction    *CompactionRecord   `json:"compaction,omitempty" yaml:"compaction,omitempty"`
-	ResumeLedger  []ResumeToken       `json:"resume_ledger,omitempty" yaml:"resume_ledger,omitempty"`
-	OwnerID       string              `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
-	LeaseTTL      int64               `json:"lease_ttl,omitempty" yaml:"lease_ttl,omitempty"`
+	RunContext    map[string]any     `json:"run_context,omitempty" yaml:"run_context,omitempty"`
+	Interrupts    []InterruptRecord  `json:"interrupts,omitempty" yaml:"interrupts,omitempty"`
+	Intervention  *InterventionState `json:"intervention,omitempty" yaml:"intervention,omitempty"`
+	SubFlowFrames []*SubFlowFrame    `json:"sub_flow_frames,omitempty" yaml:"sub_flow_frames,omitempty"`
+	LastSignal    *SignalEventRecord `json:"last_signal,omitempty" yaml:"last_signal,omitempty"`
+	DurableState  map[string]any     `json:"durable_system_state,omitempty" yaml:"durable_system_state,omitempty"`
+	ResourceReqs  map[string]any     `json:"resource_requirements,omitempty" yaml:"resource_requirements,omitempty"`
+	Compaction    *CompactionRecord  `json:"compaction,omitempty" yaml:"compaction,omitempty"`
+	ResumeLedger  []ResumeToken      `json:"resume_ledger,omitempty" yaml:"resume_ledger,omitempty"`
+	OwnerID       string             `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	LeaseTTL      int64              `json:"lease_ttl,omitempty" yaml:"lease_ttl,omitempty"`
 }
 
 // StepLogEntrySnapshot is the serializable representation of a StepLogEntry.
@@ -122,7 +124,7 @@ func NewExecutionPersistence(exec *Execution, flowName string) *ExecutionPersist
 func (p *ExecutionPersistence) buildSnapshot() *ExecutionSnapshot {
 	snapshot := &ExecutionSnapshot{
 		SchemaVersion: "v1",
-		ExecutionID:   fmt.Sprintf("%d-%s", time.Now().UnixNano(), p.flowName),
+		ExecutionID:   generateExecutionID(p.flowName),
 		FlowName:      p.flowName,
 		Status:        p.execution.State.Status,
 		StepLog:       make(map[string]*StepLogEntrySnapshot),
@@ -152,14 +154,14 @@ func (p *ExecutionPersistence) buildSnapshot() *ExecutionSnapshot {
 	// 自动从全局 SubFlowRegistry 拷贝活跃子流帧
 	if reg := GlobalSubFlowRegistry(); reg != nil {
 		if frames := reg.List(); len(frames) > 0 {
-			// 深拷贝以避免外部修改影响快照
+			// BUG-20 / F-MEDIUM-6: 深拷贝以避免外部修改影响 snapshot
+			// （State/RuntimeData/FlowData 是引用类型，浅拷贝会共享引用）
 			snapshot.SubFlowFrames = make([]*SubFlowFrame, len(frames))
 			for i, f := range frames {
 				if f == nil {
 					continue
 				}
-				copyFrame := *f
-				snapshot.SubFlowFrames[i] = &copyFrame
+				snapshot.SubFlowFrames[i] = f.DeepCopy()
 			}
 		}
 	}
@@ -272,4 +274,23 @@ func (s *ExecutionSnapshot) AsPausePoint() *PausePoint {
 		Input:     s.PausedInput,
 		Timestamp: s.CreatedAt,
 	}
+}
+
+// generateExecutionID 生成全局唯一的 ExecutionID。
+//
+// BUG-21 / F-MEDIUM-10: 原实现使用 time.Now().UnixNano()，在 Windows 上
+// time.Now() 分辨率约 1ms，高频调用必然冲突。
+//
+// 修复：使用 UnixNano + crypto/rand 生成的 8 字节随机后缀，保留 flowName
+// 后缀以保证可读性。最终格式："<unixnano>-<rand16hex>-<flowName>"。
+//
+// 即使两次调用落在同一纳秒，crypto/rand 提供的 64-bit 随机后缀也能保证唯一性。
+// 失败回退到 time.Now().UnixNano()（与旧行为一致），但记录 fallback 标记。
+func generateExecutionID(flowName string) string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// 极罕见的回退：crypto/rand 不可用时退化为旧行为
+		return fmt.Sprintf("%d-%s", time.Now().UnixNano(), flowName)
+	}
+	return fmt.Sprintf("%d-%s-%s", time.Now().UnixNano(), hex.EncodeToString(buf[:]), flowName)
 }

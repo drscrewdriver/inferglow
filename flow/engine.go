@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -44,7 +45,12 @@ type Execution struct {
 }
 
 // Execute runs the flow from the starting step (no incoming edges) through all connected steps
+//
+// F-MEDIUM-12: 加读锁保护 f.steps / f.edges / f.branches / f.startStep 的并发读。
+// 读锁允许多个 Execute 并发执行；与 FlowBuilder 的写锁互斥。
 func (f *Flow) Execute(ctx context.Context, input any) *Execution {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	exec := &Execution{
 		State: ExecutionState{
 			Status:  StatusRunning,
@@ -166,7 +172,11 @@ func (f *Flow) handleBranches(exec *Execution, fromStepName string, output any, 
 			}
 			return trueOutput, branch.TrueStep.Name
 		}
-		// Execute false branch
+		// Execute false branch (skip if FalseStep is nil)
+		if branch.FalseStep == nil {
+			// No false branch defined: skip execution and return original output.
+			return output, ""
+		}
 		start := time.Now()
 		falseOutput, err := branch.FalseStep.Func(ctx, output)
 		duration := time.Since(start)
@@ -199,17 +209,29 @@ func (f *Flow) findStartStep() *Step {
 	for _, e := range f.edges {
 		targets[e.To] = true
 	}
-	// Find a step that is not a target of any edge
-	for name, step := range f.steps {
+	// BUG-15/F-MEDIUM-1: 收集所有候选 start step（非任何 edge 的 target），
+	// 按 Name 排序后取首个。原实现直接遍历 map，Go map 迭代顺序随机，
+	// 导致多候选时返回结果不确定。
+	var candidates []string
+	for name := range f.steps {
 		if !targets[name] {
-			return step
+			candidates = append(candidates, name)
 		}
 	}
-	// Fallback: return first step
-	for _, step := range f.steps {
-		return step
+	if len(candidates) > 0 {
+		sort.Strings(candidates)
+		return f.steps[candidates[0]]
 	}
-	return nil
+	// Fallback: 所有 step 都是 target（循环图等），按 Name 排序取首个
+	candidates = candidates[:0]
+	for name := range f.steps {
+		candidates = append(candidates, name)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.Strings(candidates)
+	return f.steps[candidates[0]]
 }
 
 // findNextStep returns the step name that the given step connects to

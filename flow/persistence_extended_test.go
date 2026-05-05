@@ -12,6 +12,67 @@ import (
 )
 
 // ============================================================================
+// BUG-21 / F-MEDIUM-10: ExecutionID UUID 唯一性
+//
+// 现状（修复前）：buildSnapshot 用 `fmt.Sprintf("%d-%s", time.Now().UnixNano(), flowName)`
+// 生成 ExecutionID。在高频调用下（特别是 Windows，time.Now() 分辨率约 1ms），
+// 多次调用可能得到相同的 UnixNano，导致 ExecutionID 冲突。
+//
+// 修复要求：
+//   - 使用 crypto/rand 或 UUID 生成 ExecutionID
+//   - 快速生成 100 个 ID 全部唯一
+//   - 保持原有 "<timestamp>-<flowName>" 风格或类似可读格式
+// ============================================================================
+
+// TestExecutionID_Unique 验证快速连续生成的 100 个 ExecutionID 全部唯一。
+// 修复前：time.Now().UnixNano() 在 Windows 上分辨率 ~1ms，循环 100 次必然冲突。
+func TestExecutionID_Unique(t *testing.T) {
+	exec := &Execution{State: ExecutionState{Status: StatusRunning}}
+	persistence := NewExecutionPersistence(exec, "uniq-flow")
+
+	seen := make(map[string]struct{}, 100)
+	for i := 0; i < 100; i++ {
+		snapshot := persistence.buildSnapshot()
+		if snapshot.ExecutionID == "" {
+			t.Fatalf("iteration %d: ExecutionID is empty", i)
+		}
+		if _, exists := seen[snapshot.ExecutionID]; exists {
+			t.Fatalf("iteration %d: duplicate ExecutionID %q (UnixNano collision)", i, snapshot.ExecutionID)
+		}
+		seen[snapshot.ExecutionID] = struct{}{}
+	}
+}
+
+// TestExecutionID_Unique1000Stress 用 1000 次调用加强唯一性保证。
+func TestExecutionID_Unique1000Stress(t *testing.T) {
+	exec := &Execution{State: ExecutionState{Status: StatusRunning}}
+	persistence := NewExecutionPersistence(exec, "stress-flow")
+
+	seen := make(map[string]struct{}, 1000)
+	for i := 0; i < 1000; i++ {
+		snapshot := persistence.buildSnapshot()
+		if snapshot.ExecutionID == "" {
+			t.Fatalf("iteration %d: ExecutionID is empty", i)
+		}
+		if _, exists := seen[snapshot.ExecutionID]; exists {
+			t.Fatalf("iteration %d: duplicate ExecutionID %q", i, snapshot.ExecutionID)
+		}
+		seen[snapshot.ExecutionID] = struct{}{}
+	}
+}
+
+// TestExecutionID_ContainsFlowName 验证 ExecutionID 仍包含 flowName（可读性）。
+func TestExecutionID_ContainsFlowName(t *testing.T) {
+	exec := &Execution{State: ExecutionState{Status: StatusRunning}}
+	persistence := NewExecutionPersistence(exec, "my-readable-flow")
+
+	snapshot := persistence.buildSnapshot()
+	if !strings.Contains(snapshot.ExecutionID, "my-readable-flow") {
+		t.Errorf("ExecutionID %q should contain flow name %q", snapshot.ExecutionID, "my-readable-flow")
+	}
+}
+
+// ============================================================================
 // 扩展字段结构体测试
 // ============================================================================
 

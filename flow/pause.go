@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -43,7 +44,14 @@ func (e *Execution) Pause(reason string) *PausePoint {
 }
 
 // Resume creates a new Execution starting from the paused step with new input
+//
+// BUG-16/F-MEDIUM-11: Resume 在每次循环迭代开始时检查 ctx.Done()。
+// 若父 context 已取消，立即返回 StatusFailed 并记录 ctx.Err()。
+//
+// F-MEDIUM-12: 加读锁保护 f.steps / f.edges 的并发读。
 func (f *Flow) Resume(ctx context.Context, pp *PausePoint, resumeInput any) *Execution {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	// Find the step name that was paused at - we resume from the NEXT step
 	pausedStepName := pp.StepName
 	// The next step is the one that follows the paused step in the flow
@@ -57,11 +65,27 @@ func (f *Flow) Resume(ctx context.Context, pp *PausePoint, resumeInput any) *Exe
 		},
 	}
 
+	// 检查 context 是否已取消（在执行任何 step 之前）
+	if err := ctx.Err(); err != nil {
+		exec.State.Status = StatusFailed
+		exec.State.Errors = append(exec.State.Errors, fmt.Errorf("resume: context cancelled before start: %w", err))
+		return exec
+	}
+
 	// Execute from next step
 	currentInput := resumeInput
 	currentStepName := nextStepName
 
 	for {
+		// BUG-16/F-MEDIUM-11: 在每次循环迭代开始时检查 ctx.Done()
+		select {
+		case <-ctx.Done():
+			exec.State.Status = StatusFailed
+			exec.State.Errors = append(exec.State.Errors, fmt.Errorf("resume: context cancelled: %w", ctx.Err()))
+			return exec
+		default:
+		}
+
 		step, ok := f.steps[currentStepName]
 		if !ok {
 			exec.State.Status = StatusCompleted
@@ -80,11 +104,32 @@ func (f *Flow) Resume(ctx context.Context, pp *PausePoint, resumeInput any) *Exe
 			Duration: duration,
 			Error:    err,
 		}
+		exec.State.StepExecLog = append(exec.State.StepExecLog, step.Name)
 
 		if err != nil {
 			exec.State.Status = StatusFailed
 			exec.State.Errors = append(exec.State.Errors, err)
 			return exec
+		}
+
+		// After executing, check for conditional branches from this step.
+		// This mirrors Execute's behavior so Resume honors branch logic.
+		output, branchStepName := f.handleBranches(exec, currentStepName, output, ctx)
+		if exec.State.Status == StatusFailed {
+			return exec
+		}
+		if branchStepName != "" {
+			// Branch was already executed inside handleBranches. Continue
+			// from the NEXT step after the branch step.
+			nextAfterBranch := f.findNextStep(branchStepName)
+			if nextAfterBranch == "" {
+				exec.State.Result = output
+				exec.State.Status = StatusCompleted
+				return exec
+			}
+			currentInput = output
+			currentStepName = nextAfterBranch
+			continue
 		}
 
 		nextStepName := f.findNextStep(currentStepName)

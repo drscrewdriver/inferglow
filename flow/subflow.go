@@ -3,6 +3,7 @@ package flow
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -46,6 +47,87 @@ func (f *SubFlowFrame) IsCompleted() bool {
 	return f.CompletedAt != nil
 }
 
+// DeepCopy 返回 SubFlowFrame 的深拷贝。
+//
+// BUG-20 / F-MEDIUM-6: State/RuntimeData/FlowData 是引用类型，浅拷贝（*f）
+// 会共享同一引用，外部修改会影响所有副本。DeepCopy 递归拷贝：
+//   - State / FlowData (map[string]any) - 递归拷贝嵌套 map/slice
+//   - RuntimeData (*TriggerFlowRuntimeData) 及其 RuntimeData/FlowData map
+//   - RuntimeData.Signal.Meta map
+//   - CompletedAt 指针独立分配
+//
+// nil 接收者返回 nil；nil 字段保持 nil（不强制分配空 map）。
+func (f *SubFlowFrame) DeepCopy() *SubFlowFrame {
+	if f == nil {
+		return nil
+	}
+	cp := &SubFlowFrame{
+		ParentID:    f.ParentID,
+		ChildFlow:   f.ChildFlow, // 通常是 *TriggerFlow，按引用共享（运行时执行用，不参与持久化）
+		State:       deepCopyStringAnyMap(f.State),
+		FlowData:    deepCopyStringAnyMap(f.FlowData),
+		CreatedAt:   f.CreatedAt,
+		Result:      f.Result,
+		Error:       f.Error,
+	}
+	if f.RuntimeData != nil {
+		cp.RuntimeData = &TriggerFlowRuntimeData{
+			RuntimeData: deepCopyStringAnyMap(f.RuntimeData.RuntimeData),
+			FlowData:    deepCopyStringAnyMap(f.RuntimeData.FlowData),
+			Result:      f.RuntimeData.Result,
+			Ctx:         f.RuntimeData.Ctx,
+			SignalNet:   f.RuntimeData.SignalNet,
+			EmitSignal:  f.RuntimeData.EmitSignal,
+		}
+		if f.RuntimeData.Signal != nil {
+			cp.RuntimeData.Signal = &Signal{
+				ID:           f.RuntimeData.Signal.ID,
+				TriggerEvent: f.RuntimeData.Signal.TriggerEvent,
+				TriggerType:  f.RuntimeData.Signal.TriggerType,
+				Value:        f.RuntimeData.Signal.Value,
+				Meta:         deepCopyStringAnyMap(f.RuntimeData.Signal.Meta),
+			}
+		}
+	}
+	if f.CompletedAt != nil {
+		completed := *f.CompletedAt
+		cp.CompletedAt = &completed
+	}
+	return cp
+}
+
+// deepCopyStringAnyMap 递归深拷贝 map[string]any。
+// 返回新的 map，所有嵌套 map[string]any / []any 也被深拷贝。
+// 其他值类型（string/int/struct 等）按值复制。
+// nil 输入返回 nil（不强制分配空 map）。
+func deepCopyStringAnyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyAnyValue(v)
+	}
+	return out
+}
+
+// deepCopyAnyValue 递归深拷贝任意值。
+// 处理 map[string]any 与 []any（常见 JSON-like 结构），其他类型按值返回。
+func deepCopyAnyValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		return deepCopyStringAnyMap(x)
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = deepCopyAnyValue(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // ============================================================================
 // ChildFlow - 子流统一接口
 //
@@ -86,15 +168,129 @@ func (f *TriggerFlow[InputT, StreamT, ResultT]) RunChild(input any) (any, error)
 
 // SubFlowRegistry 跟踪所有活跃的 SubFlowFrame。
 type SubFlowRegistry struct {
-	mu     sync.RWMutex
-	frames map[string]*SubFlowFrame
+	mu          sync.RWMutex
+	frames      map[string]*SubFlowFrame
+	cleanupTTL  time.Duration
+	stopChan    chan struct{}
+	stoppedChan chan struct{}
+	started     bool
 }
 
-// NewSubFlowRegistry 创建空的 SubFlowRegistry。
+// DefaultSubFlowCleanupTTL 是已完成 frame 的默认清理 TTL（5 分钟）。
+const DefaultSubFlowCleanupTTL = 5 * time.Minute
+
+// NewSubFlowRegistry 创建空的 SubFlowRegistry，使用默认 TTL（5 分钟）。
 func NewSubFlowRegistry() *SubFlowRegistry {
-	return &SubFlowRegistry{
-		frames: make(map[string]*SubFlowFrame),
+	return NewSubFlowRegistryWithTTL(DefaultSubFlowCleanupTTL)
+}
+
+// NewSubFlowRegistryWithTTL 创建带自定义 TTL 的 SubFlowRegistry。
+// 启动后台 goroutine 定期清理已完成的过期 frame。
+// ttl <= 0 时使用默认 TTL。
+func NewSubFlowRegistryWithTTL(ttl time.Duration) *SubFlowRegistry {
+	if ttl <= 0 {
+		ttl = DefaultSubFlowCleanupTTL
 	}
+	r := &SubFlowRegistry{
+		frames:      make(map[string]*SubFlowFrame),
+		cleanupTTL:  ttl,
+		stopChan:    make(chan struct{}),
+		stoppedChan: make(chan struct{}),
+	}
+	r.startCleanupLoop()
+	return r
+}
+
+// startCleanupLoop 启动后台 goroutine 定期清理已完成的过期 frame。
+// 仅启动一次（幂等）。
+func (r *SubFlowRegistry) startCleanupLoop() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.started = true
+	r.mu.Unlock()
+
+	// 清理周期：TTL / 10，但至少 50ms，最多 1 分钟
+	interval := r.cleanupTTL / 10
+	if interval < 50*time.Millisecond {
+		interval = 50 * time.Millisecond
+	}
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+
+	go func() {
+		defer close(r.stoppedChan)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.stopChan:
+				return
+			case <-ticker.C:
+				r.cleanupExpired()
+			}
+		}
+	}()
+}
+
+// cleanupExpired 扫描所有 frame，移除已完成且超过 TTL 的 frame。
+func (r *SubFlowRegistry) cleanupExpired() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	for id, f := range r.frames {
+		if f == nil || !f.IsCompleted() {
+			continue
+		}
+		if f.CompletedAt == nil {
+			continue
+		}
+		if now.Sub(*f.CompletedAt) >= r.cleanupTTL {
+			delete(r.frames, id)
+		}
+	}
+}
+
+// Cleanup 显式移除一个 frame（无论是否完成或是否过期）。
+// 返回是否成功移除。
+func (r *SubFlowRegistry) Cleanup(id string) bool {
+	if r == nil || id == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.frames[id]; !ok {
+		return false
+	}
+	delete(r.frames, id)
+	return true
+}
+
+// Stop 使 registry 停止后台清理 goroutine。主要用于测试隔离。
+// 调用后 registry 仍可使用，但不再自动清理。
+func (r *SubFlowRegistry) Stop() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if !r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.started = false
+	r.mu.Unlock()
+
+	close(r.stopChan)
+	<-r.stoppedChan
 }
 
 // Register 注册一个 SubFlowFrame。frame.ID 由调用方在 ParentID 基础上保证唯一。
@@ -188,11 +384,16 @@ func GlobalSubFlowRegistry() *SubFlowRegistry {
 
 // SetGlobalSubFlowRegistry 替换全局 SubFlowRegistry。
 // 传入 nil 时重置为空注册表。主要用于测试隔离。
+// 旧的 registry 的后台清理 goroutine 会被停止，避免泄漏。
 func SetGlobalSubFlowRegistry(r *SubFlowRegistry) {
 	globalSubFlowRegistryMu.Lock()
 	defer globalSubFlowRegistryMu.Unlock()
 	if r == nil {
 		r = NewSubFlowRegistry()
+	}
+	// 停止旧 registry 的清理 goroutine（若有）
+	if globalSubFlowRegistry != nil && globalSubFlowRegistry != r {
+		globalSubFlowRegistry.Stop()
 	}
 	globalSubFlowRegistry = r
 }
@@ -298,10 +499,21 @@ func readChildFlow(op *Operator) ChildFlow {
 }
 
 // generateSubFlowFrameID 为每次子流调用生成唯一 ID。
-// 使用 Operator.ID + 当前 UnixNano 保证唯一性。
+//
+// F-MEDIUM-5: 原实现使用 time.Now().UnixNano()，在 Windows 上 time.Now()
+// 分辨率约 1ms，高频调用必然冲突，导致 frame 在 SubFlowRegistry 中互相覆盖。
+//
+// 修复：在 UnixNano 基础上追加 atomic counter 序号，保证全局唯一性。
+// 格式："<Operator.ID>_<UnixNano>_<seq>" 或 "subflow_<UnixNano>_<seq>"。
+// 保留 UnixNano 前缀以提供时间顺序信息；seq 保证唯一性。
 func generateSubFlowFrameID(oc *OperatorContext) string {
+	seq := atomic.AddUint64(&subFlowFrameIDCounter, 1)
 	if oc == nil || oc.Operator == nil || oc.Operator.ID == "" {
-		return fmt.Sprintf("subflow_%d", time.Now().UnixNano())
+		return fmt.Sprintf("subflow_%d_%d", time.Now().UnixNano(), seq)
 	}
-	return fmt.Sprintf("%s_%d", oc.Operator.ID, time.Now().UnixNano())
+	return fmt.Sprintf("%s_%d_%d", oc.Operator.ID, time.Now().UnixNano(), seq)
 }
+
+// subFlowFrameIDCounter 是 generateSubFlowFrameID 使用的全局原子计数器。
+// 通过 atomic.AddUint64 保证并发安全且每次调用都得到唯一序号。
+var subFlowFrameIDCounter uint64
