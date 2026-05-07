@@ -22,6 +22,13 @@ type Engine struct {
 	auditHook audit.AuditHook
 	loopGuard *LoopGuard
 
+	// streamTimeout caps how long executeLoop will wait for the model
+	// stream channel to deliver the next chunk. Zero means "use the
+	// default 5-minute timeout". Configurable from Agent.Run via the
+	// WithStreamTimeout RunOption. Protects against stuck streams that
+	// would otherwise block the loop forever (BUG-8).
+	streamTimeout time.Duration
+
 	// toolDefsHash is the SHA-256 of the byte-stable serialization of the
 	// current tool definitions (sorted by Name). It exists so callers can
 	// detect when the tool set has changed and invalidate prefix caches.
@@ -154,6 +161,13 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					},
 				},
 			},
+			// O-CRITICAL-1: hint to OpenAI-compatible providers that we
+			// expect a JSON object so they set response_format in the
+			// request body. Providers that don't support response_format
+			// (Anthropic, Ollama) simply ignore this option.
+			Options: map[string]any{
+				"force_json": true,
+			},
 		}
 
 		// Call LLM
@@ -162,16 +176,39 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			return nil, err
 		}
 
-		stream, err := e.modelReq.RequestModel(ctx, data)
+		// BUG-8: cap stream consumption with a timeout so a stuck stream
+		// cannot block executeLoop forever. Default 5 minutes; overridable
+		// via Engine.streamTimeout (set by Agent.Run from WithStreamTimeout).
+		// The timeoutCtx is passed to RequestModel so the provider's stream
+		// goroutine observes cancellation and stops producing chunks. This
+		// also avoids goroutine leaks when the stream stalls.
+		streamTimeout := e.streamTimeout
+		if streamTimeout <= 0 {
+			streamTimeout = 5 * time.Minute
+		}
+		timeoutCtx, cancelTimeout := context.WithTimeout(ctx, streamTimeout)
+		stream, err := e.modelReq.RequestModel(timeoutCtx, data)
 		if err != nil {
+			cancelTimeout()
 			return nil, err
 		}
 
 		// Collect response content
 		var content strings.Builder
-		for chunk := range stream {
-			content.WriteString(chunk.Delta)
+	streamLoop:
+		for {
+			select {
+			case chunk, ok := <-stream:
+				if !ok {
+					break streamLoop
+				}
+				content.WriteString(chunk.Delta)
+			case <-timeoutCtx.Done():
+				cancelTimeout()
+				return nil, timeoutCtx.Err()
+			}
 		}
+		cancelTimeout()
 
 		// Approximate token accumulation: count characters in this round's
 		// LLM output as a simple proxy. The model package's StreamChunk.Usage
@@ -182,7 +219,16 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// Parse decision
 		decision, err := actionruntime.ParseDecision(content.String())
 		if err != nil {
-			return nil, err
+			// O-MEDIUM-1: Planning fallback strategy. When the LLM emits
+			// content that cannot be parsed as a structured decision (pure
+			// prose, empty, or irreparably malformed JSON), degrade to a
+			// "response" decision whose FinalResponse is the raw LLM output
+			// so the loop can still terminate and surface the model's reply
+			// to the user instead of failing the whole Run.
+			decision = &actionruntime.Decision{
+				NextAction:    "response",
+				FinalResponse: content.String(),
+			}
 		}
 
 		// Append decision audit entry. Only when the hook reports IsEnabled

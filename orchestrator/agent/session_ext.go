@@ -1,4 +1,4 @@
-﻿package agent
+package agent
 
 import (
 	"fmt"
@@ -30,7 +30,17 @@ func (e *SessionExtension) AddAssistantMessage(content string) {
 }
 
 // AddActionResult adds an action execution result as a text message to the session.
+// A nil result is silently ignored (no message added) so callers cannot
+// crash the orchestrator by passing a nil pointer after a failed action
+// lookup.
 func (e *SessionExtension) AddActionResult(actionName string, result *action.ActionResult) {
+	if result == nil {
+		// O-HIGH-3: silently skip nil results to avoid a nil-pointer panic
+		// on result.Status / result.Result below. Returning without
+		// recording a message preserves the pre-fix observable behavior
+		// for callers that always pass non-nil results.
+		return
+	}
 	msg := fmt.Sprintf("Action %q executed: status=%s, result=%v", actionName, result.Status, result.Result)
 	if result.Error != "" {
 		msg = fmt.Sprintf("Action %q failed: %s", actionName, result.Error)

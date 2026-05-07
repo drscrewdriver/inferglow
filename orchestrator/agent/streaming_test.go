@@ -1,4 +1,4 @@
-﻿package agent
+package agent
 
 import (
 	"context"
@@ -14,7 +14,12 @@ func TestStreamRunReturnsChannel(t *testing.T) {
 
 	mockReq := &mockModelRequester{
 		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
-			ch := make(chan *model.StreamChunk, 1)
+			// T-1: buffer must be ≥ number of chunks sent synchronously
+			// before the consumer starts reading, otherwise the second
+			// send blocks forever (deadlock). StreamRun returns the
+			// channel only after RequestModel returns, so all chunks sent
+			// inside responseFn must fit in the buffer.
+			ch := make(chan *model.StreamChunk, 2)
 			ch <- &model.StreamChunk{Delta: "Hello", IsDone: false}
 			ch <- &model.StreamChunk{Delta: " World", IsDone: true}
 			close(ch)
