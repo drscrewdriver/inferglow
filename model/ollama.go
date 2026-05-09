@@ -275,8 +275,16 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 		defer close(events)
 
 		var fullContent strings.Builder
+		// BUG-NEW-1: track the last seen Usage so it can be propagated to the
+		// final ModelResponse (EventDone payload) — same pattern as OpenAI
+		// (openai.go) and Anthropic (anthropic.go) providers. Avoids nil
+		// dereference when the done chunk arrives without a Usage field.
+		var lastUsage *UsageInfo
 
 		for chunk := range stream {
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
 			if chunk.IsDone {
 				if meta, ok := chunk.Meta["error"]; ok {
 					events <- &ResultEvent{
@@ -285,12 +293,15 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 					}
 					continue
 				}
+				resp := &ModelResponse{
+					Content: fullContent.String(),
+				}
+				if lastUsage != nil {
+					resp.Usage = *lastUsage
+				}
 				events <- &ResultEvent{
 					EventType: EventDone,
-					Payload: &ModelResponse{
-						Content: fullContent.String(),
-						Usage:   *chunk.Usage,
-					},
+					Payload:   resp,
 				}
 				continue
 			}

@@ -239,8 +239,12 @@ func TestIntegration_SelectSandboxUnregisteredMode(t *testing.T) {
 // SelectSandbox(ModeAuto) returns ErrNoAvailableSandbox.
 func TestIntegration_AutoNoneAvailableWhenOnlyStubs(t *testing.T) {
 	m := NewManager()
-	// Register only LocalSandbox (always unavailable)
-	_ = m.Register(NewLocalSandboxProvider())
+	// Register LocalSandbox with explicitly empty backends to simulate
+	// no local sandbox available on this platform. This keeps the test
+	// deterministic regardless of the host OS (Windows Runtime may report
+	// Available=true on Windows even though its backends are stubs).
+	p := NewLocalSandboxProvider().WithBackends()
+	_ = m.Register(p)
 	_, err := m.SelectSandbox(ModeAuto)
 	// LocalSandbox is named "local" which is in the fallback chain, but
 	// InspectAvailability returns false, so auto should fail.

@@ -2,36 +2,139 @@ package sandbox
 
 import (
 	"fmt"
+	"sync"
 )
 
-// LocalSandboxProvider is a stub Provider for OS-native sandboxes
-// (Seatbelt on macOS, Bubblewrap/Landlock on Linux, Windows Runtime
-// on Windows). It is not implemented in P2/P3 initial — InspectAvailability
-// always returns Available=false and CreateHandle returns
-// ErrProviderUnavailable. Real platform-specific providers will be added
-// in later specs.
-type LocalSandboxProvider struct{}
+// LocalSandboxProvider 是 OS 原生沙箱的调度 Provider。
+//
+// 它本身不提供隔离能力，而是持有一条后端链（backends），按优先级依次
+// 探测可用性，将 InspectAvailability / CreateHandle 委托给第一个可用后端。
+//
+// 默认后端链（DefaultLocalBackends）按 OS 选择：
+//   - darwin:  [Seatbelt]
+//   - linux:   [Bubblewrap, Landlock]（二者尚未实现，链为空）
+//   - windows: [WindowsRuntime]
+//   - 其他:    []
+//
+// 调用者可通过 WithBackends 注入自定义后端链（测试或扩展用）。
+type LocalSandboxProvider struct {
+	mu       sync.RWMutex
+	backends []Provider
+}
 
-// NewLocalSandboxProvider constructs a new LocalSandboxProvider.
-func NewLocalSandboxProvider() *LocalSandboxProvider { return &LocalSandboxProvider{} }
+// NewLocalSandboxProvider 创建 LocalSandboxProvider，使用当前 OS 的默认后端链。
+func NewLocalSandboxProvider() *LocalSandboxProvider {
+	return &LocalSandboxProvider{
+		backends: DefaultLocalBackends(),
+	}
+}
 
-// Name returns "local".
+// DefaultLocalBackends 返回当前 OS 的默认本地沙箱后端链（按优先级）。
+//
+// 平台特定后端在不支持的 OS 上为 stub（InspectAvailability 返回 false），
+// 因此无需条件编译即可安全加入链中。
+func DefaultLocalBackends() []Provider {
+	switch DetectOS() {
+	case OSDarwin:
+		return []Provider{NewSeatbeltProvider()}
+	case OSLinux:
+		// Bubblewrap / Landlock 尚未实现；实现后应按优先级加入：
+		// return []Provider{NewBubblewrapProvider(), NewLandlockProvider()}
+		return []Provider{}
+	case OSWindows:
+		return []Provider{NewWindowsRuntimeProvider()}
+	default:
+		return []Provider{}
+	}
+}
+
+// Name 返回 "local"。
 func (p *LocalSandboxProvider) Name() string { return "local" }
 
-// Kind returns "local".
+// Kind 返回 "local"。
 func (p *LocalSandboxProvider) Kind() string { return "local" }
 
-// InspectAvailability always returns Available=false because the
-// platform-specific local sandbox is not yet implemented.
-func (p *LocalSandboxProvider) InspectAvailability() (*AvailabilityResult, error) {
-	return &AvailabilityResult{
-		Available:    false,
-		Platform:     string(DetectOS()),
-		ErrorMessage: "local sandbox (seatbelt/bwrap/windows) not implemented in P2/P3 initial",
-	}, nil
+// WithBackends 替换后端链并返回 provider 自身（链式调用）。
+// 传入空列表使 provider 始终不可用。nil 元素会被过滤掉。
+// 此方法主要用于测试注入；生产代码应使用 NewLocalSandboxProvider。
+func (p *LocalSandboxProvider) WithBackends(backends ...Provider) *LocalSandboxProvider {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	filtered := make([]Provider, 0, len(backends))
+	for _, b := range backends {
+		if b != nil {
+			filtered = append(filtered, b)
+		}
+	}
+	p.backends = filtered
+	return p
 }
 
-// CreateHandle is a stub that always returns ErrProviderUnavailable.
-func (p *LocalSandboxProvider) CreateHandle(cfg map[string]any, policy *ExecutionPolicy) (Handle, error) {
-	return nil, fmt.Errorf("%w: local sandbox handle not implemented in P2/P3 initial", ErrProviderUnavailable)
+// Backends 返回当前后端链的副本。
+func (p *LocalSandboxProvider) Backends() []Provider {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]Provider, len(p.backends))
+	copy(out, p.backends)
+	return out
 }
+
+// SelectBackend 遍历后端链，返回第一个 InspectAvailability 报告可用的后端。
+// 若所有后端均不可用，返回 ErrProviderUnavailable。
+func (p *LocalSandboxProvider) SelectBackend() (Provider, error) {
+	p.mu.RLock()
+	chain := make([]Provider, len(p.backends))
+	copy(chain, p.backends)
+	p.mu.RUnlock()
+
+	var lastErr error
+	var lastErrorMessage string
+	for _, b := range chain {
+		avail, err := b.InspectAvailability()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if avail != nil && avail.Available {
+			return b, nil
+		}
+		if avail != nil && avail.ErrorMessage != "" {
+			lastErrorMessage = avail.ErrorMessage
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("%w: no local backend available on %s (last error: %v)", ErrProviderUnavailable, DetectOS(), lastErr)
+	}
+	if lastErrorMessage != "" {
+		return nil, fmt.Errorf("%w: no local backend available on %s: %s", ErrProviderUnavailable, DetectOS(), lastErrorMessage)
+	}
+	return nil, fmt.Errorf("%w: no local backend available on %s", ErrProviderUnavailable, DetectOS())
+}
+
+// InspectAvailability 报告后端链中是否有可用后端。
+// 若有，返回该后端的 AvailabilityResult；否则返回 Available=false。
+func (p *LocalSandboxProvider) InspectAvailability() (*AvailabilityResult, error) {
+	selected, err := p.SelectBackend()
+	if err != nil {
+		return &AvailabilityResult{
+			Available:    false,
+			Platform:     string(DetectOS()),
+			ErrorMessage: err.Error(),
+		}, nil
+	}
+	// 委托给选中后端的可用性报告。
+	return selected.InspectAvailability()
+}
+
+// CreateHandle 委托给第一个可用后端。
+// 若无可用后端，返回 ErrProviderUnavailable。
+func (p *LocalSandboxProvider) CreateHandle(cfg map[string]any, policy *ExecutionPolicy) (Handle, error) {
+	selected, err := p.SelectBackend()
+	if err != nil {
+		return nil, err
+	}
+	return selected.CreateHandle(cfg, policy)
+}
+
+// 编译期断言：LocalSandboxProvider 满足 Provider 接口。
+var _ Provider = (*LocalSandboxProvider)(nil)
