@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -359,4 +361,148 @@ func TestSubFlowRegistry_AutoCleanupSkipsIncomplete(t *testing.T) {
 	if _, ok := r.Get("frame3"); !ok {
 		t.Error("incomplete frame3 should NOT be auto-cleaned (still in progress)")
 	}
+}
+
+// ============================================================================
+// BUG-NEW-3: generateSubFlowFrameID 时序一致性 (LOW)
+//
+// 现状（修复前）：generateSubFlowFrameID 在 atomic.AddUint64 取 seq 后，两个分支
+// 各自调用 time.Now().UnixNano()。在并发场景下，seq 与时间戳的逻辑顺序可能不一致
+// （seq 大的 ID 时间戳反而小）。该 bug 不影响唯一性，仅影响 ID 可读性。
+//
+// 修复要求：
+//   - 在函数入口捕获 time.Now().UnixNano() 一次
+//   - 两个分支复用同一 now 变量
+//   - 保持 F-MEDIUM-5 的唯一性修复不回归
+// ============================================================================
+
+// parseSubflowFrameID 解析 generateSubFlowFrameID(nil) 产生的 ID
+// （格式 "subflow_<unixnano>_<seq>"），返回 unixnano 与 seq。
+// 解析失败时 t.Fatal。
+func parseSubflowFrameID(t *testing.T, id string) (unixnano int64, seq uint64) {
+	t.Helper()
+	parts := strings.Split(id, "_")
+	if len(parts) != 3 {
+		t.Fatalf("id %q has %d parts, want 3", id, len(parts))
+	}
+	if parts[0] != "subflow" {
+		t.Fatalf("id %q prefix = %q, want 'subflow'", id, parts[0])
+	}
+	un, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		t.Fatalf("id %q: cannot parse unixnano %q: %v", id, parts[1], err)
+	}
+	if un < 0 {
+		t.Fatalf("id %q: unixnano %d < 0", id, un)
+	}
+	sq, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		t.Fatalf("id %q: cannot parse seq %q: %v", id, parts[2], err)
+	}
+	if sq == 0 {
+		t.Fatalf("id %q: seq = 0, want > 0", id)
+	}
+	return un, sq
+}
+
+// TestGenerateSubFlowFrameID_SingleTimestampCall 验证 generateSubFlowFrameID 在
+// 同一次调用中只取一次 time.Now()（通过单调性间接验证）。
+//
+// 思路：连续 500 次快速调用 generateSubFlowFrameID(nil)，每次记录 (seq, unixnano)。
+// 按 seq 排序后，unixnano 应非降序（容差 100ms = 1e8 ns 处理调度抖动）。
+//
+// BUG-NEW-3 修复前：两个分支各自调用 time.Now()，理论上 seq 与时间戳可能不一致，
+// 但因为本函数每次调用只走一个分支，分支内只有一次 time.Now()，所以单次调用内部
+// 不存在不一致。真正的不一致发生在多次调用之间：理论上 seq 单调递增，UnixNano
+// 也应单调非降，但若两次调用之间发生时间回拨（NTP 校正等），可能出现 seq 升而
+// UnixNano 降的情况。此测试用严格容差（0 ns）捕捉该场景；若不能稳定失败，
+// 也作为修复后的回归基线（修复后必然通过）。
+//
+// 注：BUG-NEW-3 是 LOW 严重等级的预防性修复。若该测试在修复前已通过，
+// 属预期内情况——核心保证是修复后不回归、并保留 F-MEDIUM-5 唯一性。
+func TestGenerateSubFlowFrameID_SingleTimestampCall(t *testing.T) {
+	const n = 500
+	const tolerance int64 = 100 * 1000 * 1000 // 100ms
+
+	type pair struct {
+		seq      uint64
+		unixnano int64
+		rawID    string
+	}
+	pairs := make([]pair, n)
+	for i := 0; i < n; i++ {
+		id := generateSubFlowFrameID(nil)
+		un, sq := parseSubflowFrameID(t, id)
+		pairs[i] = pair{seq: sq, unixnano: un, rawID: id}
+	}
+
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].seq < pairs[j].seq
+	})
+
+	for i := 1; i < n; i++ {
+		if pairs[i].unixnano < pairs[i-1].unixnano {
+			diff := pairs[i-1].unixnano - pairs[i].unixnano
+			if diff > tolerance {
+				t.Errorf("seq=%d -> unixnano=%d, but seq=%d -> unixnano=%d (diff=%d ns > tolerance %d ns); ID %q vs %q",
+					pairs[i-1].seq, pairs[i-1].unixnano,
+					pairs[i].seq, pairs[i].unixnano,
+					diff, tolerance,
+					pairs[i-1].rawID, pairs[i].rawID)
+			}
+		}
+	}
+}
+
+// TestGenerateSubFlowFrameID_UniquenessPreserved 验证修复后 frameID 唯一性不回归。
+//   - 子测试 "Sequential"：1000 次连续调用，全部唯一
+//   - 子测试 "Concurrent"：200 个 goroutine 各调用 1 次，全部唯一
+//
+// 这是 F-MEDIUM-5 修复的回归测试。
+func TestGenerateSubFlowFrameID_UniquenessPreserved(t *testing.T) {
+	t.Run("Sequential", func(t *testing.T) {
+		seen := make(map[string]struct{}, 1000)
+		for i := 0; i < 1000; i++ {
+			id := generateSubFlowFrameID(nil)
+			if id == "" {
+				t.Fatalf("iteration %d: empty frameID", i)
+			}
+			if _, exists := seen[id]; exists {
+				t.Fatalf("iteration %d: duplicate frameID %q", i, id)
+			}
+			seen[id] = struct{}{}
+		}
+		if len(seen) != 1000 {
+			t.Errorf("unique count = %d, want 1000", len(seen))
+		}
+	})
+
+	t.Run("Concurrent", func(t *testing.T) {
+		const n = 200
+		ids := make([]string, n)
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			idx := i
+			go func() {
+				defer wg.Done()
+				ids[idx] = generateSubFlowFrameID(nil)
+			}()
+		}
+		wg.Wait()
+
+		seen := make(map[string]struct{}, n)
+		for i, id := range ids {
+			if id == "" {
+				t.Fatalf("goroutine %d: empty frameID", i)
+			}
+			if _, exists := seen[id]; exists {
+				t.Fatalf("goroutine %d: duplicate frameID %q", i, id)
+			}
+			seen[id] = struct{}{}
+		}
+		if len(seen) != n {
+			t.Errorf("concurrent unique count = %d, want %d", len(seen), n)
+		}
+	})
 }

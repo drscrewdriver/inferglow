@@ -506,12 +506,16 @@ func readChildFlow(op *Operator) ChildFlow {
 // 修复：在 UnixNano 基础上追加 atomic counter 序号，保证全局唯一性。
 // 格式："<Operator.ID>_<UnixNano>_<seq>" 或 "subflow_<UnixNano>_<seq>"。
 // 保留 UnixNano 前缀以提供时间顺序信息；seq 保证唯一性。
+//
+// BUG-NEW-3: 将 time.Now() 调用提到函数入口，两个分支复用同一时间戳，
+// 避免 seq 与时间戳在并发场景下的逻辑顺序不一致。
 func generateSubFlowFrameID(oc *OperatorContext) string {
 	seq := atomic.AddUint64(&subFlowFrameIDCounter, 1)
+	now := time.Now().UnixNano()
 	if oc == nil || oc.Operator == nil || oc.Operator.ID == "" {
-		return fmt.Sprintf("subflow_%d_%d", time.Now().UnixNano(), seq)
+		return fmt.Sprintf("subflow_%d_%d", now, seq)
 	}
-	return fmt.Sprintf("%s_%d_%d", oc.Operator.ID, time.Now().UnixNano(), seq)
+	return fmt.Sprintf("%s_%d_%d", oc.Operator.ID, now, seq)
 }
 
 // subFlowFrameIDCounter 是 generateSubFlowFrameID 使用的全局原子计数器。

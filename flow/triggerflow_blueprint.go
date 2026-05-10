@@ -484,6 +484,11 @@ func (f *TriggerFlow[InputT, StreamT, ResultT]) Compile() error {
 
 // Run 在编译后启动执行：按算子顺序逐个执行，返回最终结果。
 // 这是简化的执行入口，完整的执行引擎由 engine.go 提供。
+//
+// 类型契约校验：
+//   - 入参 input 类型由编译期保证（InputT）
+//   - 最终结果通过运行期类型断言校验为 ResultT
+//   - 若需预检最终结果类型，可在 Run 前调用 ValidateResult
 func (f *TriggerFlow[InputT, StreamT, ResultT]) Run(input InputT) (ResultT, error) {
 	var zero ResultT
 	if f == nil || f.blueprint == nil {
@@ -542,7 +547,7 @@ func (f *TriggerFlow[InputT, StreamT, ResultT]) Run(input InputT) (ResultT, erro
 	}
 	result, ok := currentInput.(ResultT)
 	if !ok {
-		return zero, fmt.Errorf("result type mismatch: got %T, want %T", currentInput, zero)
+		return zero, fmt.Errorf("result type mismatch: got %T, want %s", currentInput, typeOf[ResultT]())
 	}
 	return result, nil
 }
