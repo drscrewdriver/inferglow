@@ -214,9 +214,16 @@ func TestDefaultLocalBackendsMatchesOS(t *testing.T) {
 			t.Errorf("darwin backends = %v, want [seatbelt]", backends)
 		}
 	case OSLinux:
-		// Bubblewrap/Landlock 尚未实现，链应为空。
-		if len(backends) != 0 {
-			t.Errorf("linux backends = %v, want [] (bwrap/landlock not yet implemented)", backends)
+		// Bubblewrap + Landlock 已实现并按优先级加入。
+		if len(backends) != 2 {
+			t.Errorf("linux backends = %v, want [bubblewrap, landlock]", backends)
+		} else {
+			if backends[0].Name() != "bubblewrap" {
+				t.Errorf("linux backends[0] = %q, want bubblewrap", backends[0].Name())
+			}
+			if backends[1].Name() != "landlock" {
+				t.Errorf("linux backends[1] = %q, want landlock", backends[1].Name())
+			}
 		}
 	case OSWindows:
 		if len(backends) != 1 || backends[0].Name() != "windows_runtime" {

@@ -12,7 +12,7 @@ import (
 //
 // 默认后端链（DefaultLocalBackends）按 OS 选择：
 //   - darwin:  [Seatbelt]
-//   - linux:   [Bubblewrap, Landlock]（二者尚未实现，链为空）
+//   - linux:   [Bubblewrap, Landlock]（已实现，按优先级探测）
 //   - windows: [WindowsRuntime]
 //   - 其他:    []
 //
@@ -38,9 +38,8 @@ func DefaultLocalBackends() []Provider {
 	case OSDarwin:
 		return []Provider{NewSeatbeltProvider()}
 	case OSLinux:
-		// Bubblewrap / Landlock 尚未实现；实现后应按优先级加入：
-		// return []Provider{NewBubblewrapProvider(), NewLandlockProvider()}
-		return []Provider{}
+		// Bubblewrap 优先（提供命名空间隔离），Landlock 作为 fallback（仅文件系统沙箱）。
+		return []Provider{NewBubblewrapProvider(), NewLandlockProvider()}
 	case OSWindows:
 		return []Provider{NewWindowsRuntimeProvider()}
 	default:
