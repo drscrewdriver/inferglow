@@ -4,11 +4,14 @@ go 1.25.0
 
 require (
 	github.com/inferglow/action v0.0.0
+	github.com/inferglow/audit v0.0.0
 	github.com/inferglow/flow v0.0.0
 	github.com/inferglow/model v0.0.0
+	github.com/inferglow/orchestrator v0.0.0
 	github.com/inferglow/sandbox v0.0.0
 	github.com/inferglow/schema v0.0.0
 	github.com/inferglow/session v0.0.0
+	github.com/inferglow/workspace v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -46,3 +49,11 @@ replace github.com/inferglow/action => ./../action
 replace github.com/inferglow/session => ./../session
 
 replace github.com/inferglow/sandbox => ./../sandbox
+
+replace github.com/inferglow/audit => ./../audit
+
+replace github.com/inferglow/orchestrator => ./../orchestrator
+
+replace github.com/inferglow/workspace => ./../workspace
+
+replace github.com/docker/go-connections v0.7.0 => github.com/docker/go-connections v0.4.0

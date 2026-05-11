@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -26,6 +27,7 @@ func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *
 	dockerConfig := &container.Config{
 		Image:     config.Image,
 		Env:       config.Env,
+		Cmd:       config.Cmd,
 		WorkingDir: config.WorkingDir,
 	}
 
@@ -100,12 +102,42 @@ func (r *realDockerClient) CreateExec(containerID string, opts CreateExecOptions
 	return &ExecCreateResult{ID: resp.ID}, nil
 }
 
-// StartExec wraps the Docker SDK call.
+// StartExec wraps the Docker SDK call. It attaches to the exec process so
+// that stdout/stderr are captured into the provided OutputStream/ErrorStream.
 func (r *realDockerClient) StartExec(execID string, opts StartExecOptions) error {
-	return r.Client.ContainerExecStart(context.Background(), execID, container.ExecStartOptions{
+	attachOpts := container.ExecAttachOptions{
 		Detach: !opts.Stdout && !opts.Stderr,
 		Tty:    opts.Tty,
-	})
+	}
+	resp, err := r.Client.ContainerExecAttach(context.Background(), execID, attachOpts)
+	if err != nil {
+		return err
+	}
+	defer resp.Close()
+
+	// If detached, no output to read.
+	if !opts.Stdout && !opts.Stderr {
+		return nil
+	}
+
+	out := opts.OutputStream
+	if out == nil {
+		out = io.Discard
+	}
+	errw := opts.ErrorStream
+	if errw == nil {
+		errw = io.Discard
+	}
+
+	if opts.Tty {
+		// TTY output is raw (not multiplexed).
+		_, err = io.Copy(out, resp.Reader)
+		return err
+	}
+	// Non-TTY output is multiplexed with an 8-byte stream header;
+	// stdcopy demultiplexes stdout/stderr into the respective writers.
+	_, err = stdcopy.StdCopy(out, errw, resp.Reader)
+	return err
 }
 
 // StopContainer wraps the Docker SDK call.
@@ -150,7 +182,7 @@ func (r *realDockerClient) InspectExec(execID string) (*ExecInspectResult, error
 
 // newRealDockerClientImpl creates a real Docker client from environment variables.
 func newRealDockerClientImpl() (DockerClient, error) {
-	dc, err := client.NewClientWithOpts(client.FromEnv, client.WithVersion("auto"))
+	dc, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}

@@ -214,6 +214,11 @@ func (h *DockerHandle) Start(ctx context.Context) error {
 	config := &ContainerConfig{
 		Image:      h.image,
 		NetworkDisabled: false,
+		// Keep the container alive so that Execute can run commands in it.
+		// Without an explicit long-running command, alpine's default /bin/sh
+		// exits immediately when there is no TTY, causing the container to
+		// stop before Execute can be invoked.
+		Cmd: []string{"sleep", "infinity"},
 	}
 	if h.env != nil {
 		switch e := h.env.(type) {

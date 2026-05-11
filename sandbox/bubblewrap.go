@@ -89,7 +89,7 @@ func parseBubblewrapConfig(cfg map[string]any) BubblewrapConfig {
 	case int64:
 		out.Timeout = time.Duration(d) * time.Second
 	case float64:
-		out.Timeout = time.Duration(d) * time.Second
+		out.Timeout = time.Duration(d * float64(time.Second))
 	}
 	return out
 }
@@ -167,10 +167,12 @@ func parseTmpfsMap(v any) map[string]int64 {
 		for k, val := range t {
 			out[k] = int64(val)
 		}
+		return out
 	case map[string]int64:
 		for k, val := range t {
 			out[k] = val
 		}
+		return out
 	case map[string]any:
 		for k, val := range t {
 			switch n := val.(type) {
@@ -182,8 +184,9 @@ func parseTmpfsMap(v any) map[string]int64 {
 				out[k] = int64(n)
 			}
 		}
+		return out
 	}
-	return out
+	return nil
 }
 
 // BubblewrapProvider 是 Linux 上基于 bwrap 命令的沙箱 Provider。
@@ -191,10 +194,10 @@ func parseTmpfsMap(v any) map[string]int64 {
 // Bubblewrap（bwrap）是大多数 Linux 发行版标配的非特权用户命名空间沙箱，
 // 无需 root 即可创建隔离的进程环境。
 type BubblewrapProvider struct {
-	mu          sync.RWMutex
-	binaryPath  string
-	available   bool
-	probeErr    error
+	mu         sync.RWMutex
+	binaryPath string
+	available  bool
+	probeErr   error
 }
 
 // NewBubblewrapProvider 探测系统 bwrap 并构造 Provider。

@@ -114,6 +114,7 @@ func parseStringMap(v any) map[string]string {
 		for k, v := range t {
 			out[k] = v
 		}
+		return out
 	case map[string]any:
 		for k, v := range t {
 			switch s := v.(type) {
@@ -125,8 +126,9 @@ func parseStringMap(v any) map[string]string {
 				out[k] = fmt.Sprintf("%v", v)
 			}
 		}
+		return out
 	}
-	return out
+	return nil
 }
 
 // e2bHTTPClient 是 E2BProvider 使用的 HTTP 客户端抽象，便于测试注入。
