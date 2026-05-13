@@ -71,10 +71,11 @@ func TestToStreamChunk_FinishReasonLengthNotDone(t *testing.T) {
 		Choices: []struct {
 			Index int `json:"index"`
 			Delta struct {
-				Role      string     `json:"role,omitempty"`
-				Content   *string    `json:"content,omitempty"`
-				Reasoning *string    `json:"reasoning,omitempty"`
-				ToolCalls []toolCall `json:"tool_calls,omitempty"`
+				Role             string     `json:"role,omitempty"`
+				Content          *string    `json:"content,omitempty"`
+				Reasoning        *string    `json:"reasoning,omitempty"`
+				ReasoningContent *string    `json:"reasoning_content,omitempty"`
+				ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		}{

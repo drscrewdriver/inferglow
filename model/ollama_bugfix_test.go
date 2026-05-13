@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -94,7 +95,8 @@ func TestOllamaBroadcastResponse_DoneWithNilUsage_NoPanic(t *testing.T) {
 		t.Fatal("expected EventDone with ModelResponse payload")
 	}
 	// Zero-value UsageInfo check — no panic, no garbage.
-	if donePayload.Usage != (UsageInfo{}) {
+	// UsageInfo contains map fields (added in G1-06), so use DeepEqual.
+	if !reflect.DeepEqual(donePayload.Usage, UsageInfo{}) {
 		t.Errorf("ModelResponse.Usage = %+v, want zero-value UsageInfo{}", donePayload.Usage)
 	}
 }
@@ -124,7 +126,7 @@ func TestOllamaBroadcastResponse_DoneWithUsage_PassesThrough(t *testing.T) {
 	if donePayload == nil {
 		t.Fatal("expected EventDone with ModelResponse payload")
 	}
-	if donePayload.Usage != *sent {
+	if !reflect.DeepEqual(donePayload.Usage, *sent) {
 		t.Errorf("ModelResponse.Usage = %+v, want %+v", donePayload.Usage, *sent)
 	}
 }
@@ -159,7 +161,7 @@ func TestOllamaBroadcastResponse_LastUsageTrackedFromMeta(t *testing.T) {
 	if donePayload == nil {
 		t.Fatal("expected EventDone with ModelResponse payload")
 	}
-	if donePayload.Usage != *metaUsage {
+	if !reflect.DeepEqual(donePayload.Usage, *metaUsage) {
 		t.Errorf("ModelResponse.Usage = %+v, want %+v (last tracked usage from Meta event)", donePayload.Usage, *metaUsage)
 	}
 }

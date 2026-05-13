@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // DefaultMaxTokens is the default max_tokens value sent to OpenAI-compatible
@@ -58,6 +59,11 @@ type OpenAICompatibleProvider struct {
 	// to "system" causes the developer content to be merged into the system
 	// message instead of being emitted as a separate "developer" message.
 	RoleMapping map[string]string
+	// MaxReasoningTokens 限制推理内容（reasoning/thinking）的最大 token 数。
+	// 0 表示不限制（向后兼容）。达到预算时 BroadcastResponse 会截断 fullReasoning
+	// 并在 ModelResponse 中设置 ReasoningTruncated=true。G1-05。
+	// 注意：token 数按 1 token ≈ 4 bytes 的粗略估算，未接入精确 tokenizer。
+	MaxReasoningTokens int
 }
 
 // Name 返回 Provider 名称
@@ -461,6 +467,10 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 	if c.Delta.Reasoning != nil {
 		result.Reasoning = *c.Delta.Reasoning
 	}
+	if c.Delta.ReasoningContent != nil {
+		// reasoning_content 优先级高于 reasoning（MiMo/Spark/SenseNova 用此字段）
+		result.Reasoning = *c.Delta.ReasoningContent
+	}
 
 	// Accumulate tool_call deltas per index. The name and id arrive in the
 	// first chunk; arguments arrive in pieces across subsequent chunks.
@@ -538,6 +548,12 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 		// the final ModelResponse (EventDone payload).
 		var lastUsage *UsageInfo
 
+		// G1-05: 推理预算控制。MaxReasoningTokens > 0 时启用。
+		// 粗略估算 1 token ≈ 4 bytes（未接入精确 tokenizer）。
+		reasoningBudgetBytes := p.MaxReasoningTokens * 4
+		reasoningBytes := 0
+		reasoningTruncated := false
+
 		for chunk := range stream {
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
@@ -551,11 +567,21 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 					continue
 				}
 				resp := &ModelResponse{
-					Content:   fullContent.String(),
-					Reasoning: fullReasoning.String(),
+					Content:            fullContent.String(),
+					Reasoning:          fullReasoning.String(),
+					ReasoningTruncated: reasoningTruncated,
 				}
 				if lastUsage != nil {
 					resp.Usage = *lastUsage
+					// G1-06: 提取 Provider 报告的 reasoning_tokens 计数。
+					resp.ReasoningTokens = lastUsage.ReasoningTokens()
+				}
+				// G1-04: 防御性 <think> 标签归一化。仅当 reasoning 字段为空
+				// 且 content 含 <think>...</think> 标签时触发，避免双重处理。
+				if resp.Reasoning == "" && hasThinkingTags(resp.Content) {
+					reasoning, cleaned := normalizeThinkingTags(resp.Content)
+					resp.Reasoning = reasoning
+					resp.Content = cleaned
 				}
 				events <- &ResultEvent{
 					EventType: EventDone,
@@ -573,7 +599,30 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 			}
 
 			if chunk.Reasoning != "" {
-				fullReasoning.WriteString(chunk.Reasoning)
+				// G1-05: 推理预算检查。一旦超预算，停止累积到 fullReasoning
+				// 但仍向下游传播 ReasoningDelta 事件（流式消费者可自行决定
+				// 是否展示被截断的推理）。最终在 ModelResponse 中通过
+				// ReasoningTruncated=true 标记。
+				if reasoningBudgetBytes > 0 && !reasoningTruncated {
+					chunkBytes := len(chunk.Reasoning)
+					if reasoningBytes+chunkBytes > reasoningBudgetBytes {
+						// 仅写入预算内剩余部分。
+						remaining := reasoningBudgetBytes - reasoningBytes
+						if remaining > 0 {
+							// 按 rune 截断以避免切断多字节字符。
+							truncated := truncateRunes(chunk.Reasoning, remaining)
+							fullReasoning.WriteString(truncated)
+							reasoningBytes += len(truncated)
+						}
+						reasoningTruncated = true
+					} else {
+						fullReasoning.WriteString(chunk.Reasoning)
+						reasoningBytes += chunkBytes
+					}
+				} else if reasoningBudgetBytes == 0 {
+					// 无预算限制：原样累积。
+					fullReasoning.WriteString(chunk.Reasoning)
+				}
 				events <- &ResultEvent{
 					EventType: ReasoningDelta,
 					Payload:   chunk.Reasoning,
@@ -592,6 +641,14 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 					EventType: MetaEvent,
 					Payload:   chunk.Usage,
 				}
+				// G1-06: 当 Provider 报告 reasoning_tokens 时，额外发一条
+				// 专用 MetaEvent，便于上层无需解析 UsageInfo 即可拿到计费信号。
+				if rt := chunk.Usage.ReasoningTokens(); rt > 0 {
+					events <- &ResultEvent{
+						EventType: MetaEvent,
+						Payload:   &ReasoningTokenMeta{Count: rt},
+					}
+				}
 			}
 		}
 	}()
@@ -599,16 +656,34 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 	return events, nil
 }
 
+// truncateRunes 从 s 中截取不超过 maxBytes 字节的子串，按 rune 边界对齐，
+// 避免切断多字节 UTF-8 字符。用于 G1-05 推理预算截断。
+func truncateRunes(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		if maxBytes <= 0 {
+			return ""
+		}
+		return s
+	}
+	// 向前回退至完整 rune 边界。
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
 // openAIChunk OpenAI API 的 SSE chunk 结构
 type openAIChunk struct {
 	ID      string `json:"id"`
 	Choices []struct {
-		Index        int `json:"index"`
-		Delta        struct {
-			Role          string     `json:"role,omitempty"`
-			Content       *string    `json:"content,omitempty"`
-			Reasoning     *string    `json:"reasoning,omitempty"`
-			ToolCalls     []toolCall `json:"tool_calls,omitempty"`
+		Index int `json:"index"`
+		Delta struct {
+			Role             string     `json:"role,omitempty"`
+			Content          *string    `json:"content,omitempty"`
+			Reasoning        *string    `json:"reasoning,omitempty"`
+			ReasoningContent *string    `json:"reasoning_content,omitempty"`
+			ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -616,9 +691,9 @@ type openAIChunk struct {
 }
 
 type toolCall struct {
-	Index  int          `json:"index"`
-	ID     string       `json:"id"`
-	Type   string       `json:"type"`
+	Index    int          `json:"index"`
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
 	Function functionCall `json:"function"`
 }
 
@@ -653,6 +728,10 @@ func toStreamChunk(chunk openAIChunk, usage *UsageInfo) *StreamChunk {
 	if c.Delta.Reasoning != nil {
 		result.Reasoning = *c.Delta.Reasoning
 	}
+	if c.Delta.ReasoningContent != nil {
+		// reasoning_content 优先级高于 reasoning（MiMo/Spark/SenseNova 用此字段）
+		result.Reasoning = *c.Delta.ReasoningContent
+	}
 
 	// 合并 tool calls
 	for _, tc := range c.Delta.ToolCalls {
@@ -673,4 +752,45 @@ func toStreamChunk(chunk openAIChunk, usage *UsageInfo) *StreamChunk {
 	}
 
 	return result
+}
+
+// hasThinkingTags reports whether content contains a <think>...</think> block.
+// Used by BroadcastResponse to detect reasoning wrapped in content tags.
+func hasThinkingTags(content string) bool {
+	return strings.Contains(content, "<think>") && strings.Contains(content, "</think>")
+}
+
+// normalizeThinkingTags extracts <think>...</think> content from the given
+// string. Returns (reasoning, cleaned) where reasoning is the concatenated
+// content inside think tags and cleaned is the original content with think
+// tags removed and leading whitespace trimmed.
+//
+// If content has no think tags, returns ("", content) unchanged.
+// Supports multiple <think>...</think> blocks: their contents are joined.
+func normalizeThinkingTags(content string) (reasoning string, cleaned string) {
+	if !hasThinkingTags(content) {
+		return "", content
+	}
+	var reasoningParts []string
+	cleaned = content
+	for {
+		startIdx := strings.Index(cleaned, "<think>")
+		if startIdx == -1 {
+			break
+		}
+		endIdx := strings.Index(cleaned[startIdx:], "</think>")
+		if endIdx == -1 {
+			break
+		}
+		endIdx += startIdx // 相对偏移转绝对
+		inner := cleaned[startIdx+len("<think>") : endIdx]
+		if inner != "" {
+			reasoningParts = append(reasoningParts, inner)
+		}
+		// 移除 <think>...</think> 块
+		cleaned = cleaned[:startIdx] + cleaned[endIdx+len("</think>"):]
+	}
+	cleaned = strings.TrimSpace(cleaned)
+	reasoning = strings.Join(reasoningParts, "\n")
+	return reasoning, cleaned
 }

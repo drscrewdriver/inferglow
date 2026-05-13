@@ -40,6 +40,13 @@ type ModelResponse struct {
 	Tools     []ToolCall
 	Usage     UsageInfo
 	Meta      map[string]any
+	// ReasoningTruncated 表示推理内容因达到 MaxReasoningTokens 预算而被截断。
+	// false 表示未截断或未设置预算。G1-05。
+	ReasoningTruncated bool
+	// ReasoningTokens 是 Provider 报告的推理 token 计数（来自
+	// usage.completion_tokens_details.reasoning_tokens）。G1-06。
+	// 当 Provider 未返回该字段时为 0。
+	ReasoningTokens int
 }
 
 // StreamChunk SSE 流式传输中的一块数据

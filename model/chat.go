@@ -85,7 +85,26 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 
 // UsageInfo 记录 token 使用情况
 type UsageInfo struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	// PromptTokensDetails 携带 prompt 端的细分计费信息，例如
+	// {"cached_tokens": 100}。部分 Provider（OpenAI/MiMo 等）会返回该字段。
+	// 为 nil 表示 Provider 未返回。
+	PromptTokensDetails map[string]int `json:"prompt_tokens_details,omitempty"`
+	// CompletionTokensDetails 携带 completion 端的细分计费信息，例如
+	// {"reasoning_tokens": 500}。MiMo/OpenRouter 等 Provider 通过此字段
+	// 单独报告推理 token 计数，用于推理 token 单独计费（G1-06）。
+	// 为 nil 表示 Provider 未返回。
+	CompletionTokensDetails map[string]int `json:"completion_tokens_details,omitempty"`
+}
+
+// ReasoningTokens 返回 completion 端的 reasoning_tokens 计数。
+// 若 Provider 未返回 CompletionTokensDetails 或其中无 reasoning_tokens 键，
+// 返回 0。便于上层直接读取推理 token 计费信息。
+func (u *UsageInfo) ReasoningTokens() int {
+	if u == nil || u.CompletionTokensDetails == nil {
+		return 0
+	}
+	return u.CompletionTokensDetails["reasoning_tokens"]
 }

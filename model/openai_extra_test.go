@@ -183,12 +183,13 @@ func TestToStreamChunkEmptyChoices(t *testing.T) {
 	// 模拟空 choices 的 chunk
 	chunk := openAIChunk{
 		Choices: []struct {
-			Index        int `json:"index"`
-			Delta        struct {
-				Role          string     `json:"role,omitempty"`
-				Content       *string    `json:"content,omitempty"`
-				Reasoning     *string    `json:"reasoning,omitempty"`
-				ToolCalls     []toolCall `json:"tool_calls,omitempty"`
+			Index int `json:"index"`
+			Delta struct {
+				Role             string     `json:"role,omitempty"`
+				Content          *string    `json:"content,omitempty"`
+				Reasoning        *string    `json:"reasoning,omitempty"`
+				ReasoningContent *string    `json:"reasoning_content,omitempty"`
+				ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		}{},
@@ -205,26 +206,28 @@ func TestToolCallEmptyArguments(t *testing.T) {
 	// 模拟一个空的 tool call arguments
 	chunk := openAIChunk{
 		Choices: []struct {
-			Index        int `json:"index"`
-			Delta        struct {
-				Role          string     `json:"role,omitempty"`
-				Content       *string    `json:"content,omitempty"`
-				Reasoning     *string    `json:"reasoning,omitempty"`
-				ToolCalls     []toolCall `json:"tool_calls,omitempty"`
+			Index int `json:"index"`
+			Delta struct {
+				Role             string     `json:"role,omitempty"`
+				Content          *string    `json:"content,omitempty"`
+				Reasoning        *string    `json:"reasoning,omitempty"`
+				ReasoningContent *string    `json:"reasoning_content,omitempty"`
+				ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		}{
 			{
 				Delta: struct {
-					Role          string     `json:"role,omitempty"`
-					Content       *string    `json:"content,omitempty"`
-					Reasoning     *string    `json:"reasoning,omitempty"`
-					ToolCalls     []toolCall `json:"tool_calls,omitempty"`
+					Role             string     `json:"role,omitempty"`
+					Content          *string    `json:"content,omitempty"`
+					Reasoning        *string    `json:"reasoning,omitempty"`
+					ReasoningContent *string    `json:"reasoning_content,omitempty"`
+					ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 				}{
 					ToolCalls: []toolCall{
 						{
-							ID:     "call_1",
-							Type:   "function",
+							ID:       "call_1",
+							Type:     "function",
 							Function: functionCall{Name: "test_func", Arguments: ""},
 						},
 					},
@@ -298,7 +301,7 @@ func TestBroadcastResponseError(t *testing.T) {
 func TestBroadcastResponseToolCalls(t *testing.T) {
 	stream := make(chan *StreamChunk, 5)
 	stream <- &StreamChunk{
-		Tools: []ToolCall{{ID: "1", Name: "calc", Arguments: map[string]any{"x": 1}}},
+		Tools:  []ToolCall{{ID: "1", Name: "calc", Arguments: map[string]any{"x": 1}}},
 		IsDone: false,
 	}
 	stream <- &StreamChunk{IsDone: true}

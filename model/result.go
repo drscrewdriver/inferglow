@@ -21,3 +21,11 @@ type ResultEvent struct {
 	EventType ResultEventType
 	Payload   any
 }
+
+// ReasoningTokenMeta 推理 token 元数据，作为 MetaEvent 的 Payload 出现。
+// 当 Provider 在 usage.completion_tokens_details.reasoning_tokens 中报告
+// 推理 token 计数时，BroadcastResponse 会发出此事件，便于上层单独追踪
+// 推理计费（G1-06）。
+type ReasoningTokenMeta struct {
+	Count int
+}

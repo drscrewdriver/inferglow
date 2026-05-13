@@ -202,6 +202,96 @@ var DEFAULT_SETTINGS = map[string]map[string]any{
 		"temperature": 0.7,
 		"max_tokens":  4096,
 	},
+	// === 阶跃星辰（StepFun）===
+	"stepfun": {
+		"model":       "step-3.7-flash",
+		"base_url":    "https://api.stepfun.com/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	"stepfun_anthropic": {
+		"model":      "step-3.7-flash",
+		"base_url":   "https://api.stepfun.com/step_plan",
+		"max_tokens": 1024,
+	},
+	// === 百度千帆（Qianfan）===
+	"baidu": {
+		"model":       "ernie-5.0",
+		"base_url":    "https://qianfan.baidubce.com/v2",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === 讯飞星火（Spark）===
+	"spark": {
+		"model":       "spark-x",
+		"base_url":    "https://spark-api-open.xf-yun.com/agent/v1/",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === 商汤日日新（SenseNova）===
+	"sensenova": {
+		"model":       "sensenova-6.7-flash-lite",
+		"base_url":    "https://token.sensenova.cn/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	"sensenova_anthropic": {
+		"model":      "sensenova-6.7-flash-lite",
+		"base_url":   "https://token.sensenova.cn/v1/messages",
+		"max_tokens": 1024,
+	},
+	// === 小米 MiMo（OpenAI 兼容）===
+	// 推理字段为 reasoning_content（非 reasoning），思考参数 thinking.type
+	// 通过 Options 透传。详见 G1-02 / G1-03。
+	"mimo": {
+		"model":       "mimo-v2.5-pro",
+		"base_url":    "https://api.xiaomimimo.com/v1",
+		"temperature": 1.0,
+		"top_p":       0.95,
+		"max_tokens":  4096,
+	},
+	// === 小米 MiMo（Anthropic 兼容）===
+	"mimo_anthropic": {
+		"model":      "mimo-v2.5-pro",
+		"base_url":   "https://api.xiaomimimo.com/anthropic",
+		"max_tokens": 1024,
+	},
+	// === 腾讯混元 ===
+	"tencent": {
+		"model":       "hunyuan-max",
+		"base_url":    "https://api.hunyuan.cloud.tencent.com/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === 字节豆包（火山引擎）===
+	"volcengine": {
+		"model":       "doubao-seed-2-0-pro",
+		"base_url":    "https://ark.cn-beijing.volces.com/api/v3",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === 零一万物 ===
+	"zeroone": {
+		"model":       "yi-lightning",
+		"base_url":    "https://api.01.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === MiniMax（稀宇科技）===
+	"minimax": {
+		"model":       "MiniMax-M2.7",
+		"base_url":    "https://api.minimax.chat/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
+	// === 硅基流动（聚合平台）===
+	// 一个 Key 可调用多个开源模型（Qwen/GLM/DeepSeek 等）
+	"siliconflow": {
+		"model":       "Qwen/Qwen2.5-72B-Instruct",
+		"base_url":    "https://api.siliconflow.cn/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
 }
 
 // LoadProviderConfig 从 ConfigProvider 加载 Provider 配置

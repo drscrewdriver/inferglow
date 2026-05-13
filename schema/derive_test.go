@@ -309,7 +309,7 @@ func TestDefineOutputDeriveSkipDash(t *testing.T) {
 func TestDefineOutputDeriveSkipUnexported(t *testing.T) {
 	type Result struct {
 		Public  string `json:"public"`
-		private string `json:"private"`
+		private string // json tag 对 unexported 字段无效，无需添加
 	}
 	schema := DefineOutput[Result]()
 	if len(schema.Fields) != 1 {
