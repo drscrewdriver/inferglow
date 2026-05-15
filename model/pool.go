@@ -1,3 +1,14 @@
+// ModelPool 与 AttemptRunner 的关系（G1-08 B2.5）：
+//
+//   - AttemptRunner：处理单次请求的瞬态失败（如 429/500），通过指数退避重试。
+//     它在单个 Provider 内部工作，不关心跨 Provider 的切换。
+//   - ModelPool：处理 Provider 级故障（如 Provider 宕机/不可用），通过切换 Provider。
+//     它跟踪每个 Provider 的连续失败计数，超过阈值后标记为降级状态。
+//   - 两者互补：ModelPool 选择 Provider 后，该 Provider 的请求仍由 AttemptRunner
+//     做重试。典型调用链为 ModelPool.RequestModel → AttemptRunner.Run → Provider.RequestModel。
+//   - RateLimit 防超限（429 退避）、Retry 处理瞬态失败（5xx 重试）、Pool 处理
+//     Provider 级故障（切换 Provider），三者各司其职。
+
 package model
 
 import (
@@ -6,6 +17,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ErrAllProvidersDown 表示 ModelPool 中所有 Provider（含降级链）均失败。
@@ -25,10 +37,70 @@ var ErrEmptyPool = errors.New("model pool is empty")
 //   - Register/Get/SetFallback/SetKeyRotation 写操作加互斥锁
 //   - Route 读操作使用 RLock，与 Router 配合实现策略选择
 //   - API Key 轮询通过 atomic 计数器实现无锁轮询
+//   - RequestModel 实现 ModelRequester 接口，含跨 Provider 故障降级
 type ModelPool struct {
 	mu      sync.RWMutex
 	items   map[string]*poolEntry
 	fallback []string // 降级顺序：主 → 次1 → 次2 ...
+
+	// G1-08 路由降级字段
+	primary          string                 // 主 Provider 名称
+	policy           RoutingPolicy          // 路由策略
+	failureThreshold int                    // 连续失败多少次触发降级（默认 3）
+	failureCounts    map[string]int         // provider_name → 连续失败计数
+	auditHook        func(PoolSwitchEvent)  // 可选的审计钩子
+}
+
+// PoolSwitchEvent 记录 Provider 切换事件，由 auditHook 发送到审计链。
+type PoolSwitchEvent struct {
+	From          string    // 切换前的 Provider 名称
+	To            string    // 切换后的 Provider 名称
+	Reason        string    // 切换原因
+	Timestamp     time.Time `json:"timestamp"` // 切换时间
+	FailureCount  int       // 触发切换时的连续失败计数
+}
+
+// PoolOption 是 NewModelPool 的配置选项。
+type PoolOption func(*ModelPool)
+
+// WithPrimary 设置主 Provider 名称。
+func WithPrimary(name string) PoolOption {
+	return func(p *ModelPool) { p.primary = name }
+}
+
+// WithFallback 设置降级链顺序。
+func WithFallback(chain ...string) PoolOption {
+	return func(p *ModelPool) { p.fallback = append([]string(nil), chain...) }
+}
+
+// WithPolicy 设置路由策略。
+func WithPolicy(policy RoutingPolicy) PoolOption {
+	return func(p *ModelPool) { p.policy = policy }
+}
+
+// WithFailureThreshold 设置连续失败触发降级的阈值。
+func WithFailureThreshold(n int) PoolOption {
+	return func(p *ModelPool) { p.failureThreshold = n }
+}
+
+// WithAuditHook 注入审计钩子，在 Provider 切换时被调用。
+// 保持 model/ 不直接依赖 audit/ 模块，避免循环依赖。
+func WithAuditHook(hook func(PoolSwitchEvent)) PoolOption {
+	return func(p *ModelPool) { p.auditHook = hook }
+}
+
+// WithProvider 注册一个 Provider 到池中。
+func WithProvider(provider ModelRequester) PoolOption {
+	return func(p *ModelPool) {
+		if provider == nil {
+			return
+		}
+		name := provider.Name()
+		if name == "" {
+			return
+		}
+		p.items[name] = &poolEntry{provider: provider}
+	}
 }
 
 // poolEntry 包装一个 Provider 及其可选的 API Key 轮询列表。
@@ -119,11 +191,22 @@ func (m *ProviderMetrics) SuccessRate() float64 {
 	return float64(m.SuccessCount.Load()) / float64(total)
 }
 
-// NewModelPool 创建空的 ModelPool。
-func NewModelPool() *ModelPool {
-	return &ModelPool{
-		items: make(map[string]*poolEntry),
+// NewModelPool 创建空的 ModelPool。可通过 PoolOption 配置主 Provider、降级链、
+// 路由策略、失败阈值、审计钩子和初始 Provider。
+// 无选项时使用默认值：failureThreshold=3，policy=RoutingFallback。
+func NewModelPool(opts ...PoolOption) *ModelPool {
+	p := &ModelPool{
+		items:            make(map[string]*poolEntry),
+		failureCounts:    make(map[string]int),
+		failureThreshold: 3,
+		policy:           RoutingFallback,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	return p
 }
 
 // Register 注册一个 Provider。重复注册同名 Provider 返回错误。
@@ -336,4 +419,245 @@ func (p *ModelPool) Metrics(name string) MetricsSnapshot {
 		return MetricsSnapshot{}
 	}
 	return m.Snapshot()
+}
+
+// === G1-08: ModelRequester 接口实现 + 路由降级 ===
+
+// Name 实现 ModelRequester 接口。ModelPool 作为一个虚拟 Provider 暴露。
+func (p *ModelPool) Name() string {
+	return "model-pool"
+}
+
+// GenerateRequestData 实现 ModelRequester 接口。
+// 委托给首个可用 Provider（按路由策略选出的 try order）生成请求数据。
+func (p *ModelPool) GenerateRequestData(ctx context.Context, req *ModelRequest) (*RequestData, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	provider, err := p.selectForDelegation()
+	if err != nil {
+		return nil, err
+	}
+	return provider.GenerateRequestData(ctx, req)
+}
+
+// RequestModel 实现 ModelRequester 接口，含跨 Provider 故障降级逻辑。
+//
+// 路由流程：
+//  1. 按 policy 构建 try order（RoutingFallback: primary → fallbackChain；
+//     其他策略: fallbackChain 作为优先级）
+//  2. 依次尝试 try order 中的 Provider，跳过已降级（failureCounts >= threshold）的
+//  3. 成功则重置该 Provider 的失败计数并返回 stream
+//  4. 失败则递增失败计数；若超过阈值，标记为降级并通过 auditHook 通知切换事件
+//  5. 所有 Provider 均失败返回聚合错误（含 ErrAllProvidersDown）
+func (p *ModelPool) RequestModel(ctx context.Context, data *RequestData) (<-chan *StreamChunk, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	tryOrder := p.buildTryOrder()
+	if len(tryOrder) == 0 {
+		return nil, ErrEmptyPool
+	}
+
+	var errs []error
+	for i, name := range tryOrder {
+		if p.isDown(name) {
+			continue
+		}
+
+		provider, err := p.applyKeyToProvider(name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("provider %q: %w", name, err))
+			continue
+		}
+
+		stream, err := provider.RequestModel(ctx, data)
+		if err != nil {
+			wasDown, nowDown := p.recordFailure(name)
+			if !wasDown && nowDown {
+				nextName := p.findNextAvailable(tryOrder[i+1:])
+				if nextName != "" {
+					p.notifySwitch(name, nextName, "failure threshold exceeded")
+				}
+			}
+			errs = append(errs, fmt.Errorf("provider %q: %w", name, err))
+			continue
+		}
+
+		p.recordSuccess(name)
+		return stream, nil
+	}
+
+	return nil, fmt.Errorf("%w: %v", ErrAllProvidersDown, errors.Join(errs...))
+}
+
+// BroadcastResponse 实现 ModelRequester 接口。
+// 提供通用的 stream → event 转发，不依赖具体 Provider 的实现。
+func (p *ModelPool) BroadcastResponse(ctx context.Context, stream <-chan *StreamChunk) (<-chan *ResultEvent, error) {
+	events := make(chan *ResultEvent, 64)
+	go func() {
+		defer close(events)
+		for chunk := range stream {
+			if chunk.Delta != "" {
+				events <- &ResultEvent{EventType: EventDelta, Payload: chunk.Delta}
+			}
+			if chunk.Reasoning != "" {
+				events <- &ResultEvent{EventType: ReasoningDelta, Payload: chunk.Reasoning}
+			}
+			if len(chunk.Tools) > 0 {
+				events <- &ResultEvent{EventType: ToolCallsEvent, Payload: chunk.Tools}
+			}
+			if chunk.Usage != nil {
+				events <- &ResultEvent{EventType: MetaEvent, Payload: chunk.Usage}
+			}
+			if chunk.IsDone {
+				events <- &ResultEvent{EventType: EventDone}
+			}
+		}
+	}()
+	return events, nil
+}
+
+// === 路由降级辅助方法 ===
+
+// buildTryOrder 按路由策略构建 Provider 尝试顺序。
+// RoutingFallback: [primary] + fallbackChain（去重）；
+// 其他策略: fallbackChain 作为优先级顺序；
+// 无 fallbackChain 时遍历所有已注册 Provider。
+func (p *ModelPool) buildTryOrder() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if len(p.items) == 0 {
+		return nil
+	}
+
+	var order []string
+	seen := make(map[string]bool)
+
+	if p.policy == RoutingFallback && p.primary != "" {
+		if _, ok := p.items[p.primary]; ok {
+			order = append(order, p.primary)
+			seen[p.primary] = true
+		}
+	}
+
+	for _, name := range p.fallback {
+		if !seen[name] {
+			if _, ok := p.items[name]; ok {
+				order = append(order, name)
+				seen[name] = true
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		for name := range p.items {
+			order = append(order, name)
+		}
+	}
+
+	return order
+}
+
+// isDown 检查指定 Provider 是否已降级（连续失败计数 >= 阈值）。
+func (p *ModelPool) isDown(name string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.failureThreshold > 0 && p.failureCounts[name] >= p.failureThreshold
+}
+
+// recordFailure 递增指定 Provider 的连续失败计数。
+// 返回 (wasDown, isDown) 用于检测 up → down 的状态转换。
+func (p *ModelPool) recordFailure(name string) (wasDown, isDown bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	wasDown = p.failureThreshold > 0 && p.failureCounts[name] >= p.failureThreshold
+	p.failureCounts[name]++
+	isDown = p.failureThreshold > 0 && p.failureCounts[name] >= p.failureThreshold
+	return
+}
+
+// recordSuccess 重置指定 Provider 的连续失败计数。
+func (p *ModelPool) recordSuccess(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.failureCounts, name)
+}
+
+// findNextAvailable 在给定名称列表中查找下一个未降级且已注册的 Provider。
+func (p *ModelPool) findNextAvailable(names []string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, name := range names {
+		if p.failureThreshold > 0 && p.failureCounts[name] >= p.failureThreshold {
+			continue
+		}
+		if _, ok := p.items[name]; ok {
+			return name
+		}
+	}
+	return ""
+}
+
+// notifySwitch 调用审计钩子通知 Provider 切换事件。
+func (p *ModelPool) notifySwitch(from, to, reason string) {
+	p.mu.RLock()
+	hook := p.auditHook
+	count := p.failureCounts[from]
+	p.mu.RUnlock()
+
+	if hook != nil {
+		hook(PoolSwitchEvent{
+			From:         from,
+			To:           to,
+			Reason:       reason,
+			Timestamp:    time.Now(),
+			FailureCount: count,
+		})
+	}
+}
+
+// selectForDelegation 为 GenerateRequestData 选择首个可用 Provider。
+func (p *ModelPool) selectForDelegation() (ModelRequester, error) {
+	tryOrder := p.buildTryOrder()
+	for _, name := range tryOrder {
+		if p.isDown(name) {
+			continue
+		}
+		provider, err := p.applyKeyToProvider(name)
+		if err == nil && provider != nil {
+			return provider, nil
+		}
+	}
+	return nil, ErrAllProvidersDown
+}
+
+// FailureCount 返回指定 Provider 的当前连续失败计数（主要用于测试/调试）。
+func (p *ModelPool) FailureCount(name string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.failureCounts[name]
+}
+
+// Primary 返回主 Provider 名称。
+func (p *ModelPool) Primary() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.primary
+}
+
+// Policy 返回当前路由策略。
+func (p *ModelPool) Policy() RoutingPolicy {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.policy
+}
+
+// FailureThreshold 返回连续失败触发降级的阈值。
+func (p *ModelPool) FailureThreshold() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.failureThreshold
 }

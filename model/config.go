@@ -162,6 +162,16 @@ type ProviderConfig struct {
 // ErrMissingRequiredConfig 必填配置缺失错误
 var ErrMissingRequiredConfig = errors.New("missing required config")
 
+// ModelRequest.Options 支持的深度思考参数键（G1-03）：
+//   - "thinking": map[string]string{"type": "enabled"|"disabled"}
+//     MiMo/Stepfun/Sensenova 的非标准思考开关，通过 Options 透传至请求体。
+//   - "reasoning_effort": "low"|"medium"|"high"
+//     OpenAI o-series 的推理力度参数，通过 Options 透传至请求体。
+//
+// 上述键均不在 reservedFields 中，RequestModel 会原样写入请求体顶层。
+// 推理内容预算（G1-05）通过 OpenAICompatibleProvider.MaxReasoningTokens 字段
+// 配置，而非 Options。
+
 // DEFAULT_SETTINGS 各 Provider 的默认配置
 // 优先级：DEFAULT_SETTINGS < cp.Get（配置文件/环境变量/静态覆盖）
 var DEFAULT_SETTINGS = map[string]map[string]any{

@@ -2,6 +2,9 @@ package model
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -307,5 +310,93 @@ func TestBroadcastResponseNoNormalizationWhenReasoningPresent(t *testing.T) {
 	// Content should still contain the <think> tags (not normalized).
 	if donePayload.Content != "<think>不应提取</think>回答" {
 		t.Errorf("Content = %q, want %q (content should not be cleaned when reasoning is present)", donePayload.Content, "<think>不应提取</think>回答")
+	}
+}
+
+// --- G1-03: thinking / reasoning_effort parameter pass-through tests ---
+
+// TestThinkingParameterPassThrough verifies that Options["thinking"] is
+// passed through to the request body (used by MiMo/Stepfun/Sensenova).
+// thinking is not a reserved field, so it must survive the Options expansion.
+func TestThinkingParameterPassThrough(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	provider := &OpenAICompatibleProvider{BaseURL: server.URL, Model: "mimo-v2.5-pro"}
+	data := &RequestData{
+		Model:    "mimo-v2.5-pro",
+		Messages: []ChatMessage{{Role: "user", Content: "test"}},
+		Options: map[string]any{
+			"thinking": map[string]string{"type": "enabled"},
+		},
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	thinking, ok := receivedBody["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %v, want map (Options[\"thinking\"] should pass through)", receivedBody["thinking"])
+	}
+	if tp, ok := thinking["type"].(string); !ok || tp != "enabled" {
+		t.Errorf("thinking.type = %v, want \"enabled\"", thinking["type"])
+	}
+}
+
+// TestReasoningEffortParameterPassThrough verifies that Options["reasoning_effort"]
+// is passed through to the request body (used by OpenAI o-series).
+func TestReasoningEffortParameterPassThrough(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	provider := &OpenAICompatibleProvider{BaseURL: server.URL, Model: "o1"}
+	data := &RequestData{
+		Model:    "o1",
+		Messages: []ChatMessage{{Role: "user", Content: "test"}},
+		Options: map[string]any{
+			"reasoning_effort": "high",
+		},
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	effort, ok := receivedBody["reasoning_effort"].(string)
+	if !ok || effort != "high" {
+		t.Errorf("reasoning_effort = %v, want \"high\" (Options[\"reasoning_effort\"] should pass through)", receivedBody["reasoning_effort"])
+	}
+}
+
+// TestThinkingAndReasoningEffortNotReserved verifies that the thinking and
+// reasoning_effort keys are NOT in reservedFields, so they pass through the
+// Options expansion in RequestModel.
+func TestThinkingAndReasoningEffortNotReserved(t *testing.T) {
+	if reservedFields["thinking"] {
+		t.Errorf("reservedFields[\"thinking\"] = true, want false (must pass through for MiMo/Stepfun/Sensenova)")
+	}
+	if reservedFields["reasoning_effort"] {
+		t.Errorf("reservedFields[\"reasoning_effort\"] = true, want false (must pass through for OpenAI o-series)")
 	}
 }

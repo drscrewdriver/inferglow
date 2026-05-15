@@ -10,6 +10,7 @@ const (
 	SideEffectRead    SideEffectLevel = "read"
 	SideEffectWrite   SideEffectLevel = "write"
 	SideEffectNetwork SideEffectLevel = "network"
+	SideEffectExec    SideEffectLevel = "exec"
 )
 
 // ActionPolicy defines execution constraints for an Action.

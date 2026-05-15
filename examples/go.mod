@@ -5,14 +5,9 @@ go 1.25.0
 require (
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/audit v0.0.0
-	github.com/inferglow/flow v0.0.0
 	github.com/inferglow/model v0.0.0
 	github.com/inferglow/orchestrator v0.0.0
-	github.com/inferglow/sandbox v0.0.0
-	github.com/inferglow/schema v0.0.0
 	github.com/inferglow/session v0.0.0
-	github.com/inferglow/workspace v0.0.0
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -26,6 +21,8 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/inferglow/sandbox v0.0.0 // indirect
+	github.com/inferglow/security v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
@@ -35,7 +32,11 @@ require (
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720155508-bb71a54f79dc // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/inferglow/model => ./../model
@@ -53,6 +54,8 @@ replace github.com/inferglow/sandbox => ./../sandbox
 replace github.com/inferglow/audit => ./../audit
 
 replace github.com/inferglow/orchestrator => ./../orchestrator
+
+replace github.com/inferglow/security => ./../security
 
 replace github.com/inferglow/workspace => ./../workspace
 

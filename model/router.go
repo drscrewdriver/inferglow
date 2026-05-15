@@ -30,6 +30,9 @@ const (
 	// RoutingQuality 按成功率选择，优先成功率高的 Provider。
 	// 适合对稳定性敏感的场景。无历史数据时回退到 RoutingFirst。
 	RoutingQuality
+	// RoutingFallback 故障时自动切换：先用 primary，连续失败超过阈值后
+	// 按 fallbackChain 切换。由 ModelPool.RequestModel 实现。
+	RoutingFallback
 )
 
 // PricingInfo 描述一个 Provider 的计费单价（每百万 token 美元）。

@@ -161,3 +161,115 @@ func itoaBench(i int) string {
 	}
 	return string(buf[pos:])
 }
+
+// G1-07.3b: 流式解析（processOpenAILine）与 usage 解析 Benchmark。
+// 构造模拟 SSE 行反复解析，覆盖 content delta / reasoning / tool_call / usage 场景。
+
+// benchSSELines 预构造的模拟 SSE 行，覆盖主要解析路径。
+var benchSSELines = []string{
+	// content delta
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"Hello, how can I help you today?"},"finish_reason":""}]}` + "\n",
+	// reasoning_content delta (MiMo/Spark 风格)
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"reasoning_content":"Let me think about this problem step by step."},"finish_reason":""}]}` + "\n",
+	// tool_call 首块（id + name + 部分 arguments）
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"calculate","arguments":"{\"expr\":"}}]},"finish_reason":""}]}` + "\n",
+	// tool_call 续块（arguments 增量）
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"1+1\"}"}}]},"finish_reason":""}]}` + "\n",
+	// tool_calls finish
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n",
+	// usage-only chunk（empty choices，含 reasoning_tokens）
+	`data: {"id":"chatcmpl-1","choices":[],"usage":{"prompt_tokens":128,"completion_tokens":64,"total_tokens":192,"completion_tokens_details":{"reasoning_tokens":32}}}` + "\n",
+	// stop finish
+	`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n",
+	// [DONE]
+	"data: [DONE]\n",
+	// 非 data 行（应被跳过）
+	": keepalive\n",
+}
+
+// noopEmit 是一个空操作的 emit 函数，避免分配 channel。
+func noopEmit(*StreamChunk) {}
+
+// BenchmarkProcessOpenAILineSingle 测试单行反复解析的性能。
+func BenchmarkProcessOpenAILineSingle(b *testing.B) {
+	line := benchSSELines[0]
+	toolStates := make(map[int]*openAIToolState)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = benchProvider.processOpenAILine(line, nil, toolStates, noopEmit)
+	}
+}
+
+// BenchmarkProcessOpenAILineMixed 测试混合 SSE 行序列解析（含 content/reasoning/tool/usage/done）。
+func BenchmarkProcessOpenAILineMixed(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		toolStates := make(map[int]*openAIToolState)
+		var usage *UsageInfo
+		for _, line := range benchSSELines {
+			if u := benchProvider.processOpenAILine(line, usage, toolStates, noopEmit); u != nil {
+				usage = u
+			}
+		}
+	}
+}
+
+// BenchmarkProcessOpenAILineToolCalls 测试 tool_call 累积场景（首块+续块+finish）。
+func BenchmarkProcessOpenAILineToolCalls(b *testing.B) {
+	lines := benchSSELines[2:5] // tool_call 首块、续块、finish
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		toolStates := make(map[int]*openAIToolState)
+		for _, line := range lines {
+			benchProvider.processOpenAILine(line, nil, toolStates, noopEmit)
+		}
+	}
+}
+
+// BenchmarkProcessOpenAILineUsage 测试含 usage 的 chunk 解析（JSON 反序列化 UsageInfo）。
+func BenchmarkProcessOpenAILineUsage(b *testing.B) {
+	line := benchSSELines[5]
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = benchProvider.processOpenAILine(line, nil, make(map[int]*openAIToolState), noopEmit)
+	}
+}
+
+// BenchmarkUsageInfoReasoningTokens 测试 ReasoningTokens() 方法的调用开销。
+func BenchmarkUsageInfoReasoningTokens(b *testing.B) {
+	u := &UsageInfo{
+		PromptTokens:           128,
+		CompletionTokens:       64,
+		TotalTokens:            192,
+		CompletionTokensDetails: map[string]int{"reasoning_tokens": 32},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = u.ReasoningTokens()
+	}
+}
+
+// BenchmarkUsageInfoReasoningTokensNil 测试 nil details 场景的开销。
+func BenchmarkUsageInfoReasoningTokensNil(b *testing.B) {
+	u := &UsageInfo{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = u.ReasoningTokens()
+	}
+}
+
+// BenchmarkNormalizeThinkingTags 测试 <think> 标签归一化的开销。
+func BenchmarkNormalizeThinkingTags(b *testing.B) {
+	content := "Hello <think>this is reasoning content that should be extracted</think> world"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = normalizeThinkingTags(content)
+	}
+}

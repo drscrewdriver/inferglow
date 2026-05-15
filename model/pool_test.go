@@ -505,3 +505,568 @@ func itoa(i int) string {
 	}
 	return string(buf[pos:])
 }
+
+// === G1-08: ModelPool 路由降级测试 ===
+
+// drainStream 消费 stream 中所有 chunk，避免 goroutine 泄漏。
+func drainStream(stream <-chan *StreamChunk) {
+	if stream == nil {
+		return
+	}
+	for range stream {
+	}
+}
+
+// TestPoolRequestModelNormalRouting 验证 primary 可用时使用 primary。
+func TestPoolRequestModelNormalRouting(t *testing.T) {
+	primary := newMockProvider("primary")
+	secondary := newMockProvider("secondary")
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	stream, err := pool.RequestModel(context.Background(), &RequestData{Model: "test"})
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	drainStream(stream)
+
+	if primary.CallCount() != 1 {
+		t.Errorf("primary CallCount = %d, want 1", primary.CallCount())
+	}
+	if secondary.CallCount() != 0 {
+		t.Errorf("secondary CallCount = %d, want 0", secondary.CallCount())
+	}
+}
+
+// TestPoolRequestModelFallbackOnFailure 验证 primary 连续失败超过阈值后切换到 fallback。
+func TestPoolRequestModelFallbackOnFailure(t *testing.T) {
+	primary := newMockProvider("primary")
+	primary.failRate = 1 // 始终失败
+	secondary := newMockProvider("secondary")
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(3),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// 3 次调用：primary 每次失败，secondary 每次成功
+	// 第 3 次调用时 primary 失败计数达到阈值，被标记为降级
+	for i := 0; i < 3; i++ {
+		stream, err := pool.RequestModel(ctx, data)
+		if err != nil {
+			t.Fatalf("call %d failed: %v", i, err)
+		}
+		drainStream(stream)
+	}
+
+	if primary.CallCount() != 3 {
+		t.Errorf("primary CallCount = %d, want 3", primary.CallCount())
+	}
+	if pool.FailureCount("primary") != 3 {
+		t.Errorf("primary FailureCount = %d, want 3", pool.FailureCount("primary"))
+	}
+
+	// 第 4 次调用：primary 已降级（跳过），secondary 直接被调用
+	stream, err := pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("4th call failed: %v", err)
+	}
+	drainStream(stream)
+
+	if primary.CallCount() != 3 {
+		t.Errorf("primary CallCount = %d, want 3 (should be skipped after downgrade)", primary.CallCount())
+	}
+	if secondary.CallCount() != 4 {
+		t.Errorf("secondary CallCount = %d, want 4", secondary.CallCount())
+	}
+}
+
+// TestPoolRequestModelAllProvidersFail 验证所有 Provider 都失败时返回聚合错误。
+func TestPoolRequestModelAllProvidersFail(t *testing.T) {
+	primary := newMockProvider("primary")
+	primary.failRate = 1
+	secondary := newMockProvider("secondary")
+	secondary.failRate = 1
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(2),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	_, err := pool.RequestModel(context.Background(), &RequestData{Model: "test"})
+	if err == nil {
+		t.Fatal("expected error when all providers fail")
+	}
+	if !errors.Is(err, ErrAllProvidersDown) {
+		t.Errorf("expected ErrAllProvidersDown, got %v", err)
+	}
+}
+
+// TestPoolRequestModelSuccessResetsCount 验证成功后重置失败计数。
+func TestPoolRequestModelSuccessResetsCount(t *testing.T) {
+	primary := newMockProvider("primary")
+	secondary := newMockProvider("secondary")
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(3),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// primary 失败 2 次
+	primary.failRate = 1
+	for i := 0; i < 2; i++ {
+		stream, _ := pool.RequestModel(ctx, data)
+		drainStream(stream)
+	}
+	if pool.FailureCount("primary") != 2 {
+		t.Fatalf("primary FailureCount = %d, want 2", pool.FailureCount("primary"))
+	}
+
+	// primary 成功 1 次，失败计数应重置
+	primary.failRate = 0
+	stream, err := pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+	drainStream(stream)
+	if pool.FailureCount("primary") != 0 {
+		t.Errorf("primary FailureCount = %d, want 0 after success", pool.FailureCount("primary"))
+	}
+
+	// 再次失败 2 次，primary 不应被降级（计数从 0 重新开始）
+	primary.failRate = 1
+	for i := 0; i < 2; i++ {
+		stream, _ := pool.RequestModel(ctx, data)
+		drainStream(stream)
+	}
+	if pool.FailureCount("primary") != 2 {
+		t.Errorf("primary FailureCount = %d, want 2", pool.FailureCount("primary"))
+	}
+
+	// 第 3 次失败才触发降级
+	stream, _ = pool.RequestModel(ctx, data)
+	drainStream(stream)
+	if pool.FailureCount("primary") != 3 {
+		t.Errorf("primary FailureCount = %d, want 3", pool.FailureCount("primary"))
+	}
+
+	// 第 4 次调用 primary 应被跳过
+	primary.failRate = 0
+	beforePrimary := primary.CallCount()
+	stream, err = pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("expected secondary success: %v", err)
+	}
+	drainStream(stream)
+	if primary.CallCount() != beforePrimary {
+		t.Errorf("primary should be skipped (down), but CallCount changed: %d -> %d", beforePrimary, primary.CallCount())
+	}
+}
+
+// TestPoolRequestModelIndependentFailureCounts 验证多 Provider 独立失败计数。
+func TestPoolRequestModelIndependentFailureCounts(t *testing.T) {
+	primary := newMockProvider("primary")
+	primary.failRate = 1
+	secondary := newMockProvider("secondary")
+	tertiary := newMockProvider("tertiary")
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary", "tertiary"),
+		WithFailureThreshold(2),
+		WithProvider(primary),
+		WithProvider(secondary),
+		WithProvider(tertiary),
+	)
+
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// 2 次调用：primary 失败 2 次 → 降级；secondary 成功
+	for i := 0; i < 2; i++ {
+		stream, _ := pool.RequestModel(ctx, data)
+		drainStream(stream)
+	}
+	if pool.FailureCount("primary") != 2 {
+		t.Errorf("primary FailureCount = %d, want 2", pool.FailureCount("primary"))
+	}
+	if pool.FailureCount("secondary") != 0 {
+		t.Errorf("secondary FailureCount = %d, want 0", pool.FailureCount("secondary"))
+	}
+
+	// 现在 primary 已降级；让 secondary 也失败
+	secondary.failRate = 1
+	for i := 0; i < 2; i++ {
+		stream, _ := pool.RequestModel(ctx, data)
+		drainStream(stream)
+	}
+	if pool.FailureCount("secondary") != 2 {
+		t.Errorf("secondary FailureCount = %d, want 2", pool.FailureCount("secondary"))
+	}
+	// tertiary 成功，失败计数为 0
+	if pool.FailureCount("tertiary") != 0 {
+		t.Errorf("tertiary FailureCount = %d, want 0", pool.FailureCount("tertiary"))
+	}
+
+	// primary 和 secondary 都已降级；tertiary 仍可用
+	primary.failRate = 0
+	secondary.failRate = 0
+	beforePrimary := primary.CallCount()
+	beforeSecondary := secondary.CallCount()
+	stream, err := pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("expected tertiary success: %v", err)
+	}
+	drainStream(stream)
+	if primary.CallCount() != beforePrimary {
+		t.Errorf("primary should be skipped (down)")
+	}
+	if secondary.CallCount() != beforeSecondary {
+		t.Errorf("secondary should be skipped (down)")
+	}
+	if tertiary.CallCount() != 3 {
+		t.Errorf("tertiary CallCount = %d, want 3", tertiary.CallCount())
+	}
+}
+
+// TestPoolRequestModelRoutingPolicies 验证不同路由策略的选择逻辑。
+func TestPoolRequestModelRoutingPolicies(t *testing.T) {
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// RoutingFallback：primary 优先
+	primary := newMockProvider("a")
+	secondary := newMockProvider("b")
+	pool := NewModelPool(
+		WithPolicy(RoutingFallback),
+		WithPrimary("a"),
+		WithFallback("b", "a"),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+	stream, err := pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	drainStream(stream)
+	if primary.CallCount() != 1 || secondary.CallCount() != 0 {
+		t.Errorf("RoutingFallback: primary CallCount=%d, secondary CallCount=%d; want 1, 0", primary.CallCount(), secondary.CallCount())
+	}
+
+	// RoutingCost：按 fallback 链顺序（简化实现），不特殊对待 primary
+	cPrimary := newMockProvider("a")
+	cSecondary := newMockProvider("b")
+	cPool := NewModelPool(
+		WithPolicy(RoutingCost),
+		WithPrimary("a"),
+		WithFallback("b", "a"),
+		WithProvider(cPrimary),
+		WithProvider(cSecondary),
+	)
+	stream, err = cPool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	drainStream(stream)
+	if cSecondary.CallCount() != 1 || cPrimary.CallCount() != 0 {
+		t.Errorf("RoutingCost: first CallCount=%d, second CallCount=%d; want b=1, a=0", cSecondary.CallCount(), cPrimary.CallCount())
+	}
+
+	// RoutingLatency：同样按 fallback 链顺序
+	lPrimary := newMockProvider("a")
+	lSecondary := newMockProvider("b")
+	lPool := NewModelPool(
+		WithPolicy(RoutingLatency),
+		WithPrimary("a"),
+		WithFallback("b", "a"),
+		WithProvider(lPrimary),
+		WithProvider(lSecondary),
+	)
+	stream, err = lPool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	drainStream(stream)
+	if lSecondary.CallCount() != 1 || lPrimary.CallCount() != 0 {
+		t.Errorf("RoutingLatency: first CallCount=%d, second CallCount=%d; want b=1, a=0", lSecondary.CallCount(), lPrimary.CallCount())
+	}
+
+	// RoutingQuality：同样按 fallback 链顺序
+	qPrimary := newMockProvider("a")
+	qSecondary := newMockProvider("b")
+	qPool := NewModelPool(
+		WithPolicy(RoutingQuality),
+		WithPrimary("a"),
+		WithFallback("b", "a"),
+		WithProvider(qPrimary),
+		WithProvider(qSecondary),
+	)
+	stream, err = qPool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	drainStream(stream)
+	if qSecondary.CallCount() != 1 || qPrimary.CallCount() != 0 {
+		t.Errorf("RoutingQuality: first CallCount=%d, second CallCount=%d; want b=1, a=0", qSecondary.CallCount(), qPrimary.CallCount())
+	}
+}
+
+// TestPoolSwitchEventAuditHook 验证 Provider 切换时 auditHook 被调用。
+func TestPoolSwitchEventAuditHook(t *testing.T) {
+	primary := newMockProvider("primary")
+	primary.failRate = 1
+	secondary := newMockProvider("secondary")
+
+	var events []PoolSwitchEvent
+	var eventMu sync.Mutex
+	hook := func(e PoolSwitchEvent) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		events = append(events, e)
+	}
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(3),
+		WithAuditHook(hook),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// 3 次调用后 primary 失败计数达到 3，触发降级
+	for i := 0; i < 3; i++ {
+		stream, _ := pool.RequestModel(ctx, data)
+		drainStream(stream)
+	}
+
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 switch event, got %d", len(events))
+	}
+	e := events[0]
+	if e.From != "primary" {
+		t.Errorf("event.From = %q, want %q", e.From, "primary")
+	}
+	if e.To != "secondary" {
+		t.Errorf("event.To = %q, want %q", e.To, "secondary")
+	}
+	if e.FailureCount != 3 {
+		t.Errorf("event.FailureCount = %d, want 3", e.FailureCount)
+	}
+	if e.Reason == "" {
+		t.Error("event.Reason should not be empty")
+	}
+	if e.Timestamp.IsZero() {
+		t.Error("event.Timestamp should not be zero")
+	}
+}
+
+// TestModelPoolImplementsModelRequester 验证 ModelPool 实现 ModelRequester 接口。
+func TestModelPoolImplementsModelRequester(t *testing.T) {
+	var _ ModelRequester = (*ModelPool)(nil)
+	var _ ModelRequester = NewModelPool()
+}
+
+// TestPoolRequestModelEmptyPool 验证空池返回 ErrEmptyPool。
+func TestPoolRequestModelEmptyPool(t *testing.T) {
+	pool := NewModelPool()
+	_, err := pool.RequestModel(context.Background(), &RequestData{Model: "test"})
+	if !errors.Is(err, ErrEmptyPool) {
+		t.Errorf("expected ErrEmptyPool, got %v", err)
+	}
+}
+
+// TestPoolRequestModelContextCancelled 验证 context 取消时返回错误。
+func TestPoolRequestModelContextCancelled(t *testing.T) {
+	pool := NewModelPool(WithProvider(newMockProvider("p")))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := pool.RequestModel(ctx, &RequestData{Model: "test"})
+	if err == nil {
+		t.Fatal("expected error on cancelled context")
+	}
+}
+
+// TestPoolOptionFunctions 验证 PoolOption 函数正确配置 ModelPool。
+func TestPoolOptionFunctions(t *testing.T) {
+	p := newMockProvider("p1")
+	s := newMockProvider("p2")
+	pool := NewModelPool(
+		WithPrimary("p1"),
+		WithFallback("p1", "p2"),
+		WithPolicy(RoutingCost),
+		WithFailureThreshold(5),
+		WithProvider(p),
+		WithProvider(s),
+	)
+
+	if pool.Primary() != "p1" {
+		t.Errorf("Primary = %q, want %q", pool.Primary(), "p1")
+	}
+	if pool.Policy() != RoutingCost {
+		t.Errorf("Policy = %v, want RoutingCost", pool.Policy())
+	}
+	if pool.FailureThreshold() != 5 {
+		t.Errorf("FailureThreshold = %d, want 5", pool.FailureThreshold())
+	}
+	chain := pool.FallbackChain()
+	if len(chain) != 2 || chain[0] != "p1" || chain[1] != "p2" {
+		t.Errorf("FallbackChain = %v, want [p1 p2]", chain)
+	}
+	got, err := pool.Get("p1")
+	if err != nil || got.Name() != "p1" {
+		t.Errorf("Get(p1) failed: %v", err)
+	}
+}
+
+// TestPoolName 验证 ModelPool.Name()。
+func TestPoolName(t *testing.T) {
+	pool := NewModelPool()
+	if pool.Name() != "model-pool" {
+		t.Errorf("Name() = %q, want %q", pool.Name(), "model-pool")
+	}
+}
+
+// TestPoolGenerateRequestData 验证 ModelPool.GenerateRequestData 委托给可用 Provider。
+func TestPoolGenerateRequestData(t *testing.T) {
+	primary := newMockProvider("primary")
+	primary.failRate = 1 // RequestModel 失败不影响 GenerateRequestData
+	secondary := newMockProvider("secondary")
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	data, err := pool.GenerateRequestData(context.Background(), &ModelRequest{Input: "hello"})
+	if err != nil {
+		t.Fatalf("GenerateRequestData failed: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected non-nil RequestData")
+	}
+}
+
+// TestPoolBroadcastResponse 验证 ModelPool.BroadcastResponse 转发 stream 为 events。
+func TestPoolBroadcastResponse(t *testing.T) {
+	pool := NewModelPool()
+
+	stream := make(chan *StreamChunk, 3)
+	stream <- &StreamChunk{Delta: "hello"}
+	stream <- &StreamChunk{Reasoning: "thinking"}
+	stream <- &StreamChunk{IsDone: true}
+	close(stream)
+
+	events, err := pool.BroadcastResponse(context.Background(), stream)
+	if err != nil {
+		t.Fatalf("BroadcastResponse failed: %v", err)
+	}
+
+	var gotDelta, gotReasoning, gotDone bool
+	for e := range events {
+		switch e.EventType {
+		case EventDelta:
+			gotDelta = true
+		case ReasoningDelta:
+			gotReasoning = true
+		case EventDone:
+			gotDone = true
+		}
+	}
+	if !gotDelta {
+		t.Error("expected EventDelta")
+	}
+	if !gotReasoning {
+		t.Error("expected ReasoningDelta")
+	}
+	if !gotDone {
+		t.Error("expected EventDone")
+	}
+}
+
+// TestPoolRequestModelDownProviderSkipped 验证已降级的 Provider 被跳过。
+func TestPoolRequestModelDownProviderSkipped(t *testing.T) {
+	primary := newMockProvider("primary")
+	secondary := newMockProvider("secondary")
+
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(1), // 1 次失败即降级
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	ctx := context.Background()
+	data := &RequestData{Model: "test"}
+
+	// primary 失败 1 次 → 立即降级
+	primary.failRate = 1
+	stream, _ := pool.RequestModel(ctx, data)
+	drainStream(stream)
+
+	// primary 恢复，但应被跳过（已降级）
+	primary.failRate = 0
+	stream, err := pool.RequestModel(ctx, data)
+	if err != nil {
+		t.Fatalf("expected secondary success: %v", err)
+	}
+	drainStream(stream)
+
+	if primary.CallCount() != 1 {
+		t.Errorf("primary CallCount = %d, want 1 (should be skipped after downgrade)", primary.CallCount())
+	}
+	if secondary.CallCount() != 2 {
+		t.Errorf("secondary CallCount = %d, want 2", secondary.CallCount())
+	}
+}
+
+// TestPoolConcurrentRequestModel 验证并发 RequestModel 不 panic。
+func TestPoolConcurrentRequestModel(t *testing.T) {
+	primary := newMockProvider("primary")
+	secondary := newMockProvider("secondary")
+	pool := NewModelPool(
+		WithPrimary("primary"),
+		WithFallback("primary", "secondary"),
+		WithFailureThreshold(5),
+		WithProvider(primary),
+		WithProvider(secondary),
+	)
+
+	const N = 20
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			stream, _ := pool.RequestModel(context.Background(), &RequestData{Model: "test"})
+			drainStream(stream)
+		}()
+	}
+	wg.Wait()
+}
