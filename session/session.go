@@ -16,6 +16,40 @@ type ContentBlock struct {
 	Meta map[string]any `json:"meta,omitempty"`
 }
 
+// MessageMasker is the hook interface used by Session.AddMessage to redact
+// sensitive content before it is appended to the history. Unlike
+// MessageHook (which can block a message), a masker transforms the content
+// in place. Implementations are expected to inspect their own
+// configuration and return the text unchanged when masking is disabled
+// for the relevant side. A nil masker (the default) means no masking is
+// performed, preserving backward compatibility.
+//
+// The pii.Masker type in github.com/inferglow/security/pii satisfies this
+// interface and serves as the PII hook; other security modules may provide
+// their own implementation. SessionOption is declared in
+// security_hook.go and is reused here so PII masking and prompt-injection
+// blocking share a single option pipeline.
+type MessageMasker interface {
+	// MaskInput transforms a message before it enters the session
+	// history. Returning the input unchanged disables input masking.
+	MaskInput(text string) string
+	// MaskOutput transforms the final response before it is returned to
+	// the caller. Returning the input unchanged disables output
+	// masking. The session itself does not call MaskOutput; the agent
+	// layer is responsible for invoking it on the final response.
+	MaskOutput(text string) string
+}
+
+// WithMessageMasker returns a SessionOption that installs m as the
+// session's PII/security masker. Pass nil to clear a previously set
+// masker. This option is the session-level injection point used by the
+// agent's WithPIIMasker option.
+func WithMessageMasker(m MessageMasker) SessionOption {
+	return func(s *Session) {
+		s.masker = m
+	}
+}
+
 // ChatMessage represents a single message in the conversation
 type ChatMessage struct {
 	Role      string         `json:"role"`
@@ -49,6 +83,15 @@ type Session struct {
 	analysisHandlers []AnalysisHandler
 	// 默认策略名：当 AnalysisHandler 返回未注册的策略名时回退使用
 	defaultResizeName string
+	// securityHook 在 AddMessage 前对输入做安全检测（可选）。
+	// 通过 WithSecurityHook Option 注入；为 nil 时 AddMessage 行为
+	// 与原始实现完全一致（向后兼容）。
+	securityHook MessageHook
+	// masker 在 AddMessage 前对内容做脱敏变换（可选）。
+	// 通过 WithMessageMasker Option 注入；为 nil 时不做任何变换，
+	// 保持向后兼容。与 securityHook 互不干扰：hook 先判断是否拦截，
+	// masker 再对通过检查的内容做脱敏。
+	masker MessageMasker
 }
 
 func NewSession(id string, maxLength int) *Session {
@@ -120,9 +163,42 @@ func ContentToString(c any) string {
 	}
 }
 
+// AddMessage appends a message to both FullContext and ContextWindow.
+// When a security hook is configured (via WithSecurityHook) and it
+// rejects the message, the message is NOT appended and the method
+// returns silently — the signature has no error return for backward
+// compatibility. Use AddMessageChecked to obtain the rejection error.
 func (s *Session) AddMessage(role string, content any, name string) {
+	_ = s.AddMessageChecked(role, content, name)
+}
+
+// AddMessageChecked behaves like AddMessage but returns the security
+// hook's rejection error (e.g. ErrPromptInjectionBlocked) instead of
+// silently dropping the message. When no hook is configured the
+// behavior is identical to the legacy AddMessage.
+//
+// When a MessageMasker is configured (via WithMessageMasker), string
+// content is transformed by MaskInput after the security hook runs and
+// before the message is appended. Non-string content (e.g. []ContentBlock)
+// is passed through unchanged. Masking is applied only to the stored copy;
+// the caller's argument is never mutated.
+func (s *Session) AddMessageChecked(role string, content any, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.securityHook != nil {
+		if err := s.securityHook.BeforeAddMessage(role, content, name); err != nil {
+			return err
+		}
+	}
+	// Apply PII/security masking to string content after the block check.
+	// The masker itself decides (via its ApplyOn config) whether to
+	// actually mask; MaskInput returns the text unchanged when input
+	// masking is disabled.
+	if s.masker != nil {
+		if str, ok := content.(string); ok {
+			content = s.masker.MaskInput(str)
+		}
+	}
 	msg := ChatMessage{
 		Role:      role,
 		Content:   content,
@@ -133,9 +209,20 @@ func (s *Session) AddMessage(role string, content any, name string) {
 	s.ContextWindow = append(s.ContextWindow, msg)
 
 	if !s.AutoResize {
-		return
+		return nil
 	}
 	s.applyResizeLocked()
+	return nil
+}
+
+// SetMessageMasker installs (or clears, when m is nil) the PII/security
+// masker consulted by AddMessageChecked. This is the imperative
+// alternative to the WithMessageMasker SessionOption. The masker must
+// be safe for concurrent use.
+func (s *Session) SetMessageMasker(m MessageMasker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.masker = m
 }
 
 // AddChatHistory appends multiple messages to both FullContext and ContextWindow
