@@ -17,6 +17,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/inferglow/approval v0.0.0 // indirect
+	github.com/inferglow/model v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0-00010101000000-000000000000 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -32,6 +33,7 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260729162451-8efbd57d26e0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/inferglow/action => ../action
@@ -39,3 +41,5 @@ replace github.com/inferglow/action => ../action
 replace github.com/inferglow/sandbox => ../sandbox
 
 replace github.com/inferglow/approval => ../approval
+
+replace github.com/inferglow/model => ../model
