@@ -5,8 +5,13 @@ import (
 
 	"github.com/inferglow/action"
 	"github.com/inferglow/model"
+	"github.com/inferglow/security/pii"
 	"github.com/inferglow/session"
 )
+
+// Compile-time guard: *pii.Masker must satisfy session.MessageMasker so the
+// agent can wire it into the session as a PII hook.
+var _ session.MessageMasker = (*pii.Masker)(nil)
 
 // SessionExtension wraps the session.Session and provides
 // a simplified interface for the orchestrator to manage conversation history.
@@ -27,6 +32,15 @@ func (e *SessionExtension) AddUserMessage(content string) {
 // AddAssistantMessage adds an assistant message to the session history.
 func (e *SessionExtension) AddAssistantMessage(content string) {
 	e.s.AddMessage("assistant", content, "")
+}
+
+// SetMessageMasker installs (or clears, when m is nil) a PII/security
+// masker on the underlying session. The masker is consulted by
+// Session.AddMessageChecked to redact string content before it is
+// appended to the history. This is the imperative bridge between the
+// agent-level WithPIIMasker option and the session's masking hook.
+func (e *SessionExtension) SetMessageMasker(m session.MessageMasker) {
+	e.s.SetMessageMasker(m)
 }
 
 // AddActionResult adds an action execution result as a text message to the session.
