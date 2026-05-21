@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package actions
 
 import (
@@ -29,9 +49,9 @@ const (
 
 // JSONProcessorInput is the strongly-typed input for json_processor.
 type JSONProcessorInput struct {
-	JSON  string `json:"json"`
-	Path  string `json:"path"`
-	Op    string `json:"op"` // "query" (default) or "parse"
+	JSON string `json:"json"`
+	Path string `json:"path"`
+	Op   string `json:"op"` // "query" (default) or "parse"
 }
 
 // JSONProcessorSpec is the ActionSpec for json_processor: no side
@@ -86,12 +106,12 @@ func JSONQuery(data any, path string) (any, error) {
 
 // jsonPathStep is a single navigation step. Exactly one field is set.
 type jsonPathStep struct {
-	field   string // object key (when kind == "field")
-	index   int    // array index (when kind == "index")
-	slice   bool   // marks a slice step
-	start   int    // slice start (when slice == true)
-	end     int    // slice end (when slice == true; -1 = open-ended)
-	wildcard bool  // when true, return all children
+	field    string // object key (when kind == "field")
+	index    int    // array index (when kind == "index")
+	slice    bool   // marks a slice step
+	start    int    // slice start (when slice == true)
+	end      int    // slice end (when slice == true; -1 = open-ended)
+	wildcard bool   // when true, return all children
 }
 
 // parseJSONPath tokenizes path into a sequence of steps. The leading

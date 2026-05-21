@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package sandbox
 
 import (
@@ -23,17 +43,17 @@ type DockerClient interface {
 
 // ContainerConfig holds container creation parameters.
 type ContainerConfig struct {
-	Image      string
-	Hostname   string
-	Env        []string
-	Cmd        []string
-	WorkingDir string
+	Image           string
+	Hostname        string
+	Env             []string
+	Cmd             []string
+	WorkingDir      string
 	NetworkDisabled bool
 }
 
 // HostConfig holds host-specific container parameters.
 type HostConfig struct {
-	NetworkMode string
+	NetworkMode  string
 	PortBindings map[string][]PortMapping
 	Binds        []string
 	Runtime      string
@@ -51,19 +71,19 @@ type NetworkEndpoint struct {
 
 // ContainerCreateResult is the result of creating a container.
 type ContainerCreateResult struct {
-	ID string
+	ID       string
 	Warnings []string
 }
 
 // CreateExecOptions holds parameters for creating an exec instance.
 type CreateExecOptions struct {
-	Container    string
-	Cmd          []string
-	Stdin        bool
-	Stdout       bool
-	Stderr       bool
-	Tty          bool
-	WorkingDir   string
+	Container  string
+	Cmd        []string
+	Stdin      bool
+	Stdout     bool
+	Stderr     bool
+	Tty        bool
+	WorkingDir string
 }
 
 // ExecCreateResult is the result of creating an exec instance.
@@ -83,24 +103,24 @@ type StartExecOptions struct {
 
 // ContainerInspectResult holds container inspection data.
 type ContainerInspectResult struct {
-	ID         string
-	State      ContainerState
-	Config     ContainerConfig
+	ID              string
+	State           ContainerState
+	Config          ContainerConfig
 	NetworkSettings NetworkSettings
 }
 
 // ContainerState holds the state of a container.
 type ContainerState struct {
-	Running    bool
-	ExitCode   int
-	Status     string
+	Running  bool
+	ExitCode int
+	Status   string
 }
 
 // ExecInspectResult holds exec inspection data.
 type ExecInspectResult struct {
-	ID         string
-	Running    bool
-	ExitCode   int
+	ID          string
+	Running     bool
+	ExitCode    int
 	ContainerID string
 }
 
@@ -115,8 +135,8 @@ func newDockerClientAdapter(impl DockerClient) *dockerClientAdapter {
 
 // DockerProvider is a sandbox Provider backed by Docker containers.
 type DockerProvider struct {
-	client           DockerClient
-	defaultNetwork   string
+	client         DockerClient
+	defaultNetwork string
 }
 
 // NewDockerProvider creates a DockerProvider using the real Docker API via
@@ -174,15 +194,15 @@ func (p *DockerProvider) CreateHandle(cfg map[string]any, policy *ExecutionPolic
 		network = p.defaultNetwork
 	}
 	return &DockerHandle{
-		client:     p.client,
-		config:     cfg,
-		policy:     policy,
-		image:      image,
-		network:    network,
-		ports:      cfg["ports"],
-		volumes:    cfg["volumes"],
-		env:        cfg["env"],
-		status:     StatusCreated,
+		client:  p.client,
+		config:  cfg,
+		policy:  policy,
+		image:   image,
+		network: network,
+		ports:   cfg["ports"],
+		volumes: cfg["volumes"],
+		env:     cfg["env"],
+		status:  StatusCreated,
 	}, nil
 }
 
@@ -212,7 +232,7 @@ func (h *DockerHandle) Start(ctx context.Context) error {
 	}
 
 	config := &ContainerConfig{
-		Image:      h.image,
+		Image:           h.image,
 		NetworkDisabled: false,
 		// Keep the container alive so that Execute can run commands in it.
 		// Without an explicit long-running command, alpine's default /bin/sh

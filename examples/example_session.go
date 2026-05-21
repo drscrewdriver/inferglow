@@ -1,4 +1,24 @@
-﻿// go:build ignore
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+// go:build ignore
 //go:build ignore
 
 // 示例：如何使用 session 模块管理对话记忆
@@ -15,7 +35,7 @@ import (
 func main() {
 	// --- 示例 1: 创建 Session 并添加消息 ---
 	fmt.Println("=== Example 1: Basic Session Usage ===")
-	
+
 	sess := session.NewSession("demo-session", 1000)
 	fmt.Printf("Created session: ID=%s, MaxLength=%d\n", sess.ID, sess.MaxLength)
 	fmt.Printf("FullContext: %d messages\n", len(sess.FullContext))
@@ -38,7 +58,7 @@ func main() {
 
 	// --- 示例 2: 上下文窗口自动裁剪 ---
 	fmt.Println("=== Example 2: Context Window Auto-Resize ===")
-	
+
 	sess2 := session.NewSession("resize-demo", 200)
 	sess2.AutoResize = true
 	sess2.RegisterResizeHandler("simple_cut", session.SimpleCutResizeHandler)
@@ -54,7 +74,7 @@ func main() {
 
 	// --- 示例 3: 摘要裁剪策略 ---
 	fmt.Println("=== Example 3: Summary Resize Strategy ===")
-	
+
 	sess3 := session.NewSession("summary-demo", 300)
 	sess3.AutoResize = true
 	sess3.RegisterResizeHandler("summary_first", session.SummaryFirstResizeHandler)
@@ -65,11 +85,11 @@ func main() {
 		sess3.AddMessage("user", fmt.Sprintf("User message %d: Some conversation content here.", i), "")
 		sess3.AddMessage("assistant", fmt.Sprintf("Assistant reply %d: Response to the above.", i), "")
 	}
-	
+
 	fmt.Printf("Added 20 messages with MaxLength=300\n")
 	fmt.Printf("FullContext: %d messages\n", len(sess3.FullContext))
 	fmt.Printf("ContextWindow: %d messages\n", len(sess3.ContextWindow))
-	
+
 	// 打印 ContextWindow 内容摘要
 	fmt.Println("ContextWindow contents:")
 	for i, msg := range sess3.ContextWindow {
@@ -83,7 +103,7 @@ func main() {
 
 	// --- 示例 4: Token 感知裁剪 ---
 	fmt.Println("=== Example 4: Token-Aware Resize ===")
-	
+
 	sess4 := session.NewSession("token-demo", 8000)
 	sess4.AutoResize = true
 	sess4.RegisterResizeHandler("token_aware", session.TokenAwareResizeHandler)
@@ -93,14 +113,14 @@ func main() {
 		sess4.AddMessage("user", fmt.Sprintf("Longer message %d with more text content to simulate token usage in a real conversation context.", i), "")
 		sess4.AddMessage("assistant", fmt.Sprintf("Response %d: Acknowledging the longer input with equally detailed reply text.", i), "")
 	}
-	
+
 	fmt.Printf("Added 30 messages with MaxLength=8000 (token aware)\n")
 	fmt.Printf("FullContext: %d messages\n", len(sess4.FullContext))
 	fmt.Printf("ContextWindow: %d messages (token-aware trimmed)\n\n", len(sess4.ContextWindow))
 
 	// --- 示例 5: 持久化 ---
 	fmt.Println("=== Example 5: Persistence ===")
-	
+
 	sess5 := session.NewSession("persist-demo", 1000)
 	sess5.AddMessage("user", "Hello!", "")
 	sess5.AddMessage("assistant", "Hi there!", "")

@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package schema
 
 import (
@@ -10,20 +30,20 @@ import (
 // fieldDefDTO 是 FieldDef 的可序列化表示。
 // 用于 MarshalJSON/UnmarshalJSON，将 DataType 转为字符串。
 type fieldDefDTO struct {
-	Type          DataType             `json:"type"`
-	Description   string               `json:"description,omitempty"`
-	Ensure        EnsurePolicy         `json:"ensure,omitempty"`
-	Required      bool                 `json:"required,omitempty"`
-	RequiredFields []string            `json:"required_fields,omitempty"`
-	Children      map[string]*FieldDef `json:"children,omitempty"`
-	ItemDef       *FieldDef            `json:"item_def,omitempty"`
+	Type           DataType             `json:"type"`
+	Description    string               `json:"description,omitempty"`
+	Ensure         EnsurePolicy         `json:"ensure,omitempty"`
+	Required       bool                 `json:"required,omitempty"`
+	RequiredFields []string             `json:"required_fields,omitempty"`
+	Children       map[string]*FieldDef `json:"children,omitempty"`
+	ItemDef        *FieldDef            `json:"item_def,omitempty"`
 }
 
 // outputSchemaDTO 是 OutputSchema 的可序列化表示。
 type outputSchemaDTO struct {
-	Format    OutputFormat          `json:"format,omitempty"`
-	EnsureAll bool                  `json:"ensure_all,omitempty"`
-	Fields    map[string]*FieldDef  `json:"fields"`
+	Format    OutputFormat         `json:"format,omitempty"`
+	EnsureAll bool                 `json:"ensure_all,omitempty"`
+	Fields    map[string]*FieldDef `json:"fields"`
 }
 
 // MarshalJSON 实现 json.Marshaler 接口。
@@ -205,7 +225,7 @@ func normalizeValue(rv reflect.Value) reflect.Value {
 	switch rv.Kind() {
 	case reflect.Interface:
 		return normalizeValue(rv.Elem())
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if rv.IsNil() {
 			return rv
 		}

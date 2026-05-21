@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package audit
 
 import (
@@ -7,15 +27,15 @@ import (
 // AuditEntry is a single record in the audit chain. Each entry's Hash
 // chains to the previous entry's Hash via PrevHash, producing an
 // append-only, tamper-evident log.
-type AuditEntry struct {
+type AuditEntry struct { //nolint:revive
 	PrevHash  string            `json:"prev_hash"`
 	Hash      string            `json:"hash"`
 	ID        string            `json:"id"`
 	Timestamp time.Time         `json:"timestamp"`
-	Source    string            `json:"source"`            // "agent"|"action"|"model"|"flow"
-	Action    string            `json:"action"`            // "decision"|"execute"|"request"
-	Input     any               `json:"input,omitempty"`   // arbitrary JSON-serializable value
-	Output    any               `json:"output,omitempty"`  // arbitrary JSON-serializable value
+	Source    string            `json:"source"`           // "agent"|"action"|"model"|"flow"
+	Action    string            `json:"action"`           // "decision"|"execute"|"request"
+	Input     any               `json:"input,omitempty"`  // arbitrary JSON-serializable value
+	Output    any               `json:"output,omitempty"` // arbitrary JSON-serializable value
 	Duration  time.Duration     `json:"duration"`
 	Error     string            `json:"error,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
@@ -24,7 +44,7 @@ type AuditEntry struct {
 
 // AuditConfig controls an AuditChain's runtime behavior. Zero-value
 // AuditConfig disables auditing (Enabled defaults to false).
-type AuditConfig struct {
+type AuditConfig struct { //nolint:revive
 	Enabled        bool
 	SignatureKey   []byte // optional HMAC-SHA256 key, nil disables signing
 	StorageBackend string // "memory" (default) or "json_file"
@@ -35,7 +55,7 @@ type AuditConfig struct {
 // AuditHook is the lightweight interface that call sites (agent engine,
 // dispatcher, etc.) depend on to avoid pulling the full audit.AuditChain
 // type into their packages. NoOpHook is the zero-overhead default.
-type AuditHook interface {
+type AuditHook interface { //nolint:revive
 	Append(entry *AuditEntry) (string, error)
 	IsEnabled() bool
 }
@@ -54,8 +74,11 @@ type QueryFilter struct {
 type ExportFormat string
 
 const (
+	// ExportJSON serializes audit entries as a JSON array.
 	ExportJSON ExportFormat = "json"
-	ExportCSV  ExportFormat = "csv"
+	// ExportCSV serializes audit entries as comma-separated values.
+	ExportCSV ExportFormat = "csv"
+	// ExportText serializes audit entries as human-readable text.
 	ExportText ExportFormat = "text"
 )
 

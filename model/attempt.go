@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package model
 
 import (
@@ -16,13 +36,13 @@ import (
 type ErrorClass int
 
 const (
-	// ErrorClassFatal: 401/403 — auth/permission issues, retrying won't help.
+	// ErrorClassFatal indicates a fatal error (401/403 — auth/permission issues) where retrying won't help.
 	ErrorClassFatal ErrorClass = iota
-	// ErrorClassBackoffRetry: 429 — rate limited, retry with backoff.
+	// ErrorClassBackoffRetry indicates a rate-limited (429) error; retry with backoff.
 	ErrorClassBackoffRetry
-	// ErrorClassRetry: 5xx — server errors, retry.
+	// ErrorClassRetry indicates a server error (5xx) that may succeed on retry.
 	ErrorClassRetry
-	// ErrorClassRetryOnce: unknown — try once more just in case.
+	// ErrorClassRetryOnce indicates an unknown error; try once more just in case.
 	ErrorClassRetryOnce
 )
 
@@ -84,10 +104,14 @@ func extractStatusCode(msg string) int {
 type AttemptDecisionAction string
 
 const (
-	AttemptRetry      AttemptDecisionAction = "retry"
-	AttemptRaise      AttemptDecisionAction = "raise"
-	AttemptYieldErr   AttemptDecisionAction = "yield_error"
-	AttemptStop       AttemptDecisionAction = "stop"
+	// AttemptRetry is the decision action indicating the request should be retried.
+	AttemptRetry AttemptDecisionAction = "retry"
+	// AttemptRaise is the decision action indicating the error should be raised to the caller.
+	AttemptRaise AttemptDecisionAction = "raise"
+	// AttemptYieldErr is the decision action indicating the error should be yielded as a stream event.
+	AttemptYieldErr AttemptDecisionAction = "yield_error"
+	// AttemptStop is the decision action indicating the retry loop should stop without further attempts.
+	AttemptStop AttemptDecisionAction = "stop"
 )
 
 // AttemptDecision 表示一次尝试后的决策
@@ -100,22 +124,22 @@ type AttemptDecision struct {
 
 // AttemptRunner 带指数退避的重试控制器
 type AttemptRunner struct {
-	MaxAttempts           int
-	AttemptIndex          int
-	OutputStarted         bool
+	MaxAttempts             int
+	AttemptIndex            int
+	OutputStarted           bool
 	AllowAfterOutputStarted bool
-	BackoffBase           time.Duration
-	BackoffMax            time.Duration
-	rng                   *rand.Rand
+	BackoffBase             time.Duration
+	BackoffMax              time.Duration
+	rng                     *rand.Rand
 }
 
 // NewAttemptRunner 创建新的 AttemptRunner
 func NewAttemptRunner() *AttemptRunner {
 	return &AttemptRunner{
-		MaxAttempts:   3,
-		BackoffBase:   time.Second,
-		BackoffMax:    30 * time.Second,
-		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		MaxAttempts: 3,
+		BackoffBase: time.Second,
+		BackoffMax:  30 * time.Second,
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -265,7 +289,7 @@ func (ar *AttemptRunner) MarkOutputStarted() {
 // calculateBackoff 计算指数退避时间
 func (ar *AttemptRunner) calculateBackoff() time.Duration {
 	// 指数退避: base * 2^(attempt-1)
-	exp := float64(ar.AttemptIndex-1)
+	exp := float64(ar.AttemptIndex - 1)
 	backoff := float64(ar.BackoffBase) * math.Pow(2, exp)
 
 	// 添加抖动 (±10%)

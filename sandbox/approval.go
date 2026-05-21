@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package sandbox
 
 import (
@@ -10,6 +30,7 @@ import (
 // ApprovalStatus represents the lifecycle state of an approval request.
 type ApprovalStatus string
 
+// Approval lifecycle states for an approval request.
 const (
 	ApprovalPending  ApprovalStatus = "pending"
 	ApprovalApproved ApprovalStatus = "approved"
@@ -19,6 +40,7 @@ const (
 // DecisionAction represents the outcome of an approval decision.
 type DecisionAction string
 
+// DecisionAction values describing the outcome of an approval decision.
 const (
 	DecisionApproved DecisionAction = "approved"
 	DecisionDenied   DecisionAction = "denied"
@@ -28,18 +50,18 @@ const (
 
 // ApprovalPolicy controls how approval requests are handled.
 type ApprovalPolicy struct {
-	RequiredApprover     string        `json:"required_approver"`
-	AutoApprovedModes    []SandboxMode `json:"auto_approved_modes"`
-	BlocklistedProviders []string      `json:"blocklisted_providers"`
+	RequiredApprover     string         `json:"required_approver"`
+	AutoApprovedModes    []SandboxMode  `json:"auto_approved_modes"`
+	BlocklistedProviders []string       `json:"blocklisted_providers"`
 	MaxResourceLimit     *ResourceLimit `json:"max_resource_limit"`
 }
 
 // ApprovalService manages approval requests and records.
 type ApprovalService struct {
-	policy   *ApprovalPolicy
-	records  map[string]*ApprovalRecord
-	mu       sync.RWMutex
-	seq      int64
+	policy  *ApprovalPolicy
+	records map[string]*ApprovalRecord
+	mu      sync.RWMutex
+	seq     int64
 }
 
 // NewApprovalService creates a new ApprovalService.
@@ -52,11 +74,11 @@ func NewApprovalService(policy *ApprovalPolicy) *ApprovalService {
 
 // ApprovalRequest represents a request for permission to execute in a sandbox.
 type ApprovalRequest struct {
-	ProviderName string            `json:"provider_name"`
-	Policy       *ExecutionPolicy  `json:"policy"`
-	Mode         SandboxMode       `json:"mode"`
-	Requester    string            `json:"requester"`
-	Reason       string            `json:"reason"`
+	ProviderName string           `json:"provider_name"`
+	Policy       *ExecutionPolicy `json:"policy"`
+	Mode         SandboxMode      `json:"mode"`
+	Requester    string           `json:"requester"`
+	Reason       string           `json:"reason"`
 }
 
 // ApprovalRecord stores the outcome of an approval request.

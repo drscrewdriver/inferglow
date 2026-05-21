@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package model
 
 import (
@@ -13,14 +33,22 @@ import (
 type ParseEventType string
 
 const (
+	// ParseObjectStart is emitted when a JSON object opening brace is encountered.
 	ParseObjectStart ParseEventType = "object_start"
-	ParseObjectEnd   ParseEventType = "object_end"
-	ParseArrayStart  ParseEventType = "array_start"
-	ParseArrayEnd    ParseEventType = "array_end"
-	ParseKey         ParseEventType = "key"
-	ParseValue       ParseEventType = "value"
-	ParseDone        ParseEventType = "done"
-	ParseError       ParseEventType = "error"
+	// ParseObjectEnd is emitted when a JSON object closing brace is encountered.
+	ParseObjectEnd ParseEventType = "object_end"
+	// ParseArrayStart is emitted when a JSON array opening bracket is encountered.
+	ParseArrayStart ParseEventType = "array_start"
+	// ParseArrayEnd is emitted when a JSON array closing bracket is encountered.
+	ParseArrayEnd ParseEventType = "array_end"
+	// ParseKey is emitted when an object key is parsed.
+	ParseKey ParseEventType = "key"
+	// ParseValue is emitted when a value is parsed.
+	ParseValue ParseEventType = "value"
+	// ParseDone is emitted when the JSON document has been fully parsed.
+	ParseDone ParseEventType = "done"
+	// ParseError is emitted when a parse error occurs.
+	ParseError ParseEventType = "error"
 )
 
 // JSONParseEvent 流式解析事件

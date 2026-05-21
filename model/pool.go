@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 // ModelPool 与 AttemptRunner 的关系（G1-08 B2.5）：
 //
 //   - AttemptRunner：处理单次请求的瞬态失败（如 429/500），通过指数退避重试。
@@ -38,26 +58,26 @@ var ErrEmptyPool = errors.New("model pool is empty")
 //   - Route 读操作使用 RLock，与 Router 配合实现策略选择
 //   - API Key 轮询通过 atomic 计数器实现无锁轮询
 //   - RequestModel 实现 ModelRequester 接口，含跨 Provider 故障降级
-type ModelPool struct {
-	mu      sync.RWMutex
-	items   map[string]*poolEntry
+type ModelPool struct { //nolint:revive
+	mu       sync.RWMutex
+	items    map[string]*poolEntry
 	fallback []string // 降级顺序：主 → 次1 → 次2 ...
 
 	// G1-08 路由降级字段
-	primary          string                 // 主 Provider 名称
-	policy           RoutingPolicy          // 路由策略
-	failureThreshold int                    // 连续失败多少次触发降级（默认 3）
-	failureCounts    map[string]int         // provider_name → 连续失败计数
-	auditHook        func(PoolSwitchEvent)  // 可选的审计钩子
+	primary          string                // 主 Provider 名称
+	policy           RoutingPolicy         // 路由策略
+	failureThreshold int                   // 连续失败多少次触发降级（默认 3）
+	failureCounts    map[string]int        // provider_name → 连续失败计数
+	auditHook        func(PoolSwitchEvent) // 可选的审计钩子
 }
 
 // PoolSwitchEvent 记录 Provider 切换事件，由 auditHook 发送到审计链。
 type PoolSwitchEvent struct {
-	From          string    // 切换前的 Provider 名称
-	To            string    // 切换后的 Provider 名称
-	Reason        string    // 切换原因
-	Timestamp     time.Time `json:"timestamp"` // 切换时间
-	FailureCount  int       // 触发切换时的连续失败计数
+	From         string    // 切换前的 Provider 名称
+	To           string    // 切换后的 Provider 名称
+	Reason       string    // 切换原因
+	Timestamp    time.Time `json:"timestamp"` // 切换时间
+	FailureCount int       // 触发切换时的连续失败计数
 }
 
 // PoolOption 是 NewModelPool 的配置选项。

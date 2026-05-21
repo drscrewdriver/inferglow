@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package action
 
 import (
@@ -22,9 +42,9 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 //
 // It supports three signatures (identified by sigType):
 //
-//   1. func(ctx context.Context, in InputT) (OutputT, error)
-//   2. func(in InputT) (OutputT, error)
-//   3. func(ctx context.Context, in InputT) OutputT
+//  1. func(ctx context.Context, in InputT) (OutputT, error)
+//  2. func(in InputT) (OutputT, error)
+//  3. func(ctx context.Context, in InputT) OutputT
 //
 // At Execute time the input map[string]any is converted to InputT via
 // JSON marshal/unmarshal, and any panic is recovered into an error-shaped
@@ -32,7 +52,7 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 type LocalFunctionExecutor struct {
 	fn        any
 	inputType reflect.Type // resolved InputT (first non-context In parameter)
-	sigType   int           // 1 / 2 / 3
+	sigType   int          // 1 / 2 / 3
 }
 
 // New builds an Action whose Executor wraps fn.
@@ -237,7 +257,7 @@ func buildSchema(inputType reflect.Type) map[string]any {
 	}
 	t := inputType
 	// Dereference pointer types so *InputT is treated as InputT.
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -285,7 +305,7 @@ func buildSchema(inputType reflect.Type) map[string]any {
 
 // jsonTypeOf maps a reflect.Type to a minimal JSON Schema fragment.
 func jsonTypeOf(t reflect.Type) map[string]any {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {
@@ -309,7 +329,7 @@ func jsonTypeOf(t reflect.Type) map[string]any {
 		}
 	case reflect.Map:
 		return map[string]any{
-			"type": "object",
+			"type":                 "object",
 			"additionalProperties": jsonTypeOf(t.Elem()),
 		}
 	case reflect.Struct:

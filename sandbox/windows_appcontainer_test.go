@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 //go:build windows
 
 package sandbox
@@ -17,10 +37,10 @@ func TestAppContainerHandleCreation(t *testing.T) {
 	}
 
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -42,10 +62,10 @@ func TestAppContainerHandleCreation(t *testing.T) {
 func TestAppContainerHandleStartStop(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -79,10 +99,10 @@ func TestAppContainerHandleStartStop(t *testing.T) {
 func TestAppContainerHandleExecute(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -116,10 +136,10 @@ func TestAppContainerHandleExecute(t *testing.T) {
 func TestAppContainerHandleCancel(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -148,10 +168,10 @@ func TestAppContainerHandleCancel(t *testing.T) {
 func TestAppContainerHandleStartTwice(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -177,10 +197,10 @@ func TestAppContainerHandleStartTwice(t *testing.T) {
 func TestAppContainerHandleExecuteNotRunning(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -202,10 +222,10 @@ func TestAppContainerHandleExecuteNotRunning(t *testing.T) {
 func TestAppContainerHandleStopNotRunning(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -229,8 +249,8 @@ func TestAppContainerConfigValidation(t *testing.T) {
 
 	// backend = 1 (BackendAppContainer), missing sandbox_directory.
 	cfg := map[string]any{
-		"backend":       int(BackendAppContainer),
-		"auto_select":   false,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
 		"network_isolation": true,
 	}
 
@@ -250,10 +270,10 @@ func TestAppContainerFilesystemIsolation(t *testing.T) {
 
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  appContainerDir,
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": appContainerDir,
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 
@@ -270,7 +290,7 @@ func TestAppContainerFilesystemIsolation(t *testing.T) {
 
 	// Execute a command that writes to a file.
 	result, err := handle.Execute(ctx, &Command{
-		Argv: []string{"cmd", "/c", "echo", "test", ">", "sandbox.txt"},
+		Argv:    []string{"cmd", "/c", "echo", "test", ">", "sandbox.txt"},
 		Workdir: appContainerDir,
 	})
 	if err != nil {
@@ -289,10 +309,10 @@ func TestAppContainerFilesystemIsolation(t *testing.T) {
 func TestAppContainerHandleStatusTransitions(t *testing.T) {
 	p := NewWindowsRuntimeProvider()
 	cfg := map[string]any{
-		"backend":            int(BackendAppContainer),
-		"auto_select":        false,
-		"sandbox_directory":  t.TempDir(),
-		"network_isolation":  true,
+		"backend":           int(BackendAppContainer),
+		"auto_select":       false,
+		"sandbox_directory": t.TempDir(),
+		"network_isolation": true,
 	}
 	policy := DefaultPolicy()
 

@@ -1,19 +1,46 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package pii
 
 import "regexp"
 
 // PIIType enumerates the categories of personally identifiable information
 // that the masker can recognize and redact.
-type PIIType string
+type PIIType string //nolint:revive
 
 const (
-	Email       PIIType = "email"
-	Phone       PIIType = "phone"
-	IDCard      PIIType = "id_card"
-	CreditCard  PIIType = "credit_card"
+	// Email matches an email address.
+	Email PIIType = "email"
+	// Phone matches a phone number.
+	Phone PIIType = "phone"
+	// IDCard matches a national ID card number.
+	IDCard PIIType = "id_card"
+	// CreditCard matches a credit card number.
+	CreditCard PIIType = "credit_card"
+	// BankAccount matches a bank account number.
 	BankAccount PIIType = "bank_account"
-	IPAddress   PIIType = "ip_address"
-	Custom      PIIType = "custom"
+	// IPAddress matches an IPv4 address.
+	IPAddress PIIType = "ip_address"
+	// Custom marks a caller-supplied pattern.
+	Custom PIIType = "custom"
 )
 
 // defaultPatternOrder defines the deterministic iteration order used when

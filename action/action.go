@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 // Package action defines the Action Runtime MVP for Inferglow.
 //
 // It exposes four core abstractions:
@@ -37,7 +57,7 @@ type Action struct {
 // infrastructure-level failures (e.g. registry lookup miss, panic
 // recovery) and is wrapped into an error-shaped ActionResult by the
 // registry's Execute helper.
-type ActionExecutor interface {
+type ActionExecutor interface { //nolint:revive
 	Execute(ctx context.Context, input map[string]any) (*ActionResult, error)
 }
 
@@ -48,16 +68,16 @@ type ActionExecutor interface {
 // side-channel for executor-specific extras that don't fit into the
 // primary Result (e.g. MCP resource links collected during a
 // tools/call response). Executors MAY leave Metadata nil.
-type ActionResult struct {
+type ActionResult struct { //nolint:revive
 	OK       bool
-	Status   string         // "success" | "error" | "blocked"
+	Status   string // "success" | "error" | "blocked"
 	Result   any
 	Error    string
 	Metadata map[string]any
 }
 
 // ActionRegistry is a concurrency-safe catalog of Actions keyed by Name.
-type ActionRegistry struct {
+type ActionRegistry struct { //nolint:revive
 	mu      sync.RWMutex
 	actions map[string]*Action
 }

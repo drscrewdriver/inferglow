@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 //go:build linux
 
 package sandbox
@@ -38,9 +58,11 @@ const (
 // LandlockAccessFS 是 Landlock 文件系统访问位掩码（合并 ABI v1~v3 的位）。
 type LandlockAccessFS uint64
 
+// LandlockAccessFS bit flags for Landlock filesystem access, grouped by ABI
+// version: v1 (Linux 5.13+), v2 adds Refer (Linux 5.19+), v3 adds Truncate
+// (Linux 6.2+).
 const (
-	// ABI v1（Linux 5.13+）
-	LandlockAccessFSExecute     LandlockAccessFS = 1 << 0
+	LandlockAccessFSExecute    LandlockAccessFS = 1 << 0
 	LandlockAccessFSWriteFile  LandlockAccessFS = 1 << 1
 	LandlockAccessFSReadFile   LandlockAccessFS = 1 << 2
 	LandlockAccessFSReadDir    LandlockAccessFS = 1 << 3
@@ -53,10 +75,8 @@ const (
 	LandlockAccessFSMakeFifo   LandlockAccessFS = 1 << 10
 	LandlockAccessFSMakeBlock  LandlockAccessFS = 1 << 11
 	LandlockAccessFSMakeSym    LandlockAccessFS = 1 << 12
-	// ABI v2（Linux 5.19+）
-	LandlockAccessFSRefer LandlockAccessFS = 1 << 13
-	// ABI v3（Linux 6.2+）
-	LandlockAccessFSTruncate LandlockAccessFS = 1 << 14
+	LandlockAccessFSRefer      LandlockAccessFS = 1 << 13
+	LandlockAccessFSTruncate   LandlockAccessFS = 1 << 14
 
 	// LandlockAccessFSAllWrite 汇总所有写操作位。
 	LandlockAccessFSAllWrite = LandlockAccessFSWriteFile |

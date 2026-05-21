@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package model
 
 import (
@@ -93,9 +113,9 @@ func BenchmarkGenerateRequestDataWithOptions(b *testing.B) {
 		System:   "You are MiMo.",
 		Instruct: "Explain quantum computing",
 		Options: map[string]any{
-			"thinking":          map[string]string{"type": "enabled"},
-			"top_p":             0.95,
-			"reasoning_effort":  "high",
+			"thinking":         map[string]string{"type": "enabled"},
+			"top_p":            0.95,
+			"reasoning_effort": "high",
 		},
 	}
 	ctx := context.Background()
@@ -117,10 +137,10 @@ func BenchmarkGenerateRequestDataAllCombined(b *testing.B) {
 		history[i] = ChatMessage{Role: role, Content: "history-message-" + itoaBench(i)}
 	}
 	req := &ModelRequest{
-		System:    "You are a helpful assistant.",
-		Developer: "Always respond in JSON.",
-		Instruct:  "Process the request",
-		Input:     "complex payload",
+		System:      "You are a helpful assistant.",
+		Developer:   "Always respond in JSON.",
+		Instruct:    "Process the request",
+		Input:       "complex payload",
 		ChatHistory: history,
 		Tools: []ToolDefinition{
 			{Name: "search", Description: "Search the web", Parameters: map[string]any{"type": "object"}},
@@ -242,9 +262,9 @@ func BenchmarkProcessOpenAILineUsage(b *testing.B) {
 // BenchmarkUsageInfoReasoningTokens 测试 ReasoningTokens() 方法的调用开销。
 func BenchmarkUsageInfoReasoningTokens(b *testing.B) {
 	u := &UsageInfo{
-		PromptTokens:           128,
-		CompletionTokens:       64,
-		TotalTokens:            192,
+		PromptTokens:            128,
+		CompletionTokens:        64,
+		TotalTokens:             192,
 		CompletionTokensDetails: map[string]int{"reasoning_tokens": 32},
 	}
 	b.ReportAllocs()

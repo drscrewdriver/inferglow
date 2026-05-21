@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 //go:build !skip_docker_real
 
 package sandbox
@@ -25,9 +45,9 @@ type realDockerClient struct {
 // ContainerCreate wraps the Docker SDK call.
 func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *HostConfig, networkingConfig *NetworkSettings, containerConfig *ContainerConfig, opts ...any) (*ContainerCreateResult, error) {
 	dockerConfig := &container.Config{
-		Image:     config.Image,
-		Env:       config.Env,
-		Cmd:       config.Cmd,
+		Image:      config.Image,
+		Env:        config.Env,
+		Cmd:        config.Cmd,
 		WorkingDir: config.WorkingDir,
 	}
 
@@ -55,10 +75,10 @@ func (r *realDockerClient) ContainerCreate(config *ContainerConfig, hostConfig *
 		parts := strings.SplitN(bind, ":", 2)
 		if len(parts) == 2 {
 			dockerHostConfig.Mounts = append(dockerHostConfig.Mounts, mount.Mount{
-				Type:        mount.TypeBind,
-				Source:      parts[0],
-				Target:      parts[1],
-				ReadOnly:    len(parts) > 2 && parts[2] == "ro",
+				Type:     mount.TypeBind,
+				Source:   parts[0],
+				Target:   parts[1],
+				ReadOnly: len(parts) > 2 && parts[2] == "ro",
 			})
 		}
 	}

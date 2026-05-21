@@ -1,25 +1,45 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package model
 
 import "context"
 
 // ModelRequest 模型请求参数
-type ModelRequest struct {
-	System        string
-	Developer     string
-	Instruct      string
-	Input         string
-	OutputFormat  string
-	ChatHistory   []ChatMessage
-	Info          map[string]any
-	Tools         []ToolDefinition
-	Actions       []ActionResult
-	Examples      []Example
-	Attachment    []Attachment
-	Output        *OutputSchema
-	EnsureAll     bool
-	Options       map[string]any
-	Model         string
-	Temperature   float64
+type ModelRequest struct { //nolint:revive
+	System       string
+	Developer    string
+	Instruct     string
+	Input        string
+	OutputFormat string
+	ChatHistory  []ChatMessage
+	Info         map[string]any
+	Tools        []ToolDefinition
+	Actions      []ActionResult
+	Examples     []Example
+	Attachment   []Attachment
+	Output       *OutputSchema
+	EnsureAll    bool
+	Options      map[string]any
+	Model        string
+	Temperature  float64
 	// TemperatureSet indicates that the caller explicitly set Temperature (even
 	// to 0). When false (zero value), providers may apply their own default.
 	// This allows callers to request deterministic temperature=0 without it
@@ -34,7 +54,7 @@ type ModelRequest struct {
 }
 
 // ModelResponse 模型响应结果
-type ModelResponse struct {
+type ModelResponse struct { //nolint:revive
 	Content   string
 	Reasoning string
 	Tools     []ToolCall
@@ -80,9 +100,9 @@ type RequestData struct {
 
 // OutputSchema 定义期望的输出格式
 type OutputSchema struct {
-	Type       string            `json:"type"`
-	Properties map[string]any    `json:"properties,omitempty"`
-	Required   []string          `json:"required,omitempty"`
+	Type       string         `json:"type"`
+	Properties map[string]any `json:"properties,omitempty"`
+	Required   []string       `json:"required,omitempty"`
 }
 
 // Example 示例
@@ -106,7 +126,7 @@ type ActionResult struct {
 }
 
 // ModelRequester 统一模型请求接口
-type ModelRequester interface {
+type ModelRequester interface { //nolint:revive
 	// Name 返回 Provider 名称
 	Name() string
 	// GenerateRequestData 将 ModelRequest 转换为 Provider 特定格式

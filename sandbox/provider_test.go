@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package sandbox
 
 import (
@@ -11,11 +31,11 @@ import (
 
 // mockProvider implements Provider for testing.
 type mockProvider struct {
-	name string
-	kind string
-	avail *AvailabilityResult
-	availErr error
-	handle Handle
+	name      string
+	kind      string
+	avail     *AvailabilityResult
+	availErr  error
+	handle    Handle
 	handleErr error
 }
 
@@ -33,11 +53,11 @@ var _ Provider = (*mockProvider)(nil)
 
 // mockHandle implements Handle for testing.
 type mockHandle struct {
-	startErr error
+	startErr   error
 	execResult *ExecutionResult
-	execErr error
-	stopErr error
-	statusVal HandleStatus
+	execErr    error
+	stopErr    error
+	statusVal  HandleStatus
 }
 
 func (h *mockHandle) Start(ctx context.Context) error { return h.startErr }
@@ -45,7 +65,7 @@ func (h *mockHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionResul
 	return h.execResult, h.execErr
 }
 func (h *mockHandle) Stop(ctx context.Context) error { return h.stopErr }
-func (h *mockHandle) Status() HandleStatus { return h.statusVal }
+func (h *mockHandle) Status() HandleStatus           { return h.statusVal }
 
 // 编译期断言：mockHandle 满足 Handle 接口
 var _ Handle = (*mockHandle)(nil)

@@ -1,0 +1,33 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - govet
+    - revive
+  disable:
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          severity: error
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true

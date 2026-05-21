@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package actionruntime
 
 import (
@@ -127,7 +147,7 @@ func TestDispatcher_ExecutorPanicRecovered(t *testing.T) {
 	panicAction := &action.Action{
 		Name:        "panic_raw",
 		Description: "panics without self-recovery",
-		Executor: &rawPanickingExecutor{msg: "boom from executor"},
+		Executor:    &rawPanickingExecutor{msg: "boom from executor"},
 	}
 	okAction, _ := action.New("ok_action", "ok",
 		func(ctx context.Context, input map[string]any) (any, error) { return "ok", nil })
@@ -177,7 +197,7 @@ func TestDispatcher_ExecutorPanicAppendsAuditEntry(t *testing.T) {
 	panicAction := &action.Action{
 		Name:        "panic_raw",
 		Description: "panics without self-recovery",
-		Executor: &rawPanickingExecutor{msg: "audit boom"},
+		Executor:    &rawPanickingExecutor{msg: "audit boom"},
 	}
 	if err := registry.Register(panicAction); err != nil {
 		t.Fatalf("Register: %v", err)
