@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package session
 
 import (
@@ -21,11 +41,11 @@ func makeMsg(role, content string) ChatMessage {
 // BenchmarkThreeZoneAppend 不触发 resize 的纯 append 性能。
 func BenchmarkThreeZoneAppend(b *testing.B) {
 	cases := []struct {
-		name      string
-		msgBytes  int
-		maxBytes  int
+		name     string
+		msgBytes int
+		maxBytes int
 	}{
-		{"small_unbounded", 100, 1 << 30},  // 100B/条，max 设很大不触发 resize
+		{"small_unbounded", 100, 1 << 30}, // 100B/条，max 设很大不触发 resize
 		{"medium_unbounded", 1024, 1 << 30},
 		{"large_unbounded", 8192, 1 << 30},
 	}
@@ -126,9 +146,9 @@ func BenchmarkThreeZoneResize(b *testing.B) {
 // BenchmarkThreeZoneSetImmutablePrefix 测试 Zone 1 设置开销（含 hash 计算）。
 func BenchmarkThreeZoneSetImmutablePrefix(b *testing.B) {
 	cases := []struct {
-		name    string
-		prompt  string
-		tools   []any
+		name   string
+		prompt string
+		tools  []any
 	}{
 		{"short_no_tools", "You are helpful.", nil},
 		{"long_no_tools", string(make([]byte, 4096)), nil}, // 4KB prompt

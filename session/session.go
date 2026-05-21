@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package session
 
 import (
@@ -53,12 +73,13 @@ func WithMessageMasker(m MessageMasker) SessionOption {
 // ChatMessage represents a single message in the conversation
 type ChatMessage struct {
 	Role      string         `json:"role"`
-	Content   any            `json:"content"`  // string | []ContentBlock
+	Content   any            `json:"content"` // string | []ContentBlock
 	Name      string         `json:"name,omitempty"`
 	Meta      map[string]any `json:"meta,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`
 }
 
+// ResizeHandler adapts the context window when it exceeds the configured length limit.
 type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) ([]ChatMessage, error)
 
 // AnalysisHandler inspects the current full context and context window (with
@@ -66,6 +87,7 @@ type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) 
 // apply. Returning an empty string means "do not trigger resize".
 type AnalysisHandler func(full []ChatMessage, window []ChatMessage, memo map[string]any) (string, error)
 
+// Session holds the conversation state, including the full context history and the active context window.
 type Session struct {
 	mu sync.RWMutex
 
@@ -94,6 +116,7 @@ type Session struct {
 	masker MessageMasker
 }
 
+// NewSession creates a Session with the given id and maximum context length.
 func NewSession(id string, maxLength int) *Session {
 	return &Session{
 		ID:             id,

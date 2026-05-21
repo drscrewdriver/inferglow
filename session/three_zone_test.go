@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package session
 
 import (
@@ -189,7 +209,7 @@ func TestThreeZoneSession_ResizeTriggersWhenOverBudget(t *testing.T) {
 	s.SetResizeStrategies(SnipFromHead(1), nil, nil)
 
 	// Add a first small message, then a long one that triggers resize.
-	s.AddToHistory(mkMsg("user", "0123456789"))      // 10 bytes — at budget
+	s.AddToHistory(mkMsg("user", "0123456789"))       // 10 bytes — at budget
 	s.AddToHistory(mkMsg("user", "0123456789ABCDEF")) // 16 bytes — over budget
 
 	// After resize, the first message should have been snipped.
@@ -237,9 +257,9 @@ func TestSnipFromHead_TooMany(t *testing.T) {
 // TestPruneLowValue verifies PruneLowValue removes short messages.
 func TestPruneLowValue(t *testing.T) {
 	msgs := []ChatMessage{
-		mkMsg("user", "short"),       // 5 chars — below threshold
-		mkMsg("assistant", "longer message"), // 14 chars — above threshold
-		mkMsg("user", "x"),           // 1 char — below threshold
+		mkMsg("user", "short"),                 // 5 chars — below threshold
+		mkMsg("assistant", "longer message"),   // 14 chars — above threshold
+		mkMsg("user", "x"),                     // 1 char — below threshold
 		mkMsg("assistant", "another long one"), // 17 chars — above threshold
 	}
 	h := PruneLowValue(6)

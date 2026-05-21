@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package session
 
 import (
@@ -18,7 +38,8 @@ func init() {
 	builtinResizeHandlers["token_aware"] = TokenAwareResizeHandler
 }
 
-type SessionData struct {
+// SessionData holds the serializable representation of a Session used by the JSON/YAML persistence methods.
+type SessionData struct { //nolint:revive
 	ID            string         `json:"id" yaml:"id"`
 	FullContext   []ChatMessage  `json:"full_context" yaml:"full_context"`
 	ContextWindow []ChatMessage  `json:"context_window" yaml:"context_window"`
@@ -35,6 +56,7 @@ type SessionData struct {
 	AnalysisHandlerCount int `json:"analysis_handler_count,omitempty" yaml:"analysis_handler_count,omitempty"`
 }
 
+// ToJSON returns a JSON representation of the session.
 func (s *Session) ToJSON() (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -46,6 +68,7 @@ func (s *Session) ToJSON() (string, error) {
 	return string(bytes), nil
 }
 
+// ToYAML returns a YAML representation of the session.
 func (s *Session) ToYAML() (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -57,6 +80,7 @@ func (s *Session) ToYAML() (string, error) {
 	return string(bytes), nil
 }
 
+// SaveJSON writes the session as JSON to the file at the given path.
 func (s *Session) SaveJSON(path string) error {
 	data, err := s.ToJSON()
 	if err != nil {
@@ -65,6 +89,7 @@ func (s *Session) SaveJSON(path string) error {
 	return os.WriteFile(path, []byte(data), 0644)
 }
 
+// SaveYAML writes the session as YAML to the file at the given path.
 func (s *Session) SaveYAML(path string) error {
 	data, err := s.ToYAML()
 	if err != nil {
@@ -73,6 +98,7 @@ func (s *Session) SaveYAML(path string) error {
 	return os.WriteFile(path, []byte(data), 0644)
 }
 
+// LoadJSON loads the session from JSON content or a .json file path.
 func (s *Session) LoadJSON(pathOrContent string) error {
 	var data SessionData
 	content := []byte(pathOrContent)
@@ -89,6 +115,7 @@ func (s *Session) LoadJSON(pathOrContent string) error {
 	return s.LoadFromData(data)
 }
 
+// LoadYAML loads the session from YAML content or a .yaml file path.
 func (s *Session) LoadYAML(pathOrContent string) error {
 	var data SessionData
 	content := []byte(pathOrContent)
@@ -105,6 +132,7 @@ func (s *Session) LoadYAML(pathOrContent string) error {
 	return s.LoadFromData(data)
 }
 
+// LoadFromData replaces the session's state from the given SessionData, restoring built-in resize handlers.
 func (s *Session) LoadFromData(data SessionData) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
