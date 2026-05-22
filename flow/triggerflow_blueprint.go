@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -14,11 +34,11 @@ import (
 // 与 schema.TriggerFlowDefinition 不同，这里使用 flow.Operator 直接持有
 // ListenSignals/EmitSignals/HandlerRef 等运行时字段，便于编译期到执行期的转换。
 // 序列化时通过 schema.TriggerFlowDefinition 转换。
-type FlowTriggerFlowDefinition struct {
-	Version   string              `json:"version" yaml:"version"`
-	Name      string              `json:"name" yaml:"name"`
-	Operators []*Operator         `json:"operators" yaml:"operators"`
-	Signals   map[string]string   `json:"signals,omitempty" yaml:"signals,omitempty"`
+type FlowTriggerFlowDefinition struct { //nolint:revive
+	Version   string            `json:"version" yaml:"version"`
+	Name      string            `json:"name" yaml:"name"`
+	Operators []*Operator       `json:"operators" yaml:"operators"`
+	Signals   map[string]string `json:"signals,omitempty" yaml:"signals,omitempty"`
 }
 
 // NewFlowTriggerFlowDefinition 创建空的 FlowTriggerFlowDefinition。

@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -11,19 +31,32 @@ import (
 type OperatorKind string
 
 const (
-	OpChunk          OperatorKind = "chunk"
-	OpSignalGate     OperatorKind = "signal_gate"
-	OpBatchFanout    OperatorKind = "batch_fanout"
-	OpBatchCollect   OperatorKind = "batch_collect"
-	OpForEachSplit   OperatorKind = "for_each_split"
+	// OpChunk splits a single input into streaming chunks.
+	OpChunk OperatorKind = "chunk"
+	// OpSignalGate gates flow progress on an incoming signal.
+	OpSignalGate OperatorKind = "signal_gate"
+	// OpBatchFanout fans a single input out to a batch of parallel branches.
+	OpBatchFanout OperatorKind = "batch_fanout"
+	// OpBatchCollect gathers results from a batch fan-out into a single output.
+	OpBatchCollect OperatorKind = "batch_collect"
+	// OpForEachSplit splits an iterable input into one branch per element.
+	OpForEachSplit OperatorKind = "for_each_split"
+	// OpForEachCollect gathers results from a for-each split into a single output.
 	OpForEachCollect OperatorKind = "for_each_collect"
-	OpMatchRoute     OperatorKind = "match_route"
-	OpMatchCase      OperatorKind = "match_case"
-	OpMatchCollect   OperatorKind = "match_collect"
-	OpCollectBranch  OperatorKind = "collect_branch"
-	OpIntervention   OperatorKind = "intervention_point"
-	OpSubFlow        OperatorKind = "sub_flow"
-	OpResultSink     OperatorKind = "result_sink"
+	// OpMatchRoute dispatches an input to the first matching case.
+	OpMatchRoute OperatorKind = "match_route"
+	// OpMatchCase represents a single case within a match route.
+	OpMatchCase OperatorKind = "match_case"
+	// OpMatchCollect gathers results from matched cases into a single output.
+	OpMatchCollect OperatorKind = "match_collect"
+	// OpCollectBranch collects the output of a conditional branch.
+	OpCollectBranch OperatorKind = "collect_branch"
+	// OpIntervention pauses flow progress for external intervention.
+	OpIntervention OperatorKind = "intervention_point"
+	// OpSubFlow invokes another flow as a nested sub-flow.
+	OpSubFlow OperatorKind = "sub_flow"
+	// OpResultSink collects the terminal result of a flow.
+	OpResultSink OperatorKind = "result_sink"
 )
 
 // CallableRef Kind 常量

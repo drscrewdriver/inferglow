@@ -1,12 +1,34 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -293,4 +315,402 @@ func generateExecutionID(flowName string) string {
 		return fmt.Sprintf("%d-%s", time.Now().UnixNano(), flowName)
 	}
 	return fmt.Sprintf("%d-%s-%s", time.Now().UnixNano(), hex.EncodeToString(buf[:]), flowName)
+}
+
+// ============================================================================
+// 自动 Checkpoint 持久化
+// ============================================================================
+
+// CheckpointStore abstracts the storage backend for execution checkpoints.
+// Implementations may persist snapshots to the local filesystem, a remote
+// key-value store, a database, etc.
+type CheckpointStore interface {
+	Save(snapshot *ExecutionSnapshot) error
+	Load(id string) (*ExecutionSnapshot, error)
+	Delete(id string) error
+}
+
+// Serializer abstracts the (de)serialization format used by a CheckpointStore.
+// The default implementation is JSONSerializer.
+type Serializer interface {
+	Marshal(s *ExecutionSnapshot) ([]byte, error)
+	Unmarshal(data []byte) (*ExecutionSnapshot, error)
+}
+
+// JSONSerializer is the default Serializer implementation. It encodes a
+// snapshot as pretty-printed JSON with a 2-space indent.
+type JSONSerializer struct{}
+
+// Marshal encodes the snapshot using json.MarshalIndent with a 2-space indent.
+func (j *JSONSerializer) Marshal(s *ExecutionSnapshot) ([]byte, error) {
+	if s == nil {
+		return nil, fmt.Errorf("snapshot is nil")
+	}
+	return json.MarshalIndent(s, "", "  ")
+}
+
+// Unmarshal decodes JSON data into an ExecutionSnapshot.
+func (j *JSONSerializer) Unmarshal(data []byte) (*ExecutionSnapshot, error) {
+	var snap ExecutionSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
+
+// FileCheckpointStore persists checkpoints as individual files in a directory.
+// Each snapshot is written to `{dir}/{ExecutionID}.json` and retrieved by the
+// same ExecutionID. The serialization format is controlled by the configured
+// Serializer (JSONSerializer by default).
+type FileCheckpointStore struct {
+	dir        string
+	serializer Serializer
+}
+
+// NewFileCheckpointStore creates a FileCheckpointStore rooted at dir.
+// The store uses a JSONSerializer by default. The directory is created on
+// the first Save call if it does not already exist.
+func NewFileCheckpointStore(dir string) *FileCheckpointStore {
+	return &FileCheckpointStore{
+		dir:        dir,
+		serializer: &JSONSerializer{},
+	}
+}
+
+// Save writes the snapshot to `{dir}/{snapshot.ExecutionID}.json`.
+// snapshot.ExecutionID serves as the key used to later Load or Delete the
+// checkpoint. The directory is created (with 0755 permissions) if missing.
+func (f *FileCheckpointStore) Save(snapshot *ExecutionSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("snapshot is nil")
+	}
+	if snapshot.ExecutionID == "" {
+		return fmt.Errorf("snapshot.ExecutionID is empty")
+	}
+	if err := os.MkdirAll(f.dir, 0o755); err != nil {
+		return fmt.Errorf("create checkpoint dir %s: %w", f.dir, err)
+	}
+	data, err := f.serializer.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("marshal checkpoint: %w", err)
+	}
+	path := filepath.Join(f.dir, snapshot.ExecutionID+".json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write checkpoint file %s: %w", path, err)
+	}
+	return nil
+}
+
+// Load reads the checkpoint identified by id from `{dir}/{id}.json`.
+func (f *FileCheckpointStore) Load(id string) (*ExecutionSnapshot, error) {
+	if id == "" {
+		return nil, fmt.Errorf("checkpoint id is empty")
+	}
+	path := filepath.Join(f.dir, id+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read checkpoint file %s: %w", path, err)
+	}
+	return f.serializer.Unmarshal(data)
+}
+
+// Delete removes the checkpoint file at `{dir}/{id}.json`.
+func (f *FileCheckpointStore) Delete(id string) error {
+	if id == "" {
+		return fmt.Errorf("checkpoint id is empty")
+	}
+	path := filepath.Join(f.dir, id+".json")
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("delete checkpoint file %s: %w", path, err)
+	}
+	return nil
+}
+
+// CheckpointConfig configures checkpoint behavior for a CheckpointManager.
+type CheckpointConfig struct {
+	Store          CheckpointStore
+	AutoCheckpoint bool
+	Serializer     Serializer
+	CheckPointID   string
+	WriteToID      string
+	ForceNewRun    bool
+	StateModifier  func(*ExecutionSnapshot) *ExecutionSnapshot
+}
+
+// CheckpointManager coordinates checkpoint save/load operations against a
+// CheckpointStore, applying any configured StateModifier and honoring the
+// ForceNewRun / AutoCheckpoint flags.
+type CheckpointManager struct {
+	config     CheckpointConfig
+	serializer Serializer
+}
+
+// NewCheckpointManager creates a CheckpointManager bound to the given config.
+// When config.Serializer is nil a JSONSerializer is used as the default.
+func NewCheckpointManager(config CheckpointConfig) *CheckpointManager {
+	ser := config.Serializer
+	if ser == nil {
+		ser = &JSONSerializer{}
+	}
+	return &CheckpointManager{
+		config:     config,
+		serializer: ser,
+	}
+}
+
+// SaveCheckpoint applies the StateModifier (if set) to the snapshot and then
+// persists it via the configured Store.
+func (m *CheckpointManager) SaveCheckpoint(snapshot *ExecutionSnapshot) error {
+	if m.config.Store == nil {
+		return fmt.Errorf("checkpoint store is nil")
+	}
+	if snapshot == nil {
+		return fmt.Errorf("snapshot is nil")
+	}
+	if m.config.StateModifier != nil {
+		snapshot = m.config.StateModifier(snapshot)
+	}
+	return m.config.Store.Save(snapshot)
+}
+
+// LoadCheckpoint retrieves the checkpoint identified by CheckPointID from the
+// configured Store. When ForceNewRun is true, no load is performed and the
+// method returns (nil, nil) so callers can start a fresh run.
+func (m *CheckpointManager) LoadCheckpoint() (*ExecutionSnapshot, error) {
+	if m.config.ForceNewRun {
+		return nil, nil
+	}
+	if m.config.Store == nil {
+		return nil, fmt.Errorf("checkpoint store is nil")
+	}
+	return m.config.Store.Load(m.config.CheckPointID)
+}
+
+// ShouldCheckpoint reports whether automatic checkpointing is active, i.e.
+// AutoCheckpoint is enabled and a Store has been configured.
+func (m *CheckpointManager) ShouldCheckpoint() bool {
+	return m.config.AutoCheckpoint && m.config.Store != nil
+}
+
+// WithAutoCheckpoint returns a FlowOption that enables automatic checkpointing
+// and binds the given store. When active, Flow.Pause persists a snapshot to the
+// store on every pause.
+func WithAutoCheckpoint(store CheckpointStore) FlowOption {
+	return func(f *Flow) {
+		f.autoCheckpoint = true
+		f.checkpointStore = store
+	}
+}
+
+// WithCheckPointID returns a FlowOption that sets the checkpoint ID used to
+// load an existing checkpoint (and to save, when no WriteToID is configured).
+func WithCheckPointID(id string) FlowOption {
+	return func(f *Flow) {
+		f.checkPointID = id
+	}
+}
+
+// WithWriteToCheckPointID returns a FlowOption that sets the ID under which new
+// checkpoints are written. This enables versioned writes: load from the old
+// CheckPointID, write to the new WriteToID.
+func WithWriteToCheckPointID(id string) FlowOption {
+	return func(f *Flow) {
+		f.writeToID = id
+	}
+}
+
+// WithForceNewRun returns a FlowOption that marks the run as fresh.
+// Flow.LoadCheckpoint returns (nil, nil) so callers execute from scratch,
+// ignoring any existing checkpoint.
+func WithForceNewRun() FlowOption {
+	return func(f *Flow) {
+		f.forceNewRun = true
+	}
+}
+
+// WithStateModifier returns a FlowOption that installs a StateModifier invoked
+// on every snapshot before it is persisted by the Flow (via Flow.Pause or
+// Flow.SaveCheckpoint).
+func WithStateModifier(fn func(*ExecutionSnapshot) *ExecutionSnapshot) FlowOption {
+	return func(f *Flow) {
+		f.stateModifier = fn
+	}
+}
+
+// WithSerializer returns a FlowOption that sets the Serializer used when the
+// Flow's checkpoint store is a *FileCheckpointStore. When set, save/load
+// operations go through a shallow copy of the store with this serializer
+// injected, leaving the original store unchanged. When the store is not a
+// *FileCheckpointStore the option has no behavioral effect but is still
+// recorded on the Flow.
+func WithSerializer(s Serializer) FlowOption {
+	return func(f *Flow) {
+		f.serializer = s
+	}
+}
+
+// ResumeFromSnapshot rebuilds an Execution from the snapshot by delegating to
+// toExecution. The returned Execution has its StepLog, Status and Result
+// restored; callers may resume the owning Flow from the snapshot's PausedAt.
+func (s *ExecutionSnapshot) ResumeFromSnapshot() *Execution {
+	return s.toExecution()
+}
+
+// ============================================================================
+// Flow 级别的 Checkpoint 操作
+// ============================================================================
+
+// effectiveStore returns the checkpoint store to use for save/load, injecting
+// the Flow's serializer when one is configured and the store is a
+// *FileCheckpointStore. The original store is left unchanged; a shallow copy
+// carries the injected serializer.
+func (f *Flow) effectiveStore() CheckpointStore {
+	if f.serializer != nil {
+		if s, ok := f.checkpointStore.(*FileCheckpointStore); ok {
+			cp := *s
+			cp.serializer = f.serializer
+			return &cp
+		}
+	}
+	return f.checkpointStore
+}
+
+// SaveCheckpoint persists snapshot via the Flow's configured store. The
+// StateModifier (if any) is applied first. The snapshot is written under
+// WriteToID when set, otherwise under CheckPointID when set, otherwise under
+// snapshot.ExecutionID. snapshot.ExecutionID is mutated to reflect the actual
+// save key so callers can record it for later load.
+func (f *Flow) SaveCheckpoint(snapshot *ExecutionSnapshot) error {
+	if f.checkpointStore == nil {
+		return fmt.Errorf("checkpoint store is nil")
+	}
+	if snapshot == nil {
+		return fmt.Errorf("snapshot is nil")
+	}
+	if f.stateModifier != nil {
+		snapshot = f.stateModifier(snapshot)
+	}
+	saveID := f.writeToID
+	if saveID == "" {
+		saveID = f.checkPointID
+	}
+	if saveID != "" {
+		snapshot.ExecutionID = saveID
+	}
+	return f.effectiveStore().Save(snapshot)
+}
+
+// LoadCheckpoint retrieves the snapshot identified by CheckPointID from the
+// configured store. Returns (nil, nil) when ForceNewRun is set or when no
+// CheckPointID is configured, so callers can fall back to a fresh run.
+func (f *Flow) LoadCheckpoint() (*ExecutionSnapshot, error) {
+	if f.forceNewRun {
+		return nil, nil
+	}
+	if f.checkpointStore == nil {
+		return nil, fmt.Errorf("checkpoint store is nil")
+	}
+	if f.checkPointID == "" {
+		return nil, nil
+	}
+	return f.effectiveStore().Load(f.checkPointID)
+}
+
+// Pause transitions exec to StatusPaused via Execution.Pause and, when
+// auto-checkpointing is active, persists the resulting snapshot to the
+// configured store. The returned PausePoint carries the checkpoint ID under
+// CheckpointID so callers can later resume from the persisted state. If the
+// auto-save fails the error is recorded on exec.State.Errors and CheckpointID
+// is left empty.
+//
+// This is the Flow-level counterpart of Execution.Pause: it composes the
+// low-level pause with checkpoint persistence driven by FlowOption
+// configuration (WithAutoCheckpoint / WithCheckPointID / WithWriteToCheckPointID /
+// WithStateModifier / WithSerializer).
+func (f *Flow) Pause(exec *Execution, reason string) *PausePoint {
+	pp := exec.Pause(reason)
+	if f.autoCheckpoint && f.checkpointStore != nil {
+		snapshot := NewExecutionPersistence(exec, "").buildSnapshot()
+		snapshot.PausedAt = pp.StepName
+		snapshot.PausedInput = pp.Input
+		if err := f.SaveCheckpoint(snapshot); err != nil {
+			exec.State.Errors = append(exec.State.Errors, fmt.Errorf("auto-checkpoint save: %w", err))
+		} else {
+			pp.CheckpointID = snapshot.ExecutionID
+		}
+	}
+	return pp
+}
+
+// ResumeFromSnapshot rebuilds an Execution from snapshot (restoring StepLog /
+// Result / Status history) and then continues execution from the step that
+// follows the snapshot's PausedAt. The returned Execution contains both the
+// restored history and the newly executed steps.
+//
+// The resume input fed to the next step is, in priority order: the paused
+// step's recorded Output (what would flow forward), the snapshot's PausedInput,
+// or the snapshot's Result. Execution uses context.Background; supply a
+// cancellable context via Flow.Resume when finer control is needed.
+func (f *Flow) ResumeFromSnapshot(snapshot *ExecutionSnapshot) *Execution {
+	if snapshot == nil {
+		return &Execution{
+			State: ExecutionState{
+				Status:  StatusFailed,
+				Errors:  []error{fmt.Errorf("resume from nil snapshot")},
+				StepLog: make(map[string]*StepLogEntry),
+			},
+		}
+	}
+	history := snapshot.toExecution()
+	pp := snapshot.AsPausePoint()
+
+	resumeInput := snapshot.PausedInput
+	if entry := snapshot.StepLog[snapshot.PausedAt]; entry != nil && entry.Output != nil {
+		resumeInput = entry.Output
+	}
+	if resumeInput == nil {
+		resumeInput = snapshot.Result
+	}
+
+	resumed := f.Resume(context.Background(), pp, resumeInput)
+
+	// Merge restored history without overwriting freshly executed entries.
+	for name, entry := range history.State.StepLog {
+		if _, exists := resumed.State.StepLog[name]; !exists {
+			resumed.State.StepLog[name] = entry
+		}
+	}
+	// Prepend historical execution order before the newly executed steps so
+	// callers observing StepExecLog see a coherent timeline. toExecution cannot
+	// derive order from the StepLog map alone, so walk the Flow graph.
+	resumed.State.StepExecLog = append(f.historyStepOrder(snapshot), resumed.State.StepExecLog...)
+	return resumed
+}
+
+// historyStepOrder walks the Flow's linear step chain from the start step and
+// returns the ordered names of steps recorded in snapshot.StepLog, up to and
+// including the PausedAt step. This reconstructs the historical StepExecLog
+// order that ExecutionSnapshot.toExecution cannot derive from the StepLog map
+// alone. Branch steps not on the linear chain are omitted from the order but
+// remain present in the merged StepLog map. The read lock is released before
+// any subsequent Flow.Resume call to avoid recursive locking.
+func (f *Flow) historyStepOrder(snapshot *ExecutionSnapshot) []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var order []string
+	cur := f.findStartStep()
+	for cur != nil {
+		if _, exists := snapshot.StepLog[cur.Name]; exists {
+			order = append(order, cur.Name)
+		}
+		if cur.Name == snapshot.PausedAt {
+			break
+		}
+		next := f.findNextStep(cur.Name)
+		if next == "" {
+			break
+		}
+		cur = f.steps[next]
+	}
+	return order
 }

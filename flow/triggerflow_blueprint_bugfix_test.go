@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -32,13 +52,16 @@ func TestRun_SignalNetNotNil(t *testing.T) {
 // 修复：Run 时创建 EmitSignal (将信号接受到 SignalNet) 并注入 OperatorContext.EmitSignal.
 //
 // 流程：
-//   1. OpChunk (name "c1")：发射 "Chunk[c1]" 信号
-//   2. OpSignalGate (required_signals: ["Chunk[c1]"])：要求 "Chunk[c1]" 已被接受
+//  1. OpChunk (name "c1")：发射 "Chunk[c1]" 信号
+//  2. OpSignalGate (required_signals: ["Chunk[c1]"])：要求 "Chunk[c1]" 已被接受
 //
 // 修复前：EmitSignal == nil，ChunkHandler 不发射信号，SignalGate 看不到信号，
-//         返回 (nil, nil)，最终 output == ""
+//
+//	返回 (nil, nil)，最终 output == ""
+//
 // 修复后：EmitSignal != nil，ChunkHandler 发射并接受信号，SignalGate 看到信号已接受，
-//         透传 input，最终 output == "input_data"
+//
+//	透传 input，最终 output == "input_data"
 func TestRun_EmitSignalNotNil(t *testing.T) {
 	f := NewTriggerFlow[string, string, string]()
 	f.AddOperator(&Operator{ID: "op-1", Kind: OpChunk, Name: "c1"})

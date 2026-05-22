@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -19,7 +39,7 @@ import (
 // 字段说明：
 //   - ParentID:    父流执行标识（通常为父 Operator.ID 或父 ExecutionID）
 //   - ChildFlow:   子流引用，类型为 any 以避免 JSON 序列化时的循环引用。
-//                  运行时可断言为 ChildFlow 接口使用。
+//     运行时可断言为 ChildFlow 接口使用。
 //   - State:       子流自定义状态（可变，per-frame）
 //   - RuntimeData: 创建帧时的 TriggerFlowRuntimeData 快照
 //   - FlowData:    创建帧时的 FlowData 快照
@@ -28,15 +48,15 @@ import (
 //   - Result:      子流执行结果
 //   - Error:       子流执行错误（若有）
 type SubFlowFrame struct {
-	ParentID    string                 `json:"parent_id" yaml:"parent_id"`
-	ChildFlow   any                    `json:"-" yaml:"-"` // *TriggerFlow 或 ChildFlow，避免序列化
-	State       map[string]any         `json:"state,omitempty" yaml:"state,omitempty"`
+	ParentID    string                  `json:"parent_id" yaml:"parent_id"`
+	ChildFlow   any                     `json:"-" yaml:"-"` // *TriggerFlow 或 ChildFlow，避免序列化
+	State       map[string]any          `json:"state,omitempty" yaml:"state,omitempty"`
 	RuntimeData *TriggerFlowRuntimeData `json:"runtime_data,omitempty" yaml:"runtime_data,omitempty"`
-	FlowData    map[string]any         `json:"flow_data,omitempty" yaml:"flow_data,omitempty"`
-	CreatedAt   time.Time              `json:"created_at" yaml:"created_at"`
-	CompletedAt *time.Time             `json:"completed_at,omitempty" yaml:"completed_at,omitempty"`
-	Result      any                    `json:"result,omitempty" yaml:"result,omitempty"`
-	Error       string                 `json:"error,omitempty" yaml:"error,omitempty"`
+	FlowData    map[string]any          `json:"flow_data,omitempty" yaml:"flow_data,omitempty"`
+	CreatedAt   time.Time               `json:"created_at" yaml:"created_at"`
+	CompletedAt *time.Time              `json:"completed_at,omitempty" yaml:"completed_at,omitempty"`
+	Result      any                     `json:"result,omitempty" yaml:"result,omitempty"`
+	Error       string                  `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 // IsCompleted 返回 frame 是否已完成（无论成功或失败）。
@@ -62,13 +82,13 @@ func (f *SubFlowFrame) DeepCopy() *SubFlowFrame {
 		return nil
 	}
 	cp := &SubFlowFrame{
-		ParentID:    f.ParentID,
-		ChildFlow:   f.ChildFlow, // 通常是 *TriggerFlow，按引用共享（运行时执行用，不参与持久化）
-		State:       deepCopyStringAnyMap(f.State),
-		FlowData:    deepCopyStringAnyMap(f.FlowData),
-		CreatedAt:   f.CreatedAt,
-		Result:      f.Result,
-		Error:       f.Error,
+		ParentID:  f.ParentID,
+		ChildFlow: f.ChildFlow, // 通常是 *TriggerFlow，按引用共享（运行时执行用，不参与持久化）
+		State:     deepCopyStringAnyMap(f.State),
+		FlowData:  deepCopyStringAnyMap(f.FlowData),
+		CreatedAt: f.CreatedAt,
+		Result:    f.Result,
+		Error:     f.Error,
 	}
 	if f.RuntimeData != nil {
 		cp.RuntimeData = &TriggerFlowRuntimeData{
@@ -442,11 +462,11 @@ func executeSubFlow(oc *OperatorContext) (any, error) {
 	// 创建 frame
 	frameID := generateSubFlowFrameID(oc)
 	frame := &SubFlowFrame{
-		ParentID:    oc.Operator.ID,
-		ChildFlow:   childFlow,
-		State:       make(map[string]any),
-		FlowData:    make(map[string]any),
-		CreatedAt:   time.Now(),
+		ParentID:  oc.Operator.ID,
+		ChildFlow: childFlow,
+		State:     make(map[string]any),
+		FlowData:  make(map[string]any),
+		CreatedAt: time.Now(),
 	}
 
 	// 注册 frame

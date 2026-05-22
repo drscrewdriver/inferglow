@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -11,11 +31,16 @@ import (
 type ExecutionStatus string
 
 const (
-	StatusCreated   ExecutionStatus = "created"
-	StatusRunning   ExecutionStatus = "running"
+	// StatusCreated indicates a flow execution has been created but not yet started.
+	StatusCreated ExecutionStatus = "created"
+	// StatusRunning indicates a flow execution is currently running.
+	StatusRunning ExecutionStatus = "running"
+	// StatusCompleted indicates a flow execution finished successfully.
 	StatusCompleted ExecutionStatus = "completed"
-	StatusFailed    ExecutionStatus = "failed"
-	StatusPaused    ExecutionStatus = "paused"
+	// StatusFailed indicates a flow execution terminated with an error.
+	StatusFailed ExecutionStatus = "failed"
+	// StatusPaused indicates a flow execution is paused and may be resumed.
+	StatusPaused ExecutionStatus = "paused"
 )
 
 // StepLogEntry records execution details for a single step

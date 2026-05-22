@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -12,16 +32,19 @@ import (
 type SignalType string
 
 const (
-	SignalEvent       SignalType = "event"
+	// SignalEvent represents an event-driven signal trigger.
+	SignalEvent SignalType = "event"
+	// SignalRuntimeData represents a signal carrying runtime-generated data.
 	SignalRuntimeData SignalType = "runtime_data"
-	SignalFlowData    SignalType = "flow_data"
+	// SignalFlowData represents a signal carrying flow-produced data.
+	SignalFlowData SignalType = "flow_data"
 )
 
 // Signal 信号，是 SignalNet 路由的基本单元。
 type Signal struct {
 	ID           string
-	TriggerEvent string         // 如 "START", "Chunk[my_handler]-abc123"
-	TriggerType  SignalType     // "event" | "runtime_data" | "flow_data"
+	TriggerEvent string     // 如 "START", "Chunk[my_handler]-abc123"
+	TriggerType  SignalType // "event" | "runtime_data" | "flow_data"
 	Value        any
 	Meta         map[string]any
 }
@@ -36,9 +59,9 @@ type TriggerFlowRuntimeData struct {
 	// 以下字段用于将外层 context/SignalNet/EmitSignal 透传给 wrapOperatorHandlerAsHandler
 	// 包装的 OperatorHandler。零值（nil）时包装器回退到 context.Background()。
 	// 这些字段不参与 JSON 序列化（runtime-only）。
-	Ctx        context.Context  `json:"-" yaml:"-"`
-	SignalNet  *SignalNet       `json:"-" yaml:"-"`
-	EmitSignal func(Signal)     `json:"-" yaml:"-"`
+	Ctx        context.Context `json:"-" yaml:"-"`
+	SignalNet  *SignalNet      `json:"-" yaml:"-"`
+	EmitSignal func(Signal)    `json:"-" yaml:"-"`
 }
 
 // Handler 信号处理函数。

@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import "sync"
@@ -20,7 +40,21 @@ type Flow struct {
 	edges     []Edge
 	branches  []Branch
 	startStep *Step
+
+	// Checkpoint 持久化相关配置。通过 FlowOption（如 WithAutoCheckpoint /
+	// WithCheckPointID / WithSerializer 等）在构建期设置。零值表示不启用
+	// checkpoint。这些字段在构建后视为只读，运行期不会被并发修改。
+	autoCheckpoint  bool
+	checkpointStore CheckpointStore
+	serializer      Serializer
+	checkPointID    string
+	writeToID       string
+	forceNewRun     bool
+	stateModifier   func(*ExecutionSnapshot) *ExecutionSnapshot
 }
+
+// FlowOption configures a Flow during construction via FlowBuilder.WithOptions.
+type FlowOption func(*Flow) //nolint:revive
 
 // Branch defines an optional conditional branch in a flow
 type Branch struct {
@@ -31,7 +65,7 @@ type Branch struct {
 }
 
 // FlowBuilder builds Flow instances with chainable API
-type FlowBuilder struct {
+type FlowBuilder struct { //nolint:revive
 	flow     *Flow
 	lastStep *Step
 }
@@ -94,6 +128,20 @@ func (fb *FlowBuilder) If(cond func(any) bool, trueStep *Step, falseStep *Step) 
 	})
 	// Keep lastStep pointing to trueStep so subsequent .To() chains from there
 	fb.lastStep = trueStep
+	return fb
+}
+
+// WithOptions applies the given FlowOptions to the underlying Flow and returns
+// the builder for chaining. Options are applied in order. Typical use:
+//
+//	NewFlow().AddStep(a).To(b).WithOptions(WithAutoCheckpoint(store)).Build()
+//
+// Options may be applied before or after AddStep/To/If since they only touch
+// checkpoint-related fields, never the step graph.
+func (fb *FlowBuilder) WithOptions(opts ...FlowOption) *FlowBuilder {
+	for _, opt := range opts {
+		opt(fb.flow)
+	}
 	return fb
 }
 

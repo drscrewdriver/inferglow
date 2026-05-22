@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package flow
 
 import (
@@ -511,9 +531,9 @@ func TestTriggerFlowBlueprintNilSafe(t *testing.T) {
 	if _, ok := bp.GetHandler(OpChunk, "event"); ok {
 		t.Error("nil GetHandler should return false")
 	}
-	bp.AddOperator(nil)        // 不应 panic
-	bp.SetDefinition(nil)      // 不应 panic
-	_ = bp.ChunkRegistry()     // 不应 panic
+	bp.AddOperator(nil)    // 不应 panic
+	bp.SetDefinition(nil)  // 不应 panic
+	_ = bp.ChunkRegistry() // 不应 panic
 }
 
 func TestTriggerFlowChunkNilSafe(t *testing.T) {
