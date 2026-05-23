@@ -1,3 +1,23 @@
+// Copyright 2026 InferGlow Authors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 package agent
 
 import (
@@ -34,18 +54,40 @@ type Engine struct {
 	// detect when the tool set has changed and invalidate prefix caches.
 	// Populated lazily by buildToolDefinitions.
 	toolDefsHash string
+
+	// turnLoop tracks the PLAN → EXECUTE phase and supports preemption of
+	// an in-flight turn. Always initialized by the constructors; nil when
+	// an Engine is constructed via a struct literal without fields (e.g.
+	// in legacy tests), in which case all turn-loop integration is skipped.
+	turnLoop *TurnLoop
+	// cancelManager coordinates cancel requests with executeLoop safe-points.
+	// Always initialized by the constructors; nil when an Engine is
+	// constructed via a struct literal without fields, in which case all
+	// cancel checks are skipped.
+	cancelManager *CancelManager
+}
+
+// newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
+// by every constructor so the two fields stay consistent.
+func newTurnLoopAndCancel() (*TurnLoop, *CancelManager) {
+	tl := NewTurnLoop()
+	return tl, NewCancelManager(tl)
 }
 
 // NewEngine creates an Engine with the given components. The returned Engine
 // has a NoOpHook (zero-overhead) and no LoopGuard, matching the pre-audit
-// behavior exactly.
+// behavior exactly. A TurnLoop and CancelManager are initialized so the
+// engine is ready to accept cancel requests.
 func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester) *Engine {
+	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
-		session:   sess,
-		actionExt: actExt,
-		modelReq:  mr,
-		auditHook: &audit.NoOpHook{},
-		loopGuard: nil,
+		session:       sess,
+		actionExt:     actExt,
+		modelReq:      mr,
+		auditHook:     &audit.NoOpHook{},
+		loopGuard:     nil,
+		turnLoop:      tl,
+		cancelManager: cm,
 	}
 }
 
@@ -55,24 +97,30 @@ func NewEngineWithAudit(sess *SessionExtension, actExt *ActionExtension, mr mode
 	if hook == nil {
 		hook = &audit.NoOpHook{}
 	}
+	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
-		session:   sess,
-		actionExt: actExt,
-		modelReq:  mr,
-		auditHook: hook,
-		loopGuard: nil,
+		session:       sess,
+		actionExt:     actExt,
+		modelReq:      mr,
+		auditHook:     hook,
+		loopGuard:     nil,
+		turnLoop:      tl,
+		cancelManager: cm,
 	}
 }
 
 // NewEngineWithLoopGuard creates an Engine that consults guard before each
 // LLM call. The audit hook defaults to NoOpHook.
 func NewEngineWithLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester, guard *LoopGuard) *Engine {
+	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
-		session:   sess,
-		actionExt: actExt,
-		modelReq:  mr,
-		auditHook: &audit.NoOpHook{},
-		loopGuard: guard,
+		session:       sess,
+		actionExt:     actExt,
+		modelReq:      mr,
+		auditHook:     &audit.NoOpHook{},
+		loopGuard:     guard,
+		turnLoop:      tl,
+		cancelManager: cm,
 	}
 }
 
@@ -83,13 +131,23 @@ func NewEngineWithAuditAndLoopGuard(sess *SessionExtension, actExt *ActionExtens
 	if hook == nil {
 		hook = &audit.NoOpHook{}
 	}
+	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
-		session:   sess,
-		actionExt: actExt,
-		modelReq:  mr,
-		auditHook: hook,
-		loopGuard: guard,
+		session:       sess,
+		actionExt:     actExt,
+		modelReq:      mr,
+		auditHook:     hook,
+		loopGuard:     guard,
+		turnLoop:      tl,
+		cancelManager: cm,
 	}
+}
+
+// CancelManager returns the engine's CancelManager, or nil if the Engine was
+// constructed without one (e.g. via a struct literal). Callers use it to
+// request cancellation of an in-flight executeLoop run.
+func (e *Engine) CancelManager() *CancelManager {
+	return e.cancelManager
 }
 
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
@@ -97,6 +155,18 @@ func NewEngineWithAuditAndLoopGuard(sess *SessionExtension, actExt *ActionExtens
 func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (*actionruntime.Decision, error) {
 	// Add user message to session
 	e.session.AddUserMessage(userMessage)
+
+	// Ensure the TurnLoop is left in the idle phase no matter how the loop
+	// exits (normal return, error, preempt, or cancel). Preempt already
+	// transitions to idle, so the defer is a no-op in that case. Engines
+	// constructed without a TurnLoop (legacy struct literals) skip this.
+	if e.turnLoop != nil {
+		defer func() {
+			if e.turnLoop.Phase() != TurnPhaseIdle {
+				e.turnLoop.EnterIdle()
+			}
+		}()
+	}
 
 	runStart := time.Now()
 	var totalTokens int
@@ -132,6 +202,27 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 
+		// Point 1: Check for a pending immediate cancel at loop start
+		// (before entering planning). A safe-point cancel that has been
+		// escalated to immediate by CheckTimeoutEscalation also fires here.
+		// CancelImmediate matches every safe-point, so CheckCancel returns
+		// true for any active immediate request.
+		if e.cancelManager != nil {
+			e.cancelManager.CheckTimeoutEscalation()
+			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelImmediate) {
+				e.cancelManager.CompleteCancel(nil)
+				return nil, fmt.Errorf("agent cancelled")
+			}
+		}
+
+		// Point 2: enter the planning phase and obtain the preempt channel.
+		// preemptCh is nil when there is no TurnLoop; selecting on a nil
+		// channel blocks forever, so the streamLoop case is inert.
+		var preemptCh chan struct{}
+		if e.turnLoop != nil {
+			preemptCh = e.turnLoop.EnterPlanning()
+		}
+
 		// Build ModelRequest
 		tools := e.buildToolDefinitions()
 		req := &model.ModelRequest{
@@ -150,7 +241,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"name": map[string]any{"type": "string"},
+								"name":   map[string]any{"type": "string"},
 								"params": map[string]any{"type": "object"},
 							},
 						},
@@ -206,6 +297,20 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			case <-timeoutCtx.Done():
 				cancelTimeout()
 				return nil, timeoutCtx.Err()
+			case <-preemptCh:
+				// Point 3: preempted (CancelImmediate or timeout escalation).
+				// Complete any pending cancel so its handle unblocks, then
+				// surface the preempt as an error. CompleteCancel preserves
+				// an ErrCancelTimeout already set by CheckTimeoutEscalation.
+				cancelTimeout()
+				if e.cancelManager != nil && e.cancelManager.HasPendingCancel() {
+					e.cancelManager.CompleteCancel(nil)
+				}
+				reason := ""
+				if e.turnLoop != nil {
+					reason = e.turnLoop.PreemptReason()
+				}
+				return nil, fmt.Errorf("agent preempted: %s", reason)
 			}
 		}
 		cancelTimeout()
@@ -258,6 +363,25 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			return decision, nil
 		}
 
+		// Point 4: CancelAfterChatModel safe-point. The LLM call has finished
+		// and the decision is parsed; honor a pending safe-point cancel before
+		// executing any tools. CancelImmediate also matches here. The current
+		// decision is returned so the caller sees the model's output.
+		if e.cancelManager != nil {
+			e.cancelManager.CheckTimeoutEscalation()
+			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelAfterChatModel) {
+				e.cancelManager.CompleteCancel(nil)
+				return decision, nil
+			}
+		}
+
+		// Point 5: enter the active phase (tool execution). preemptCh is
+		// reassigned for state-tracking; tool execution is synchronous so it
+		// is not selected on here.
+		if e.turnLoop != nil {
+			preemptCh = e.turnLoop.EnterActive()
+		}
+
 		// Execute actions. We always use NewActionDispatcherWithAudit so the
 		// per-action audit entries flow through the same hook as decisions.
 		// With a NoOpHook or nil hook this is zero overhead.
@@ -269,6 +393,24 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if i < len(results) {
 				e.session.AddActionResult(call.Name, results[i])
 			}
+		}
+
+		// Point 6: CancelAfterToolCalls safe-point. The tool batch has
+		// completed and results are in the session; honor a pending
+		// safe-point cancel before the next iteration. CancelImmediate also
+		// matches here.
+		if e.cancelManager != nil {
+			e.cancelManager.CheckTimeoutEscalation()
+			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelAfterToolCalls) {
+				e.cancelManager.CompleteCancel(nil)
+				return nil, fmt.Errorf("agent cancelled after tool calls")
+			}
+		}
+
+		// Point 7: return to idle at the end of the round. The defer at the
+		// top of executeLoop also handles this for early-return paths.
+		if e.turnLoop != nil {
+			e.turnLoop.EnterIdle()
 		}
 
 		round++
