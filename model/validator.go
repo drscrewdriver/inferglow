@@ -22,6 +22,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -188,5 +189,60 @@ func (v *OutputValidator) validate(response *ModelResponse) error {
 		}
 	}
 
+	// L4: JSON structure validation (only when Properties is non-empty)
+	if len(v.Schema.Properties) > 0 && response.Content != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(response.Content), &parsed); err != nil {
+			return fmt.Errorf("L4 validation: content is not valid JSON: %w", err)
+		}
+		// Check Required field presence
+		for _, field := range v.Schema.Required {
+			if _, ok := parsed[field]; !ok {
+				return fmt.Errorf("L4 validation: missing required field %q in JSON output", field)
+			}
+		}
+		// Check field types (loose mode)
+		for name, propDef := range v.Schema.Properties {
+			if val, ok := parsed[name]; ok {
+				if err := checkFieldType(name, val, propDef); err != nil {
+					return fmt.Errorf("L4 validation: %w", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkFieldType validates that a JSON value matches the expected type
+// defined in the schema property definition.
+func checkFieldType(name string, value any, propDef any) error {
+	def, ok := propDef.(map[string]any)
+	if !ok {
+		return nil
+	}
+	expectedType, _ := def["type"].(string)
+	switch expectedType {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("field %q: expected string, got %T", name, value)
+		}
+	case "integer", "number":
+		if _, ok := value.(float64); !ok {
+			return fmt.Errorf("field %q: expected number, got %T", name, value)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("field %q: expected boolean, got %T", name, value)
+		}
+	case "object":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("field %q: expected object, got %T", name, value)
+		}
+	case "array":
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("field %q: expected array, got %T", name, value)
+		}
+	}
 	return nil
 }

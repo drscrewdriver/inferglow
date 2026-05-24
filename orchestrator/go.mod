@@ -5,8 +5,9 @@ go 1.25.0
 require (
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/audit v0.0.0
+	github.com/inferglow/flow v0.0.0-00010101000000-000000000000
 	github.com/inferglow/model v0.0.0
-	github.com/inferglow/security v0.0.0
+	github.com/inferglow/observability v0.0.0
 	github.com/inferglow/session v0.0.0
 )
 
@@ -23,6 +24,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
+	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc3 // indirect
@@ -46,8 +48,12 @@ replace github.com/inferglow/audit => ../audit
 
 replace github.com/inferglow/model => ../model
 
+replace github.com/inferglow/observability => ../observability
+
 replace github.com/inferglow/sandbox => ../sandbox
 
 replace github.com/inferglow/session => ../session
 
-replace github.com/inferglow/security => ../security
+replace github.com/inferglow/flow => ../flow
+
+replace github.com/inferglow/schema => ../schema

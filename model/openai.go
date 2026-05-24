@@ -84,6 +84,14 @@ type OpenAICompatibleProvider struct {
 	// 并在 ModelResponse 中设置 ReasoningTruncated=true。G1-05。
 	// 注意：token 数按 1 token ≈ 4 bytes 的粗略估算，未接入精确 tokenizer。
 	MaxReasoningTokens int
+	// FullURL overrides BaseURL + defaultPath ("/chat/completions") when
+	// non-empty. Spec: model-parity Phase 1 — full_url 覆盖.
+	FullURL string
+	// ContentMapping, when non-nil, lets processOpenAILine extract reasoning
+	// and delta from non-standard SSE field paths via ExtractByPath. When nil,
+	// the provider falls back to its struct-based parsing (legacy behavior).
+	// Spec: model-parity Phase 3 — content_mapping 字段路径自定义.
+	ContentMapping ContentMapping
 }
 
 // Name 返回 Provider 名称
@@ -235,7 +243,34 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 		for k, v := range req.Options {
 			opts[k] = v
 		}
-		opts["response_format"] = map[string]any{"type": "json_object"}
+		// L1/L2: When Output.Properties is non-empty and caller hasn't explicitly
+		// forced json_object mode, emit full json_schema response_format.
+		// vLLM/SGLang XGrammar consumes this for token-level constrained decoding.
+		// OpenAI/DeepSeek use server-side structured output.
+		//
+		// The json_schema upgrade is gated behind an explicit force_json=true so
+		// legacy callers that set only req.Output (without force_json) keep
+		// receiving {"type":"json_object"} — preserving backward compatibility.
+		forceJSONExplicit := false
+		if req.Options != nil {
+			if b, ok := req.Options["force_json"].(bool); ok && b {
+				forceJSONExplicit = true
+			}
+		}
+		if forceJSONExplicit && req.Output != nil && len(req.Output.Properties) > 0 && !forceJSONObject(req) {
+			jsonSchema := BuildJSONSchemaFromOutput(req.Output)
+			opts["response_format"] = map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   "structured_output",
+					"strict": true,
+					"schema": jsonSchema,
+				},
+			}
+		} else {
+			// Degradation: no specific schema or forced json_object mode
+			opts["response_format"] = map[string]any{"type": "json_object"}
+		}
 	}
 
 	return &RequestData{
@@ -306,7 +341,11 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 
 	client := p.effectiveHTTPClient()
 
-	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
+	// Spec: model-parity Phase 1 — FullURL overrides BaseURL + defaultPath.
+	// When FullURL is empty, ResolveURL degrades to the legacy
+	// TrimRight(baseURL,"/") + "/chat/completions" behavior (preserved for
+	// backward compatibility — all existing tests rely on this).
+	url := ResolveURL(baseURL, "/chat/completions", p.FullURL)
 
 	// 构建请求体
 	reqBody := map[string]any{
@@ -469,6 +508,50 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 		usage = chunk.Usage
 	}
 
+	// Spec: model-parity Phase 3 — when ContentMapping is set, extract
+	// reasoning/delta from non-standard SSE field paths via ExtractByPath.
+	// This bypasses the struct-based delta parsing below so vendors that
+	// put reasoning under data.thinking (or any non-standard location) work
+	// without forking the provider. Falls back to legacy parsing when nil.
+	if p.ContentMapping != nil {
+		var raw map[string]any
+		// Re-unmarshal into a generic map for path extraction. The cost is
+		// acceptable: ContentMapping is an opt-in feature for non-standard
+		// vendors, not the default OpenAI path.
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			return usage
+		}
+		result := &StreamChunk{Usage: usage}
+		if path, ok := p.ContentMapping["delta"]; ok && path != "" {
+			if v, ok := ExtractByPath(raw, path); ok {
+				if s, ok := v.(string); ok {
+					result.Delta = s
+				}
+			}
+		}
+		if path, ok := p.ContentMapping["reasoning"]; ok && path != "" {
+			if v, ok := ExtractByPath(raw, path); ok {
+				if s, ok := v.(string); ok {
+					result.Reasoning = s
+				}
+			}
+		}
+		// Finish detection: still consult the struct's Choices[0].FinishReason
+		// since that's the OpenAI protocol signal (ContentMapping doesn't
+		// redefine the finish marker).
+		if len(chunk.Choices) > 0 {
+			c := chunk.Choices[0]
+			if c.FinishReason == "tool_calls" {
+				// Tool calls not extracted via ContentMapping; clear and skip.
+				result.IsDone = true
+			} else if c.FinishReason != "" && c.FinishReason != "length" {
+				result.IsDone = true
+			}
+		}
+		emit(result)
+		return usage
+	}
+
 	// M-MEDIUM-4: empty-choices chunks carry usage or keepalive data, not a
 	// finish signal. Update usage but do not emit an IsDone chunk.
 	if len(chunk.Choices) == 0 {
@@ -574,6 +657,13 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 		reasoningBytes := 0
 		reasoningTruncated := false
 
+		// P1: streaming <think> tag state machine. Providers that embed
+		// reasoning inside the content delta (rather than a separate
+		// reasoning field) are normalized here so that downstream
+		// consumers receive ReasoningDelta / EventDelta events with the
+		// think tags already stripped.
+		var normalizer LeadingThinkNormalizer
+
 		for chunk := range stream {
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
@@ -585,6 +675,19 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 						Payload:   meta,
 					}
 					continue
+				}
+				// P1: flush any content buffered inside the normalizer
+				// (e.g. trailing answer text glued to a </think> close tag)
+				// before assembling the final ModelResponse.
+				if et, payload := normalizer.FeedDelta(""); payload != "" {
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						fullReasoning.WriteString(payload)
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					}
 				}
 				resp := &ModelResponse{
 					Content:            fullContent.String(),
@@ -611,10 +714,42 @@ func (p *OpenAICompatibleProvider) BroadcastResponse(ctx context.Context, stream
 			}
 
 			if chunk.Delta != "" {
-				fullContent.WriteString(chunk.Delta)
-				events <- &ResultEvent{
-					EventType: EventDelta,
-					Payload:   chunk.Delta,
+				if chunk.Reasoning != "" {
+					// P1: reasoning field already separated by the
+					// provider — do NOT route through the normalizer
+					// (avoids double processing when <think> tags are
+					// present in content alongside a dedicated reasoning
+					// field).
+					fullContent.WriteString(chunk.Delta)
+					events <- &ResultEvent{EventType: EventDelta, Payload: chunk.Delta}
+				} else {
+					et, payload := normalizer.FeedDelta(chunk.Delta)
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						if reasoningBudgetBytes > 0 && !reasoningTruncated {
+							chunkBytes := len(payload)
+							if reasoningBytes+chunkBytes > reasoningBudgetBytes {
+								remaining := reasoningBudgetBytes - reasoningBytes
+								if remaining > 0 {
+									truncated := truncateRunes(payload, remaining)
+									fullReasoning.WriteString(truncated)
+									reasoningBytes += len(truncated)
+								}
+								reasoningTruncated = true
+							} else {
+								fullReasoning.WriteString(payload)
+								reasoningBytes += len(payload)
+							}
+						} else if reasoningBudgetBytes == 0 {
+							fullReasoning.WriteString(payload)
+						}
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					case "reasoning_done":
+						events <- &ResultEvent{EventType: ReasoningDone, Payload: ""}
+					}
 				}
 			}
 
@@ -774,43 +909,4 @@ func toStreamChunk(chunk openAIChunk, usage *UsageInfo) *StreamChunk {
 	return result
 }
 
-// hasThinkingTags reports whether content contains a <think>...</think> block.
-// Used by BroadcastResponse to detect reasoning wrapped in content tags.
-func hasThinkingTags(content string) bool {
-	return strings.Contains(content, "<think>") && strings.Contains(content, "</think>")
-}
 
-// normalizeThinkingTags extracts <think>...</think> content from the given
-// string. Returns (reasoning, cleaned) where reasoning is the concatenated
-// content inside think tags and cleaned is the original content with think
-// tags removed and leading whitespace trimmed.
-//
-// If content has no think tags, returns ("", content) unchanged.
-// Supports multiple <think>...</think> blocks: their contents are joined.
-func normalizeThinkingTags(content string) (reasoning string, cleaned string) {
-	if !hasThinkingTags(content) {
-		return "", content
-	}
-	var reasoningParts []string
-	cleaned = content
-	for {
-		startIdx := strings.Index(cleaned, "<think>")
-		if startIdx == -1 {
-			break
-		}
-		endIdx := strings.Index(cleaned[startIdx:], "</think>")
-		if endIdx == -1 {
-			break
-		}
-		endIdx += startIdx // 相对偏移转绝对
-		inner := cleaned[startIdx+len("<think>") : endIdx]
-		if inner != "" {
-			reasoningParts = append(reasoningParts, inner)
-		}
-		// 移除 <think>...</think> 块
-		cleaned = cleaned[:startIdx] + cleaned[endIdx+len("</think>"):]
-	}
-	cleaned = strings.TrimSpace(cleaned)
-	reasoning = strings.Join(reasoningParts, "\n")
-	return reasoning, cleaned
-}

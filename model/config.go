@@ -177,6 +177,14 @@ type ProviderConfig struct {
 	Model      string
 	HTTPClient *http.Client
 	Settings   map[string]any
+	// FullURL, when non-empty, overrides BaseURL+defaultPath concatenation
+	// for the Provider's RequestModel URL. Loaded from `<prefix>.full_url`.
+	// Spec: model-parity Phase 1 — full_url 覆盖.
+	FullURL string
+	// ContentMap, when non-nil, lets OpenAI/Ollama Providers extract
+	// reasoning/delta from non-standard SSE field paths. Loaded from
+	// `<prefix>.content_mapping`. Spec: model-parity Phase 3.
+	ContentMap ContentMapping
 }
 
 // ErrMissingRequiredConfig 必填配置缺失错误
@@ -199,6 +207,12 @@ var DEFAULT_SETTINGS = map[string]map[string]any{
 		"model":       "gpt-4",
 		"temperature": 0.7,
 		"max_tokens":  4096,
+	},
+	// === OpenAI Responses API ===
+	// Spec: model-parity Phase 2 — recommended endpoint for o-series models.
+	"openai_responses": {
+		"model":    "gpt-4o",
+		"base_url": "https://api.openai.com/v1",
 	},
 	"anthropic": {
 		"model":      "claude-3-5-sonnet-20241022",
@@ -373,6 +387,32 @@ func LoadProviderConfig(cp ConfigProvider, prefix string) (*ProviderConfig, erro
 	if v, ok := cp.Get(prefix + ".model"); ok {
 		if s, ok := v.(string); ok {
 			cfg.Model = s
+		}
+	}
+
+	// Spec: model-parity Phase 1 — read `<prefix>.full_url` override.
+	// Empty string (default) preserves the legacy BaseURL+defaultPath behavior.
+	if v, ok := cp.Get(prefix + ".full_url"); ok {
+		if s, ok := v.(string); ok {
+			cfg.FullURL = s
+		}
+	}
+
+	// Spec: model-parity Phase 3 — read `<prefix>.content_mapping` subtree.
+	// Each value must be a string path; non-string entries are skipped.
+	// Empty/missing subtree leaves ContentMap nil so providers fall back to
+	// their struct-based SSE parsing (legacy behavior).
+	if v, ok := cp.Get(prefix + ".content_mapping"); ok {
+		if m, ok := v.(map[string]any); ok && len(m) > 0 {
+			cm := make(ContentMapping, len(m))
+			for k, val := range m {
+				if s, ok := val.(string); ok {
+					cm[k] = s
+				}
+			}
+			if len(cm) > 0 {
+				cfg.ContentMap = cm
+			}
 		}
 	}
 

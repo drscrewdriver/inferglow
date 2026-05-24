@@ -38,10 +38,12 @@ func NewOpenAIProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, 
 		return nil, fmt.Errorf("load openai provider config: %w", err)
 	}
 	return &OpenAICompatibleProvider{
-		BaseURL:    cfg.BaseURL,
-		APIKey:     cfg.APIKey,
-		Model:      cfg.Model,
-		HTTPClient: cfg.HTTPClient,
+		BaseURL:        cfg.BaseURL,
+		APIKey:         cfg.APIKey,
+		Model:          cfg.Model,
+		HTTPClient:     cfg.HTTPClient,
+		FullURL:        cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 	}, nil
 }
 
@@ -57,6 +59,7 @@ func NewAnthropicProviderFromConfig(cp ConfigProvider) (*AnthropicCompatibleProv
 		APIKey:     cfg.APIKey,
 		Model:      cfg.Model,
 		HTTPClient: cfg.HTTPClient,
+		FullURL:    cfg.FullURL,
 	}, nil
 }
 
@@ -74,6 +77,8 @@ func NewDeepSeekProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "deepseek",
 		RoleMapping:  developerToSystemRoleMapping,
 	}, nil
@@ -92,6 +97,8 @@ func NewQwenProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, er
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "qwen",
 		RoleMapping:  developerToSystemRoleMapping,
 	}, nil
@@ -110,6 +117,8 @@ func NewGLMProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, err
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "glm",
 		RoleMapping:  developerToSystemRoleMapping,
 	}, nil
@@ -128,6 +137,8 @@ func NewKimiProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, er
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "kimi",
 		RoleMapping:  developerToSystemRoleMapping,
 	}, nil
@@ -146,6 +157,8 @@ func NewStepFunProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider,
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "stepfun",
 	}, nil
 }
@@ -162,6 +175,7 @@ func NewStepFunAnthropicProviderFromConfig(cp ConfigProvider) (*AnthropicCompati
 		APIKey:     cfg.APIKey,
 		Model:      cfg.Model,
 		HTTPClient: cfg.HTTPClient,
+		FullURL:    cfg.FullURL,
 	}, nil
 }
 
@@ -178,6 +192,8 @@ func NewBaiduProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, e
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "baidu",
 	}, nil
 }
@@ -196,6 +212,8 @@ func NewSparkProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, e
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "spark",
 	}, nil
 }
@@ -213,6 +231,8 @@ func NewSenseNovaProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvide
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "sensenova",
 	}, nil
 }
@@ -229,6 +249,7 @@ func NewSenseNovaAnthropicProviderFromConfig(cp ConfigProvider) (*AnthropicCompa
 		APIKey:     cfg.APIKey,
 		Model:      cfg.Model,
 		HTTPClient: cfg.HTTPClient,
+		FullURL:    cfg.FullURL,
 	}, nil
 }
 
@@ -249,6 +270,8 @@ func NewMiMoProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, er
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "mimo",
 	}, nil
 }
@@ -265,6 +288,7 @@ func NewMiMoAnthropicProviderFromConfig(cp ConfigProvider) (*AnthropicCompatible
 		APIKey:     cfg.APIKey,
 		Model:      cfg.Model,
 		HTTPClient: cfg.HTTPClient,
+		FullURL:    cfg.FullURL,
 	}, nil
 }
 
@@ -283,6 +307,8 @@ func NewTencentProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider,
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "tencent",
 	}, nil
 }
@@ -302,6 +328,8 @@ func NewVolcengineProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvid
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "volcengine",
 	}, nil
 }
@@ -321,6 +349,8 @@ func NewZeroOneProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider,
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "zeroone",
 	}, nil
 }
@@ -340,6 +370,8 @@ func NewMiniMaxProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider,
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "minimax",
 	}, nil
 }
@@ -360,6 +392,28 @@ func NewSiliconFlowProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvi
 		APIKey:       cfg.APIKey,
 		Model:        cfg.Model,
 		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
 		ProviderName: "siliconflow",
+	}, nil
+}
+
+// === OpenAI Responses API ===
+
+// NewOpenAIResponsesProviderFromConfig 构造 OpenAIResponsesProvider。
+// 默认 base_url: https://api.openai.com/v1，默认 model: gpt-4o。
+// 对接 OpenAI Responses API (/responses 端点)，推荐用于 o-series 推理模型。
+// Spec: model-parity Phase 2, P0 — OpenAI Responses API Provider.
+func NewOpenAIResponsesProviderFromConfig(cp ConfigProvider, prefix string) (*OpenAIResponsesProvider, error) {
+	cfg, err := LoadProviderConfig(cp, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("load %s provider config: %w", prefix, err)
+	}
+	return &OpenAIResponsesProvider{
+		BaseURL:    cfg.BaseURL,
+		APIKey:     cfg.APIKey,
+		Model:      cfg.Model,
+		HTTPClient: cfg.HTTPClient,
+		FullURL:    cfg.FullURL,
 	}, nil
 }

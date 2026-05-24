@@ -38,6 +38,9 @@ type AnthropicCompatibleProvider struct {
 	APIKey     string
 	Model      string
 	HTTPClient *http.Client
+	// FullURL overrides BaseURL + defaultPath ("/v1/messages") when
+	// non-empty. Spec: model-parity Phase 1 — full_url 覆盖.
+	FullURL string
 }
 
 // Name 返回 Provider 名称
@@ -174,7 +177,10 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 
 	client := p.effectiveHTTPClient()
 
-	url := strings.TrimRight(baseURL, "/") + "/v1/messages"
+	// Spec: model-parity Phase 1 — FullURL overrides BaseURL + defaultPath.
+	// When FullURL is empty, ResolveURL degrades to the legacy
+	// TrimRight(baseURL,"/") + "/v1/messages" behavior.
+	url := ResolveURL(baseURL, "/v1/messages", p.FullURL)
 
 	// 构建请求体
 	reqBody := map[string]any{
@@ -419,6 +425,10 @@ func (p *AnthropicCompatibleProvider) BroadcastResponse(ctx context.Context, str
 		// the final ModelResponse (EventDone payload).
 		var lastUsage *UsageInfo
 
+		// P1: streaming <think> tag state machine for providers that
+		// embed reasoning inside text deltas.
+		var normalizer LeadingThinkNormalizer
+
 		for chunk := range stream {
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
@@ -431,12 +441,31 @@ func (p *AnthropicCompatibleProvider) BroadcastResponse(ctx context.Context, str
 					}
 					continue
 				}
+				// P1: flush any content buffered inside the normalizer
+				// before assembling the final ModelResponse.
+				if et, payload := normalizer.FeedDelta(""); payload != "" {
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						fullReasoning.WriteString(payload)
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					}
+				}
 				resp := &ModelResponse{
 					Content:   fullContent.String(),
 					Reasoning: fullReasoning.String(),
 				}
 				if lastUsage != nil {
 					resp.Usage = *lastUsage
+				}
+				// P1: defensive <think> tag normalization. Only triggers
+				// when reasoning is empty and content contains think tags.
+				if resp.Reasoning == "" && hasThinkingTags(resp.Content) {
+					reasoning, cleaned := normalizeThinkingTags(resp.Content)
+					resp.Reasoning = reasoning
+					resp.Content = cleaned
 				}
 				events <- &ResultEvent{
 					EventType: EventDone,
@@ -446,10 +475,23 @@ func (p *AnthropicCompatibleProvider) BroadcastResponse(ctx context.Context, str
 			}
 
 			if chunk.Delta != "" {
-				fullContent.WriteString(chunk.Delta)
-				events <- &ResultEvent{
-					EventType: EventDelta,
-					Payload:   chunk.Delta,
+				if chunk.Reasoning != "" {
+					// P1: reasoning field already separated — do NOT
+					// route through the normalizer.
+					fullContent.WriteString(chunk.Delta)
+					events <- &ResultEvent{EventType: EventDelta, Payload: chunk.Delta}
+				} else {
+					et, payload := normalizer.FeedDelta(chunk.Delta)
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						fullReasoning.WriteString(payload)
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					case "reasoning_done":
+						events <- &ResultEvent{EventType: ReasoningDone, Payload: ""}
+					}
 				}
 			}
 

@@ -38,6 +38,14 @@ type OllamaProvider struct {
 	APIKey     string // Ollama 不需要 API Key，保留字段以兼容接口
 	HTTPClient *http.Client
 	Model      string
+	// FullURL overrides BaseURL + defaultPath ("/api/chat") when non-empty.
+	// Spec: model-parity Phase 1 — full_url 覆盖.
+	FullURL string
+	// ContentMapping allows extracting delta/reasoning from non-standard
+	// JSON paths in Ollama-compatible SSE chunks. When nil, the default
+	// struct-based parsing (message.content / message.reasoning) is used.
+	// Spec: model-parity Phase 5 — content_mapping for Ollama.
+	ContentMapping ContentMapping
 }
 
 // NewOllamaProvider 创建默认 OllamaProvider
@@ -136,7 +144,10 @@ func (p *OllamaProvider) RequestModel(ctx context.Context, data *RequestData) (<
 	// of a bare &http.Client{} which has no timeout and can hang forever.
 	client := p.effectiveHTTPClient()
 
-	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
+	// Spec: model-parity Phase 1 — FullURL overrides BaseURL + defaultPath.
+	// When FullURL is empty, ResolveURL degrades to the legacy
+	// TrimRight(p.BaseURL,"/") + "/api/chat" behavior.
+	url := ResolveURL(p.BaseURL, "/api/chat", p.FullURL)
 
 	// 构建请求体
 	reqBody := map[string]any{
@@ -255,17 +266,32 @@ func (p *OllamaProvider) processOllamaLine(
 		return false
 	}
 
+	// P2: when ContentMapping is set, extract delta/reasoning from
+	// non-standard JSON paths via ExtractByPath. Fall back to struct
+	// parsing for usage and done fields.
+	if p.ContentMapping != nil {
+		return p.processOllamaLineWithMapping(line, usage, emit)
+	}
+
 	var chunk ollamaChunk
 	if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 		return false
 	}
 
-	// 提取内容
-	if chunk.Message != nil && chunk.Message.Content != "" {
-		emit(&StreamChunk{
-			Delta:  chunk.Message.Content,
-			IsDone: false,
-		})
+	// 提取内容与推理
+	if chunk.Message != nil && (chunk.Message.Content != "" || chunk.Message.Reasoning != "" || chunk.Message.ReasoningContent != "") {
+		sc := &StreamChunk{IsDone: false}
+		if chunk.Message.Content != "" {
+			sc.Delta = chunk.Message.Content
+		}
+		// P2: extract reasoning from message.reasoning or
+		// message.reasoning_content (vendor-dependent field name).
+		if chunk.Message.Reasoning != "" {
+			sc.Reasoning = chunk.Message.Reasoning
+		} else if chunk.Message.ReasoningContent != "" {
+			sc.Reasoning = chunk.Message.ReasoningContent
+		}
+		emit(sc)
 	}
 
 	// 更新 usage
@@ -288,6 +314,70 @@ func (p *OllamaProvider) processOllamaLine(
 	return false
 }
 
+// processOllamaLineWithMapping parses an Ollama SSE line using
+// ContentMapping paths to extract delta and reasoning from
+// non-standard JSON structures. Usage and done fields still use
+// the standard struct for compatibility.
+func (p *OllamaProvider) processOllamaLineWithMapping(
+	line string,
+	usage **UsageInfo,
+	emit func(*StreamChunk),
+) bool {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return false
+	}
+
+	sc := &StreamChunk{IsDone: false}
+
+	if deltaPath, ok := p.ContentMapping["delta"]; ok {
+		if v, found := ExtractByPath(raw, deltaPath); found {
+			if s, ok := v.(string); ok {
+				sc.Delta = s
+			}
+		}
+	} else {
+		// Default: message.content
+		if v, found := ExtractByPath(raw, "message.content"); found {
+			if s, ok := v.(string); ok {
+				sc.Delta = s
+			}
+		}
+	}
+
+	if reasoningPath, ok := p.ContentMapping["reasoning"]; ok {
+		if v, found := ExtractByPath(raw, reasoningPath); found {
+			if s, ok := v.(string); ok {
+				sc.Reasoning = s
+			}
+		}
+	}
+
+	if sc.Delta != "" || sc.Reasoning != "" {
+		emit(sc)
+	}
+
+	// 更新 usage (struct-based for compatibility)
+	var chunk ollamaChunk
+	_ = json.Unmarshal([]byte(line), &chunk)
+	if chunk.Usage != nil {
+		*usage = &UsageInfo{
+			PromptTokens:     chunk.Usage.PromptEvalCount,
+			CompletionTokens: chunk.Usage.EvalCount,
+			TotalTokens:      chunk.Usage.PromptEvalCount + chunk.Usage.EvalCount,
+		}
+	}
+
+	if chunk.Done {
+		emit(&StreamChunk{
+			IsDone: true,
+			Usage:  *usage,
+		})
+		return true
+	}
+	return false
+}
+
 // BroadcastResponse 将 SSE 流转换为 ResultEvent 流
 func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *StreamChunk) (<-chan *ResultEvent, error) {
 	events := make(chan *ResultEvent, 64)
@@ -295,11 +385,15 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 		defer close(events)
 
 		var fullContent strings.Builder
+		var fullReasoning strings.Builder
 		// BUG-NEW-1: track the last seen Usage so it can be propagated to the
 		// final ModelResponse (EventDone payload) — same pattern as OpenAI
 		// (openai.go) and Anthropic (anthropic.go) providers. Avoids nil
 		// dereference when the done chunk arrives without a Usage field.
 		var lastUsage *UsageInfo
+
+		// P2: streaming <think> tag state machine.
+		var normalizer LeadingThinkNormalizer
 
 		for chunk := range stream {
 			if chunk.Usage != nil {
@@ -313,11 +407,29 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 					}
 					continue
 				}
+				// P2: flush any content buffered inside the normalizer.
+				if et, payload := normalizer.FeedDelta(""); payload != "" {
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						fullReasoning.WriteString(payload)
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					}
+				}
 				resp := &ModelResponse{
-					Content: fullContent.String(),
+					Content:   fullContent.String(),
+					Reasoning: fullReasoning.String(),
 				}
 				if lastUsage != nil {
 					resp.Usage = *lastUsage
+				}
+				// P2: defensive <think> tag normalization fallback.
+				if resp.Reasoning == "" && hasThinkingTags(resp.Content) {
+					reasoning, cleaned := normalizeThinkingTags(resp.Content)
+					resp.Reasoning = reasoning
+					resp.Content = cleaned
 				}
 				events <- &ResultEvent{
 					EventType: EventDone,
@@ -327,10 +439,31 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 			}
 
 			if chunk.Delta != "" {
-				fullContent.WriteString(chunk.Delta)
+				if chunk.Reasoning != "" {
+					// P2: reasoning field already separated — do NOT
+					// route through the normalizer.
+					fullContent.WriteString(chunk.Delta)
+					events <- &ResultEvent{EventType: EventDelta, Payload: chunk.Delta}
+				} else {
+					et, payload := normalizer.FeedDelta(chunk.Delta)
+					switch et {
+					case "delta":
+						fullContent.WriteString(payload)
+						events <- &ResultEvent{EventType: EventDelta, Payload: payload}
+					case "reasoning_delta":
+						fullReasoning.WriteString(payload)
+						events <- &ResultEvent{EventType: ReasoningDelta, Payload: payload}
+					case "reasoning_done":
+						events <- &ResultEvent{EventType: ReasoningDone, Payload: ""}
+					}
+				}
+			}
+
+			if chunk.Reasoning != "" {
+				fullReasoning.WriteString(chunk.Reasoning)
 				events <- &ResultEvent{
-					EventType: EventDelta,
-					Payload:   chunk.Delta,
+					EventType: ReasoningDelta,
+					Payload:   chunk.Reasoning,
 				}
 			}
 
@@ -352,8 +485,10 @@ type ollamaChunk struct {
 	Model   string `json:"model"`
 	Done    bool   `json:"done"`
 	Message *struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role             string `json:"role"`
+		Content          string `json:"content"`
+		Reasoning        string `json:"reasoning"`
+		ReasoningContent string `json:"reasoning_content"`
 	} `json:"message"`
 	Usage *struct {
 		PromptEvalCount    int   `json:"prompt_eval_count"`

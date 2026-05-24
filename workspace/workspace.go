@@ -23,6 +23,8 @@
 //
 // Workspace 以一个根目录（rootDir）为沙箱边界，所有操作路径必须解析到 rootDir
 // 内部。通过 filepath.Clean + filepath.Join + 前缀校验三重防护阻止路径穿越攻击。
+//
+// 注意：血缘追踪（LineageStore）为独立可选组件，需调用方显式集成，不自动嵌入文件操作。
 package workspace
 
 import (

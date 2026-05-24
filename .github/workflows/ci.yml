@@ -9,8 +9,14 @@ on:
 
 jobs:
   test:
-    name: Test
+    name: Test ${{ matrix.tags == '' && '(default)' || matrix.tags }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tags: ["", "with_sandbox"]
+    env:
+      GO_TAGS: ${{ matrix.tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,14 +27,35 @@ jobs:
           go-version: '1.25'
 
       - name: Run go test (root module)
-        run: go test ./...
+        run: |
+          if [ -n "$GO_TAGS" ]; then
+            go test -tags "$GO_TAGS" ./...
+          else
+            go test ./...
+          fi
 
       - name: Run go test (submodules)
-        run: find . -mindepth 2 -name go.mod -execdir go test ./... \;
+        run: |
+          TAGS=""
+          if [ -n "$GO_TAGS" ]; then
+            TAGS="-tags $GO_TAGS"
+          fi
+          find . -mindepth 2 -name go.mod -execdir go test $TAGS ./... \;
+
+      - name: Dependency audit
+        run: |
+          go mod verify
+          find . -mindepth 2 -name go.mod -execdir go mod verify \;
 
   vet:
-    name: Vet
+    name: Vet ${{ matrix.tags == '' && '(default)' || matrix.tags }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tags: ["", "with_sandbox"]
+    env:
+      GO_TAGS: ${{ matrix.tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,10 +66,20 @@ jobs:
           go-version: '1.25'
 
       - name: Run go vet (root module)
-        run: go vet ./...
+        run: |
+          if [ -n "$GO_TAGS" ]; then
+            go vet -tags "$GO_TAGS" ./...
+          else
+            go vet ./...
+          fi
 
       - name: Run go vet (submodules)
-        run: find . -mindepth 2 -name go.mod -execdir go vet ./... \;
+        run: |
+          TAGS=""
+          if [ -n "$GO_TAGS" ]; then
+            TAGS="-tags $GO_TAGS"
+          fi
+          find . -mindepth 2 -name go.mod -execdir go vet $TAGS ./... \;
 
   lint:
     name: Lint

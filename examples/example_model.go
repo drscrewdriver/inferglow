@@ -203,5 +203,97 @@ func main() {
 	fmt.Println("        （此处仅展示配置，不实际调用 Validate，以避免发起真实网络请求。）")
 	fmt.Println()
 
+	// --- 示例 6: full_url 覆盖与 content_mapping 非标字段提取 ---
+	fmt.Println("=== Example 6: full_url 覆盖与 content_mapping ===")
+
+	// full_url: 完全覆盖 base_url + default_path 拼接
+	cpWithFullURL := &model.StaticConfigProvider{Values: map[string]any{
+		"custom": map[string]any{
+			"api_key":  "sk-demo",
+			"model":    "gpt-4",
+			"base_url": "https://api.openai.com/v1",
+			"full_url": "https://gateway.proxy.com/custom/llm/chat",
+		},
+	}}
+	customCfg, err := model.LoadProviderConfig(cpWithFullURL, "custom")
+	if err != nil {
+		fmt.Printf("  custom 配置加载失败: %v\n", err)
+	} else {
+		resolved := model.ResolveURL(customCfg.BaseURL, "/chat/completions", customCfg.FullURL)
+		fmt.Printf("  [full_url] base_url=%q + /chat/completions → 覆盖为 %q\n",
+			customCfg.BaseURL, resolved)
+	}
+
+	// content_mapping: 从非标 SSE JSON 路径提取 delta/reasoning
+	cpWithMapping := &model.StaticConfigProvider{Values: map[string]any{
+		"nonstandard": map[string]any{
+			"api_key": "sk-demo",
+			"model":   "custom-model",
+			"content_mapping": map[string]any{
+				"reasoning": "data.thinking",
+				"delta":     "message.content",
+			},
+		},
+	}}
+	mappingCfg, err := model.LoadProviderConfig(cpWithMapping, "nonstandard")
+	if err != nil {
+		fmt.Printf("  nonstandard 配置加载失败: %v\n", err)
+	} else {
+		fmt.Printf("  [content_mapping] reasoning=%q, delta=%q\n",
+			mappingCfg.ContentMap["reasoning"], mappingCfg.ContentMap["delta"])
+		// 演示 ExtractByPath 从非标 JSON 提取
+		rawData := map[string]any{
+			"data":    map[string]any{"thinking": "custom reasoning text"},
+			"message": map[string]any{"content": "answer text"},
+		}
+		if v, ok := model.ExtractByPath(rawData, "data.thinking"); ok {
+			fmt.Printf("  [ExtractByPath] data.thinking → %v\n", v)
+		}
+		if v, ok := model.ExtractByPath(rawData, "message.content"); ok {
+			fmt.Printf("  [ExtractByPath] message.content → %v\n", v)
+		}
+	}
+	fmt.Println()
+
+	// --- 示例 7: OpenAIResponsesProvider 构造 ---
+	fmt.Println("=== Example 7: OpenAIResponsesProvider 构造 ===")
+
+	cpResponses := &model.StaticConfigProvider{Values: map[string]any{
+		"openai_responses": map[string]any{
+			"api_key": "sk-demo",
+			"model":   "gpt-4o",
+		},
+	}}
+	responsesProvider, err := model.NewOpenAIResponsesProviderFromConfig(cpResponses)
+	if err != nil {
+		fmt.Printf("  OpenAIResponsesProvider 构造失败: %v\n", err)
+	} else {
+		fmt.Printf("  [Responses] Name=%s, Model=%s\n",
+			responsesProvider.Name(), responsesProvider.Model)
+		fmt.Println("  说明: Responses API 使用 /responses 端点，")
+		fmt.Println("        SSE 事件为 response.output_text.delta / response.reasoning_summary_text.delta")
+	}
+	fmt.Println()
+
+	// --- 示例 8: LeadingThinkNormalizer 流式 <think> 分离 ---
+	fmt.Println("=== Example 8: LeadingThinkNormalizer 流式 <think> 分离 ===")
+
+	var normalizer model.LeadingThinkNormalizer
+	fmt.Println("  模拟流式 chunk: <think>step1</think>answer")
+	et1, p1 := normalizer.FeedDelta("<think>step1")
+	fmt.Printf("    FeedDelta(\"<think>step1\") → eventType=%q, payload=%q\n", et1, p1)
+	et2, p2 := normalizer.FeedDelta("</think>answer")
+	fmt.Printf("    FeedDelta(\"</think>answer\") → eventType=%q, payload=%q\n", et2, p2)
+	et3, p3 := normalizer.FeedDelta("")
+	fmt.Printf("    FeedDelta(\"\") → eventType=%q, payload=%q\n", et3, p3)
+	fmt.Println("  结果: reasoning=\"step1\", answer=\"answer\"")
+
+	// 非流式 FeedDone 提取
+	var normalizer2 model.LeadingThinkNormalizer
+	reasoning, answer := normalizer2.FeedDone("<think>reasoning content</think>actual answer")
+	fmt.Printf("  FeedDone(\"<think>reasoning content</think>actual answer\")\n")
+	fmt.Printf("    → reasoning=%q, answer=%q\n", reasoning, answer)
+	fmt.Println()
+
 	fmt.Println("=== All examples completed ===")
 }
