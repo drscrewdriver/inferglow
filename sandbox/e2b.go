@@ -128,22 +128,23 @@ func parseStringMap(v any) map[string]string {
 	if v == nil {
 		return nil
 	}
-	out := map[string]string{}
 	switch t := v.(type) {
 	case map[string]string:
-		for k, v := range t {
-			out[k] = v
+		out := make(map[string]string, len(t))
+		for k, val := range t {
+			out[k] = val
 		}
 		return out
 	case map[string]any:
-		for k, v := range t {
-			switch s := v.(type) {
+		out := make(map[string]string, len(t))
+		for k, val := range t {
+			switch s := val.(type) {
 			case string:
 				out[k] = s
 			case fmt.Stringer:
 				out[k] = s.String()
 			default:
-				out[k] = fmt.Sprintf("%v", v)
+				out[k] = fmt.Sprintf("%v", val)
 			}
 		}
 		return out
