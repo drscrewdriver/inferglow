@@ -41,7 +41,9 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /v1/agents/{id}", s.handleGetAgent)
 	api.HandleFunc("DELETE /v1/agents/{id}", s.handleDeleteAgent)
 	api.HandleFunc("POST /v1/agents/{id}/chat", s.handleChat)
+	api.HandleFunc("POST /v1/agents/{id}/input", s.handleInput)
 	api.HandleFunc("POST /v1/agents/{id}/stream", s.handleStream)
+	api.HandleFunc("POST /v1/agents/{id}/stream-run", s.handleStreamRun)
 
 	// Session
 	api.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
@@ -52,6 +54,39 @@ func (s *Server) registerRoutes() {
 	// Memory
 	api.HandleFunc("POST /v1/memories", s.handleCreateMemory)
 	api.HandleFunc("GET /v1/memories", s.handleSearchMemory)
+	api.HandleFunc("GET /v1/memories/{id}", s.handleGetMemory)
+	api.HandleFunc("DELETE /v1/memories/{id}", s.handleDeleteMemory)
+
+	// Flow management (recycled from inferflow)
+	api.HandleFunc("GET /v1/flows", s.handleListFlows)
+	api.HandleFunc("GET /v1/flows/{name}", s.handleGetFlow)
+	api.HandleFunc("POST /v1/flows", s.handleRegisterFlow)
+	api.HandleFunc("POST /v1/flows/{name}/validate", s.handleValidateFlow)
+
+	// Run lifecycle
+	api.HandleFunc("POST /v1/runs", s.handleCreateRun)
+	api.HandleFunc("GET /v1/runs", s.handleListRuns)
+	api.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	api.HandleFunc("DELETE /v1/runs/{id}", s.handleCancelRun)
+	api.HandleFunc("POST /v1/runs/{id}/pause", s.handlePauseRun)
+	api.HandleFunc("POST /v1/runs/{id}/resume", s.handleResumeRun)
+	api.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
+	api.HandleFunc("GET /v1/runs/{id}/state", s.handleGetRunState)
+	api.HandleFunc("GET /v1/runs/{id}/steps", s.handleGetRunSteps)
+
+	// Stages
+	api.HandleFunc("GET /v1/stages", s.handleListStages)
+
+	// Trigger management
+	api.HandleFunc("POST /v1/triggers", s.handleCreateTrigger)
+	api.HandleFunc("GET /v1/triggers", s.handleListTriggers)
+	api.HandleFunc("GET /v1/triggers/{id}", s.handleGetTrigger)
+	api.HandleFunc("DELETE /v1/triggers/{id}", s.handleDeleteTrigger)
+	api.HandleFunc("POST /v1/triggers/{id}/start", s.handleStartTrigger)
+	api.HandleFunc("POST /v1/triggers/{id}/stop", s.handleStopTrigger)
+
+	// Webhook entry point
+	api.HandleFunc("POST /v1/webhooks/{id}", s.handleWebhook)
 
 	// OpenAPI spec
 	api.HandleFunc("GET /openapi.json", handler.OpenAPISpec)

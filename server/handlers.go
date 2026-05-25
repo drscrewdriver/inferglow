@@ -21,8 +21,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"time"
+
+	agentpkg "github.com/inferglow/orchestrator/agent"
 )
 
 // handleListAgents returns all agents.
@@ -84,13 +91,33 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 // ChatRequest is the request body for agent chat.
 type ChatRequest struct {
-	Message string `json:"message"`
+	Message     string `json:"message"`
+	PreemptMode string `json:"preempt_mode,omitempty"` // "queue"|"safe_point"|"force"
 }
 
 // ChatResponse is the response body for agent chat.
 type ChatResponse struct {
 	Response string `json:"response"`
 	AgentID  string `json:"agent_id"`
+}
+
+// AgentInputter is the subset of agent.Agent needed by the /input endpoint.
+type AgentInputter interface {
+	SubmitInput(ctx context.Context, msg string, mode agentpkg.PreemptMode) (<-chan agentpkg.InputResponse, error)
+}
+
+// parsePreemptMode converts a string mode to the agent PreemptMode type.
+func parsePreemptMode(s string) agentpkg.PreemptMode {
+	switch s {
+	case "queue":
+		return agentpkg.PreemptQueue
+	case "safe_point":
+		return agentpkg.PreemptSafePoint
+	case "force":
+		return agentpkg.PreemptForce
+	default:
+		return agentpkg.PreemptQueue
+	}
 }
 
 // handleChat performs a synchronous agent chat.
@@ -110,6 +137,35 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.Message == "" {
 		writeError(w, http.StatusBadRequest, "message is required")
 		return
+	}
+
+	// When preempt_mode is specified and the agent supports SubmitInput,
+	// use the input queue path.
+	if req.PreemptMode != "" {
+		if inputter, ok := agent.(AgentInputter); ok {
+			mode := parsePreemptMode(req.PreemptMode)
+			ch, err := inputter.SubmitInput(r.Context(), req.Message, mode)
+			if err != nil {
+				if errors.Is(err, agentpkg.ErrQueueFull) {
+					w.Header().Set("Retry-After", "5")
+					writeError(w, http.StatusTooManyRequests, "input queue is full")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "agent error: "+err.Error())
+				return
+			}
+			resp := <-ch
+			if resp.Error != nil {
+				writeError(w, http.StatusInternalServerError, "agent error: "+resp.Error.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, ChatResponse{
+				Response: resp.Response,
+				AgentID:  id,
+			})
+			return
+		}
+		// Fall through to synchronous Run if agent does not support SubmitInput.
 	}
 
 	resp, err := agent.Run(r.Context(), req.Message)
@@ -166,6 +222,56 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+// handleInput processes user input with preempt mode support.
+// POST /v1/agents/{id}/input
+func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	agent := s.agentStore.Get(id)
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+
+	inputter, ok := agent.(AgentInputter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "agent does not support input queue")
+		return
+	}
+
+	var req ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Message == "" {
+		writeError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+
+	mode := parsePreemptMode(req.PreemptMode)
+	ch, err := inputter.SubmitInput(r.Context(), req.Message, mode)
+	if err != nil {
+		if errors.Is(err, agentpkg.ErrQueueFull) {
+			w.Header().Set("Retry-After", "5")
+			writeError(w, http.StatusTooManyRequests, "input queue is full")
+			return
+		}
+		writeError(w, http.StatusAccepted, "agent error: "+err.Error())
+		return
+	}
+
+	// Block until the agent processes the input.
+	resp := <-ch
+	if resp.Error != nil {
+		writeError(w, http.StatusInternalServerError, "agent error: "+resp.Error.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ChatResponse{
+		Response: resp.Response,
+		AgentID:  id,
+	})
+}
+
 // handleGetSession returns session info (stub).
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -183,17 +289,96 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleCreateMemory creates a memory entry (stub).
+// handleCreateMemory creates a memory entry.
 func (s *Server) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
+	if s.memStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+	var req struct {
+		ID       string   `json:"id"`
+		Content  string   `json:"content"`
+		Category string   `json:"category,omitempty"`
+		Facts    []string `json:"facts,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Content == "" && len(req.Facts) == 0 {
+		writeError(w, http.StatusBadRequest, "content or facts required")
+		return
+	}
+	if req.ID == "" {
+		req.ID = fmt.Sprintf("mem-%d", time.Now().UnixNano())
+	}
+
+	rec := MemoryRecord{
+		ID:       req.ID,
+		Content:  req.Content,
+		Category: req.Category,
+		Facts:    req.Facts,
+	}
+	if err := s.memStore.UpsertMemory(rec); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": rec.ID, "status": "created"})
 }
 
-// handleSearchMemory searches memories (stub).
+// handleSearchMemory searches memories.
 func (s *Server) handleSearchMemory(w http.ResponseWriter, r *http.Request) {
+	if s.memStore == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"memories": []any{}, "count": 0})
+		return
+	}
+	q := r.URL.Query().Get("q")
+	category := r.URL.Query().Get("category")
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	results, err := s.memStore.SearchMemory(q, category, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"memories": []any{},
-		"count":    0,
+		"memories": results,
+		"count":    len(results),
 	})
+}
+
+// handleGetMemory returns a single memory by ID.
+func (s *Server) handleGetMemory(w http.ResponseWriter, r *http.Request) {
+	if s.memStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+	id := r.PathValue("id")
+	rec, err := s.memStore.GetMemory(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// handleDeleteMemory removes a memory by ID.
+func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
+	if s.memStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.memStore.DeleteMemory(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // writeJSON writes a JSON response.
