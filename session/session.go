@@ -44,9 +44,9 @@ type ContentBlock struct {
 // for the relevant side. A nil masker (the default) means no masking is
 // performed, preserving backward compatibility.
 //
-// The pii.Masker type in github.com/inferglow/security/pii satisfies this
-// interface and serves as the PII hook; other security modules may provide
-// their own implementation. SessionOption is declared in
+// The pii.Masker type in the security module's pii subpackage satisfies
+// this interface and serves as the PII hook; other security modules may
+// provide their own implementation. SessionOption is declared in
 // security_hook.go and is reused here so PII masking and prompt-injection
 // blocking share a single option pipeline.
 type MessageMasker interface {
@@ -196,9 +196,10 @@ func (s *Session) AddMessage(role string, content any, name string) {
 }
 
 // AddMessageChecked behaves like AddMessage but returns the security
-// hook's rejection error (e.g. ErrPromptInjectionBlocked) instead of
-// silently dropping the message. When no hook is configured the
-// behavior is identical to the legacy AddMessage.
+// hook's rejection error (e.g. sessionhook.ErrPromptInjectionBlocked from
+// the security module's sessionhook subpackage) instead of silently
+// dropping the message. When no hook is configured the behavior is
+// identical to the legacy AddMessage.
 //
 // When a MessageMasker is configured (via WithMessageMasker), string
 // content is transformed by MaskInput after the security hook runs and
