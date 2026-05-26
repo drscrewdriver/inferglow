@@ -149,3 +149,17 @@ func (fb *FlowBuilder) WithOptions(opts ...FlowOption) *FlowBuilder {
 func (fb *FlowBuilder) Build() *Flow {
 	return fb.flow
 }
+
+// ApplyOptions applies the given FlowOptions to an already-built Flow in
+// place. It acquires the write lock so it is safe to call after Build but
+// must not run concurrently with Execute/Resume (which hold the read lock).
+// Orchestrator layers use this to inject checkpoint options (e.g.
+// WithAutoCheckpoint / WithStateModifier) into a Flow received from the
+// caller at run time, without requiring the caller to rebuild the Flow.
+func (f *Flow) ApplyOptions(opts ...FlowOption) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, opt := range opts {
+		opt(f)
+	}
+}

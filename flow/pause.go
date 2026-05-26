@@ -22,6 +22,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -129,6 +130,12 @@ func (f *Flow) Resume(ctx context.Context, pp *PausePoint, resumeInput any) *Exe
 			Error:    err,
 		}
 		exec.State.StepExecLog = append(exec.State.StepExecLog, step.Name)
+
+		// A8: 在 Resume 路径同样支持 step 主动 RequestPause。
+		if err != nil && errors.Is(err, ErrPauseRequested) {
+			exec.State.Status = StatusPaused
+			return exec
+		}
 
 		if err != nil {
 			exec.State.Status = StatusFailed

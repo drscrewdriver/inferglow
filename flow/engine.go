@@ -22,6 +22,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -97,6 +98,18 @@ func (f *Flow) Execute(ctx context.Context, input any) *Execution {
 	currentStepName := startStep.Name
 
 	for {
+		// A1: 在每个步骤执行前检查暂停信号。当 context 中注入了 pause channel
+		// 且该 channel 已被关闭（或写入）时，立即将状态置为 StatusPaused 并返回，
+		// 不执行当前步骤。非阻塞 select 保证未暂停时零开销。
+		if pauseCh, ok := PauseSignalFrom(ctx); ok && pauseCh != nil {
+			select {
+			case <-pauseCh:
+				exec.State.Status = StatusPaused
+				return exec
+			default:
+			}
+		}
+
 		step, ok := f.steps[currentStepName]
 		if !ok {
 			exec.State.Status = StatusFailed
@@ -126,10 +139,32 @@ func (f *Flow) Execute(ctx context.Context, input any) *Execution {
 		}
 		exec.State.StepExecLog = append(exec.State.StepExecLog, step.Name)
 
+		// A8: step 主动请求挂起。当 step.Func 返回 ErrPauseRequested 时
+		// （通常通过 FlowContext.RequestPause 触发），将状态置为 StatusPaused
+		// 而非 StatusFailed，且不把 ErrPauseRequested 追加到 Errors。这样
+		// 上层 executeFlow 走暂停路径（f.Pause + 返回 exec 句柄），
+		// daemon 可随后通过 ResumeFlow 续跑。
+		if err != nil && errors.Is(err, ErrPauseRequested) {
+			exec.State.Status = StatusPaused
+			return exec
+		}
+
 		if err != nil {
 			exec.State.Status = StatusFailed
 			exec.State.Errors = append(exec.State.Errors, err)
 			return exec
+		}
+
+		// L4 Step Schema validation: when step.Schema is set, validate the
+		// output before passing it to the next step. This兑现 README 承诺 of
+		// "Step 执行后自动验证输出是否符合 Schema 定义".
+		if step.Schema != nil {
+			if validateErr := validateStepOutput(output, step.Schema); validateErr != nil {
+				exec.State.Status = StatusFailed
+				exec.State.Errors = append(exec.State.Errors,
+					fmt.Errorf("step %q output validation failed: %w", step.Name, validateErr))
+				return exec
+			}
 		}
 
 		// After executing, check for conditional branches from this step
