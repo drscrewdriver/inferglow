@@ -129,6 +129,11 @@ type Engine struct {
 	// all callback invocations (zero overhead). Propagated from Agent.Run
 	// via runConfig.callbacks.
 	callbacks *AgentCallbacks
+
+	// cacheBudgetHook is called after each LLM response with the
+	// cached_tokens count from UsageInfo. nil disables (default).
+	// Propagated from Agent.Run via runConfig.cacheBudgetUpdater.
+	cacheBudgetHook func(cachedTokens int)
 }
 
 // newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
@@ -561,6 +566,13 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 			content.Reset()
 			content.WriteString(validatedResp.Content)
+		}
+
+		// Feed cached_tokens back to context manager for sweet-spot adjustment.
+		if e.cacheBudgetHook != nil && lastUsage != nil {
+			if cached := lastUsage.PromptTokensDetails["cached_tokens"]; cached > 0 {
+				e.cacheBudgetHook(cached)
+			}
 		}
 
 		// Approximate token accumulation: prefer provider-reported UsageInfo

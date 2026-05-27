@@ -824,3 +824,83 @@ func TestEngine_AcceptsStreamOnlyRequester(t *testing.T) {
 		t.Errorf("expected exactly 1 RequestModel call, got %d", req.calls)
 	}
 }
+
+func TestEngine_CacheBudgetHook(t *testing.T) {
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	var hookCalls []int
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			ch := make(chan *model.StreamChunk, 2)
+			// First chunk: content with UsageInfo containing cached_tokens.
+			ch <- &model.StreamChunk{
+				Delta: `{"next_action":"response","final_response":"cached!"}`,
+				Usage: &model.UsageInfo{
+					PromptTokens:    1000,
+					CompletionTokens: 10,
+					TotalTokens:     1010,
+					PromptTokensDetails: map[string]int{
+						"cached_tokens": 800,
+					},
+				},
+				IsDone: true,
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  mockReq,
+		cacheBudgetHook: func(cachedTokens int) {
+			hookCalls = append(hookCalls, cachedTokens)
+		},
+	}
+
+	decision, err := engine.executeLoop(context.Background(), "test", 3, "")
+	if err != nil {
+		t.Fatalf("executeLoop returned error: %v", err)
+	}
+	if decision.NextAction != "response" {
+		t.Errorf("NextAction = %q, want %q", decision.NextAction, "response")
+	}
+
+	if len(hookCalls) == 0 {
+		t.Fatal("cacheBudgetHook was never called")
+	}
+	if hookCalls[0] != 800 {
+		t.Errorf("cacheBudgetHook called with %d, want 800", hookCalls[0])
+	}
+}
+
+func TestEngine_CacheBudgetHook_NilSafe(t *testing.T) {
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			ch := make(chan *model.StreamChunk, 1)
+			ch <- &model.StreamChunk{
+				Delta:  `{"next_action":"response","final_response":"ok"}`,
+				IsDone: true,
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	// cacheBudgetHook is nil — should not panic.
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  mockReq,
+	}
+
+	_, err := engine.executeLoop(context.Background(), "test", 3, "")
+	if err != nil {
+		t.Fatalf("executeLoop returned error: %v", err)
+	}
+}

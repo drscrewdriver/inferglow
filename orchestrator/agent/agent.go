@@ -57,6 +57,13 @@ type PIIMasker interface {
 	MaskOutput(text string) string
 }
 
+// CacheBudgetUpdater receives cached_tokens feedback from LLM responses
+// and adjusts context management thresholds accordingly. The minimal
+// interface avoids a direct import of the context package.
+type CacheBudgetUpdater interface {
+	UpdateCacheBudget(cachedTokens int)
+}
+
 // Agent is the user-facing entry point for interacting with inferglow.
 // It encapsulates Session, Action management, and LLM orchestration.
 type Agent struct {
@@ -127,6 +134,9 @@ type Agent struct {
 	// Set via WithUnifiedMiddleware on New; overridden by a per-call
 	// WithUnifiedMiddleware on Run.
 	unifiedMiddlewares []middleware.Middleware
+	// cacheBudgetUpdater receives cached_tokens feedback from LLM responses
+	// and adjusts context management sweet-spot thresholds. nil disables.
+	cacheBudgetUpdater CacheBudgetUpdater
 }
 
 // RunOption configures Agent.Run behavior.
@@ -171,6 +181,8 @@ type runConfig struct {
 	unifiedMiddlewares []middleware.Middleware
 	// callbacks provides lifecycle hooks for observability. nil disables.
 	callbacks *AgentCallbacks
+	// cacheBudgetUpdater receives cached_tokens feedback. nil disables.
+	cacheBudgetUpdater CacheBudgetUpdater
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -246,6 +258,16 @@ func WithPIIMasker(m PIIMasker) RunOption {
 	}
 }
 
+// WithContextManager installs a CacheBudgetUpdater that receives
+// cached_tokens feedback from each LLM response and adjusts context
+// management sweet-spot thresholds to maximize prefix cache hits.
+// Pass nil to disable (default).
+func WithContextManager(u CacheBudgetUpdater) RunOption {
+	return func(c *runConfig) {
+		c.cacheBudgetUpdater = u
+	}
+}
+
 // New creates an Agent from the given components. Options applied here
 // (e.g. WithMaxRounds, WithSystemPrompt, WithStreamTimeout) are persisted
 // on the Agent and used by subsequent Run calls unless overridden by a
@@ -283,6 +305,7 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 		callbacks:     c.callbacks,
 		middlewares:   c.middlewares,
 		unifiedMiddlewares: c.unifiedMiddlewares,
+		cacheBudgetUpdater: c.cacheBudgetUpdater,
 	}
 }
 
@@ -341,6 +364,16 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 
 	// Propagate callbacks to the engine for lifecycle observability.
 	a.engine.callbacks = c.callbacks
+
+	// Propagate the cache budget hook so executeLoop feeds cached_tokens
+	// back to the context manager for sweet-spot adjustment. nil disables.
+	if c.cacheBudgetUpdater != nil {
+		a.engine.cacheBudgetHook = func(cached int) {
+			c.cacheBudgetUpdater.UpdateCacheBudget(cached)
+		}
+	} else {
+		a.engine.cacheBudgetHook = nil
+	}
 
 	// Propagate the PII masker to the session so that AddUserMessage
 	// (called inside executeLoop) redacts input via MaskInput. Only set
