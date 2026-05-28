@@ -1,4 +1,4 @@
-﻿# schema - Contract-First Schema 引擎
+# schema - Contract-First Schema 引擎
 
 **模块路径**: `github.com/inferglow/schema`
 
@@ -9,9 +9,9 @@ schema 模块是 inferglow 的契约优先 Schema 引擎，提供生产级结构
 ## 设计定位
 
 - **被谁依赖**: `flow` 模块（Step 的 Schema 字段）
-- **依赖谁**: `github.com/inferglow/model`（复用 ChatMessage、OutputSchema 等类型）
+- **依赖谁**: 无（仅 yaml.v3；schema 模块完全独立，不依赖 model）
 - **对标 Python**: `agently/types/data/` 下的 Output/EnsureKeys + `agently/types/plugins/` 下的 Schema 抽象
-- **独立可用性**: 不依赖 inferglow 的其他模块（action/session/sandbox），但依赖 model
+- **独立可用性**: 不依赖 inferglow 的其他模块（action/session/sandbox/model），完全独立
 
 ## 核心类型
 
@@ -148,7 +148,7 @@ TriggerFlowDefinition → 流程定义（可序列化）
 
 ## 与 model 的关系
 
-model 包中定义了 `OutputSchema` 的原始结构（`type.OutputSchema`），schema 包在此基础上扩展了 `FieldDef` 层级结构、`DataType` 类型系统、`EnsurePolicy` 校验策略、以及完整的验证引擎。schema 的 `go.mod` 通过 `replace` 指令指向 model，共享基础类型。
+schema 模块**不依赖** model 模块（`go.mod` 中无 model 的 require，历史遗留的 replace 指令已删除）。schema 包独立定义了 `OutputSchema`、`FieldDef` 层级结构、`DataType` 类型系统、`EnsurePolicy` 校验策略、以及完整的验证引擎。model 包中的 `OutputSchema` 是独立定义的同名类型，两者无编译期依赖关系。
 
 ## 与上层的关系
 

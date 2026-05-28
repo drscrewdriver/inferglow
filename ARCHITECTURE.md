@@ -1,17 +1,54 @@
-﻿# Inferglow 完整调用链与架构分析
+# Inferglow 完整调用链与架构分析
 
 ## 一、Session、Action、Flow 的关系澄清
 
-### 核心结论：三者完全独立，由上层 Agently 主模块串联
+### 核心结论：三者完全独立，由上层 orchestrator 编排层串联
 
 | 模块 | 职责 | 独立性 | 是否调用其他 inferglow 模块 |
 |------|------|--------|--------------------------|
 | **model** | LLM Provider 统一抽象 | 最底层 | 无 |
-| **schema** | 契约优先的 Structured Output | 依赖 model | schema → model |
+| **schema** | 契约优先的 Structured Output | 独立 | 无 |
 | **flow** | 步骤编排引擎（线性/事件驱动） | 依赖 schema | flow → schema |
-| **action** | 工具注册与执行框架 | 完全独立 | 无 |
-| **session** | 对话记忆管理（双列表） | 完全独立 | 无 |
+| **action** | 工具注册与执行框架 | 完全独立 | 无（SandboxExecutor 通过 `with_sandbox` build tag 可选引入 sandbox） |
+| **session** | 对话记忆管理（双列表） | 完全独立 | 无（security 已解耦，仅保留 `MessageHook` 接口供注入） |
 | **sandbox** | 隔离执行环境 | 完全独立 | 无 |
+| **orchestrator** | 编排层（用户入口） | 上层胶水 | action, audit, model, session, flow（security 已解耦为接口注入；sandbox 通过 build tag 可选） |
+
+### 可插拔架构改进（v2）
+
+Inferglow v2 将沙箱执行与安全特性从硬依赖改造为**可选依赖**，让核心编排层默认保持最小体积与零安全开销。
+
+#### 1. Build Tags（沙箱可选）
+
+`action/executor_sandbox.go` 使用 `//go:build with_sandbox` 隔离，`action/executor_sandbox_stub.go` 在 `!with_sandbox` 下提供占位实现。默认编译不引入 `github.com/inferglow/sandbox`：
+
+```bash
+go build ./...                      # 默认模式，无沙箱
+go build -tags with_sandbox ./...   # 沙箱模式
+```
+
+#### 2. 接口注入（安全可选）
+
+`session` 与 `orchestrator/agent` 不再直接 import `security`，仅保留接口契约，实现移至 `security/sessionhook` 与 `security/agenthook`：
+
+| 接口 | 定义位置 | 实现位置 | 注入入口 |
+|------|---------|---------|---------|
+| `session.MessageHook` | `session/security_hook.go` | `security/sessionhook.SecurityHook` | `session.WithSecurityHook(hook)` |
+| `agent.OutputSecurityHook` | `orchestrator/agent/security_hook.go` | `security/agenthook.OutputInjectionHook` | `agent.WithOutputSecurityHook(hook)` |
+| `agent.PIIMasker` | `orchestrator/agent/agent.go` | `security/agenthook.PIIMasker`（适配 `pii.Masker`） | `agent.WithPIIMasker(m)` |
+
+#### 3. 依赖方向
+
+依赖严格单向，避免循环：
+
+```
+security/sessionhook  →  session              （实现 MessageHook）
+security/agenthook    →  orchestrator/agent   （实现 OutputSecurityHook / PIIMasker）
+security/agenthook    →  security/pii          （适配 *pii.Masker）
+security/sessionhook  →  security/prompt_injection
+```
+
+`session` 与 `orchestrator/agent` 对 `security` 完全无感知，不注入即零开销。
 
 ### Session 子功能
 
@@ -51,7 +88,7 @@ Action
 │   │   ├── func(InputT) (OutputT, error)
 │   │   └── func(ctx, InputT) OutputT
 │   ├── MCPExecutor:    远程 MCP 协议（待实现）
-│   └── SandboxExecutor: 沙箱执行器（待实现）
+│   └── SandboxExecutor: 沙箱执行器（需 `with_sandbox` build tag）
 └── 规格: ActionSpec
     ├── SideEffectLevel:   "read" | "write" | "exec"
     ├── ApprovalRequired:  是否需要审批
@@ -69,7 +106,7 @@ action 包 import → 无（只 import stdlib）
 session 不调用 action，action 也不调用 session。
 ```
 
-它们的关系通过 **上层 Agently 主模块** 桥接：
+它们的关系通过 **上层 orchestrator 编排层** 桥接：
 
 ```
 Session: 只记录"人说的话"（用户消息 + 助手回复）
@@ -130,13 +167,13 @@ OpenAICompatibleProvider.RequestModel()           ← 解析 SSE 流
 chunk.ToolCalls = [{Name:"celsius_to_fahrenheit", Arguments:{"celsius":37}}]
     ↓
                                     ← inferglow 尚未实现！
-Agently 主模块的 ActionRuntime:
-    ├── AgentlyResponseParser                     ← 解析结构化输出
-    ├── AgentlyActionRuntime                      ← 规划协议
+orchestrator 编排层的 ActionRuntime:
+    ├── OrchestratorResponseParser                ← 解析结构化输出
+    ├── OrchestratorActionRuntime                 ← 规划协议
     └── ActionNormalization.normalize_action_decision()  ← 提取 ActionCall
 ```
 
-**回答：在 Agently 主模块的 ActionRuntime 层。** inferglow 目前只有 `ModelRequester` 能返回 `ToolCall`，但**没有一层来消费它、映射到 ActionRegistry、调度执行**。
+**回答：在 orchestrator 编排层的 ActionRuntime 层。** inferglow 目前只有 `ModelRequester` 能返回 `ToolCall`，但**没有一层来消费它、映射到 ActionRegistry、调度执行**。
 
 ### 3. Action 执行后结果怎么回传给 LLM？
 
@@ -153,7 +190,7 @@ to_model_visible_records()                        ← 过滤敏感信息
     → 发给 LLM 获取下一个决策
 ```
 
-**回答：上层 Agenty 把 Action 执行结果追加到 `ModelRequest.Actions` 字段，作为下一轮 prompt 的一部分。**
+**回答：上层 orchestrator 编排层把 Action 执行结果追加到 `ModelRequest.Actions` 字段，作为下一轮 prompt 的一部分。**
 
 ### 4. Sandbox 穿透验证在哪一层触发？
 
@@ -210,7 +247,7 @@ ActionDispatcher.async_execute()                  ← 安全门控层
                        │
                        ▼
 ┌─────────────────────────────────────────────────┐
-│  ★ Agently 主模块 (尚未实现) ★                    │
+│  ★ orchestrator 编排层 (尚未实现) ★                │
 │                                                  │
 │  ★ 这是 inferglow 最缺的 "胶水" ★                 │
 │                                                  │
@@ -280,7 +317,7 @@ func shouldContinue(decision, roundIndex, maxRounds int) bool {
 
 ### 缺失的本质
 
-inferglow 目前有 **model、schema、flow、action、session、sandbox 六个"零件"**，但缺少把它们串起来的**组装线**——这个组装线就是上层的 **Agently 主模块**（对应 Python Agently 的 `Agently/agently/` 目录）。
+inferglow 目前有 **model、schema、flow、action、session、sandbox 六个"零件"**，但缺少把它们串起来的**组装线**——这个组装线就是上层的 **orchestrator 编排层**（对应 Python Agently 的 `Agently/agently/` 目录）。
 
 ---
 
@@ -354,7 +391,7 @@ Qwen3 32B 的 Function Calling 能力已经足够：
 ### 总体架构
 
 ```
-Agently 主模块（上层业务逻辑）
+orchestrator 编排层（上层业务逻辑）
 │
 ├── Agent 类                          ← 用户入口
 │   ├── SessionExtension              ← 对话记忆管理
@@ -512,8 +549,8 @@ replace github.com/inferglow/sandbox => ../inferglow/sandbox
 ### inferglow 当前状态
 
 - **已完成**: 6 个基础设施子模块（model/schema/flow/action/session/sandbox）
-- **缺失**: Agently 主模块（组装线）
-- **定位**: 纯基础设施库，等待上层 Agently 主模块引用
+- **缺失**: orchestrator 编排层（组装线）
+- **定位**: 纯基础设施库，等待上层 orchestrator 编排层引用
 
 ### 模型选择
 

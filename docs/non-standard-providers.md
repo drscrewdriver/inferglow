@@ -296,6 +296,56 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 4. 不同域名（商汤 token.sensenova.cn vs api.sensenova.cn）
 5. API Key 格式不同（百度 bce-v3、讯飞 AK:SK）— 本质都是 Bearer Token
 
+### `full_url` 完全覆盖（model-parity Phase 1）
+
+> 当 `base_url + default_path` 拼接无法满足非标端点时，`full_url` 配置项提供完全覆盖。
+
+**机制**：`ResolveURL(baseURL, defaultPath, fullURL)` — 当 `fullURL != ""` 时直接使用，跳过拼接逻辑。
+
+**配置方式**：
+```yaml
+my_provider:
+  api_key: "sk-xxx"
+  base_url: "https://api.example.com/v1"
+  full_url: "https://gateway.proxy.com/custom/llm/chat"  # 完全覆盖
+```
+
+**适用场景**：
+- API 网关/代理重写路径（base_url 不变但实际请求路径不同）
+- 自定义端点路径无法用 `base_url + /chat/completions` 拼接表达
+- 灰度发布/AB 测试时切换到不同端点 URL
+
+**已覆盖 Provider**：`OpenAICompatibleProvider`、`AnthropicCompatibleProvider`、`OllamaProvider`、`OpenAIResponsesProvider` 均已集成 `FullURL` 字段。
+
+### `content_mapping` 非标字段路径提取（model-parity Phase 3）
+
+> 当 Provider 的 SSE JSON 字段路径与标准 OpenAI 格式不同时，`content_mapping` 配置项允许自定义提取路径。
+
+**机制**：`ContentMapping` 是 `map[string]string`，`ExtractByPath(data, path)` 支持点号/斜杠分隔 + 数组索引（`choices[0].delta.content`）。
+
+**默认映射**（`DefaultOpenAIContentMapping`）：
+```go
+{
+    "reasoning": "choices[0].delta.reasoning_content",
+    "delta":     "choices[0].delta.content",
+}
+```
+
+**配置方式**：
+```yaml
+my_provider:
+  api_key: "sk-xxx"
+  content_mapping:
+    reasoning: "data.thinking"       # 非标推理字段路径
+    delta: "message.content"          # 非标内容字段路径
+```
+
+**适用场景**：
+- 某些代理/网关重写了 SSE JSON 结构（字段嵌套层级或名称不同）
+- Ollama 兼容端点返回非标结构（`data.thinking` 而非 `message.reasoning`）
+
+**已覆盖 Provider**：`OpenAICompatibleProvider`（`processOpenAILine` 中 `ContentMapping != nil` 分支）、`OllamaProvider`（`processOllamaLineWithMapping`）。`ContentMapping == nil` 时走原有 struct 解析，完全向后兼容。
+
 ### 需要 G1-02 推理字段适配的场景
 
 以下 Provider 使用 `reasoning_content` 而非 `reasoning`：
@@ -340,7 +390,7 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 
 ### `<think>` Tag 归一化
 
-> Agently 有 `LeadingThinkEventNormalizer`，InferGlow 尚未实现。
+> InferGlow 已实现 `LeadingThinkNormalizer`（[think_normalizer.go](../model/think_normalizer.go)），对标 Agently 的 `LeadingThinkEventNormalizer`。
 
 部分模型在 **content 字段**中返回 `<think>` 标签包裹的推理内容（而非单独的推理字段）：
 
@@ -349,23 +399,30 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 | DeepSeek-R1/V4 前端 | 非流式/某些 proxy | `{"content": "<think>...</think> 回答"}` | 正则提取 `</think>` 前内容到 `Reasoning` |
 | 商汤 SenseNova 原生接口 | 深度思考模式 | `{"content": "<think>...</think> ..."}` | 同 DeepSeek 方案 |
 
+**实现细节**：
+- `LeadingThinkNormalizer` 是三态状态机（unknown/reasoning/answer），在 `BroadcastResponse` 流式路径中逐 chunk 调用 `FeedDelta` 分离 reasoning 与 answer
+- 支持分块缓冲（`<thi` + `nk>foo` 跨 chunk 拼接）和大小写不敏感匹配（`<THINK>` / `</THINK>`）
+- `chunk.Reasoning` 已由 Provider 独立字段填充时跳过状态机，避免双重处理
+- `FeedDone` 方法提供非流式提取，`normalizeThinkingTags`/`hasThinkingTags` 作为内部辅助函数（已从 `openai.go` 迁移至 `think_normalizer.go`）
+- 三个 Provider（OpenAI/Anthropic/Ollama）的 `BroadcastResponse` 均已集成，结束时 `fullReasoning == ""` 触发 `normalizeThinkingTags` 防御性兜底
+
 **注意**：
 - 标准 API 流式返回中，推理内容和最终回答在**不同的 delta chunk** 中（`reasoning`/`reasoning_content` vs `content`）
 - 只有非流式或某些前端/代理会返回 `<think>` 标签包裹的内容
-- 归一化函数 `normalizeThinkingTags()` 应在 SSE 解析后和 non-stream 响应处理中分别调用
+- 归一化函数 `normalizeThinkingTags()` 在 SSE 解析后和 non-stream 响应处理中分别调用
 
 ### 非流式 Thinking 标签处理结论
 
 > 经对 InferGlow 代码库搜索分析，以下是非流式场景下 thinking 处理的完整结论。
 
-#### 当前状态：InferGlow 暂无非流式能力
+#### 当前状态：normalizeThinkingTags 已实现
 
 | 项目 | 现状 |
 |------|------|
 | 非流式请求能力 | **不存在** — 所有 Provider 硬编码 `stream: true` |
 | `processOpenAILineNonStream` | **不存在** — 没有非流式 SSE 解析函数 |
-| `normalizeThinkingTags` | **不存在** — G1-04 任务计划新增 |
-| `reasoning_content` 非流式解析 | **不存在** — 当前只解析 `reasoning` |
+| `normalizeThinkingTags` | **已实现** — 位于 `think_normalizer.go`，大小写不敏感正则提取 |
+| `reasoning_content` 非流式解析 | **已实现** — `processOpenAILine` 同时解析 `reasoning` 和 `reasoning_content` |
 
 **代码证据**：
 - `RequestModel` 接口（`model.go`）返回类型为 `(<-chan *StreamChunk, error)`，始终为流式 channel
@@ -1138,8 +1195,11 @@ thinking.type 参数          MiMo                      G1-03 Options 透传
    ├─ 使用 thinking.type → G1-03 Options 透传
    └─ 无特殊参数 → 无额外工作
 
-结论：20 家 Provider，核心代码只需修改 3 处：
+结论：20 家 Provider，核心代码只需修改以下几处：
    • config.go — DEFAULT_SETTINGS（配置）
-   • openai.go  — processOpenAILine（G1-02 reasoning_content）
-   • openai.go  — normalizeThinkingTags（G1-04 标签归一化）
+   • openai.go — processOpenAILine（G1-02 reasoning_content）
+   • think_normalizer.go — LeadingThinkNormalizer（G1-04/P1 流式标签归一化）
+   • url_resolver.go — ResolveURL（P1 full_url 覆盖）
+   • content_mapping.go — ExtractByPath（P1 content_mapping 非标字段路径）
+   • openai_responses.go — OpenAIResponsesProvider（P1 Responses API）
 ```
