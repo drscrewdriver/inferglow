@@ -22,17 +22,43 @@ package agent
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/inferglow/model"
-	"github.com/inferglow/security/pii"
 	"github.com/inferglow/session"
 )
 
+// testPIIMasker is a lightweight PIIMasker implementation used by agent
+// tests to verify input/output masking integration without pulling in the
+// real security/pii dependency. It replaces email-like substrings with
+// "***" and honors the maskInput/maskOutput toggles (analogous to
+// pii.Masker's ApplyOn config).
+type testPIIMasker struct {
+	maskInput  bool
+	maskOutput bool
+}
+
+var emailRe = regexp.MustCompile(`\S+@\S+\.\S+`)
+
+func (m *testPIIMasker) MaskInput(text string) string {
+	if !m.maskInput {
+		return text
+	}
+	return emailRe.ReplaceAllString(text, "***")
+}
+
+func (m *testPIIMasker) MaskOutput(text string) string {
+	if !m.maskOutput {
+		return text
+	}
+	return emailRe.ReplaceAllString(text, "***")
+}
+
 // TestPIIMasker_InputMasking verifies that user input containing PII is
 // redacted before it enters the session history when WithPIIMasker is
-// configured with MaskOnInput.
+// configured for input masking.
 func TestPIIMasker_InputMasking(t *testing.T) {
 	sess := session.NewSession("test", 10000)
 	actExt := NewActionExtension()
@@ -49,9 +75,7 @@ func TestPIIMasker_InputMasking(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{
-		ApplyOn: pii.MaskOnInput,
-	})
+	masker := &testPIIMasker{maskInput: true}
 	agent := New(sess, actExt, mockReq, WithPIIMasker(masker))
 
 	_, err := agent.Run(context.Background(), "contact me at alice@example.com")
@@ -77,7 +101,7 @@ func TestPIIMasker_InputMasking(t *testing.T) {
 
 // TestPIIMasker_OutputMasking verifies that the LLM's final response is
 // redacted before Run returns it to the caller when WithPIIMasker is
-// configured with MaskOnOutput.
+// configured for output masking.
 func TestPIIMasker_OutputMasking(t *testing.T) {
 	sess := session.NewSession("test", 10000)
 	actExt := NewActionExtension()
@@ -94,9 +118,7 @@ func TestPIIMasker_OutputMasking(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{
-		ApplyOn: pii.MaskOnOutput,
-	})
+	masker := &testPIIMasker{maskOutput: true}
 	agent := New(sess, actExt, mockReq, WithPIIMasker(masker))
 
 	result, err := agent.Run(context.Background(), "hello")
@@ -111,7 +133,7 @@ func TestPIIMasker_OutputMasking(t *testing.T) {
 	}
 }
 
-// TestPIIMasker_BothSides verifies MaskOnInput | MaskOnOutput masks both
+// TestPIIMasker_BothSides verifies maskInput | maskOutput masks both
 // the stored input and the returned output.
 func TestPIIMasker_BothSides(t *testing.T) {
 	sess := session.NewSession("test", 10000)
@@ -129,9 +151,7 @@ func TestPIIMasker_BothSides(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{
-		ApplyOn: pii.MaskOnInput | pii.MaskOnOutput,
-	})
+	masker := &testPIIMasker{maskInput: true, maskOutput: true}
 	agent := New(sess, actExt, mockReq, WithPIIMasker(masker))
 
 	result, err := agent.Run(context.Background(), "my email is alice@example.com")

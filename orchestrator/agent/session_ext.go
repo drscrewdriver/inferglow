@@ -25,13 +25,8 @@ import (
 
 	"github.com/inferglow/action"
 	"github.com/inferglow/model"
-	"github.com/inferglow/security/pii"
 	"github.com/inferglow/session"
 )
-
-// Compile-time guard: *pii.Masker must satisfy session.MessageMasker so the
-// agent can wire it into the session as a PII hook.
-var _ session.MessageMasker = (*pii.Masker)(nil)
 
 // SessionExtension wraps the session.Session and provides
 // a simplified interface for the orchestrator to manage conversation history.

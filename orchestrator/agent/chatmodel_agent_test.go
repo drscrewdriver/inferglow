@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/inferglow/model"
-	"github.com/inferglow/security/pii"
 	"github.com/inferglow/session"
 )
 
@@ -152,7 +151,7 @@ func TestChatModelAgent_CustomConfig(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{ApplyOn: pii.MaskOnInput})
+	masker := &testPIIMasker{maskInput: true}
 	a := NewChatModelAgent(sess, actExt, mockReq,
 		WithAgentMaxRounds(5),
 		WithAgentSystemPrompt("test-system-prompt"),
@@ -408,9 +407,7 @@ func TestChatModelAgent_PIIMasker(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{
-		ApplyOn: pii.MaskOnInput | pii.MaskOnOutput,
-	})
+	masker := &testPIIMasker{maskInput: true, maskOutput: true}
 	a := NewChatModelAgent(sess, actExt, mockReq, WithAgentPIIMasker(masker))
 
 	result, err := a.Run(context.Background(), "my email is alice@example.com")
@@ -450,7 +447,7 @@ func TestChatModelAgent_RunStream_PIIMasker(t *testing.T) {
 		},
 	}
 
-	masker := pii.NewMasker(pii.MaskConfig{ApplyOn: pii.MaskOnInput})
+	masker := &testPIIMasker{maskInput: true}
 	a := NewChatModelAgent(sess, actExt, mockReq, WithAgentPIIMasker(masker))
 
 	reader, err := a.RunStream(context.Background(), "contact alice@example.com")

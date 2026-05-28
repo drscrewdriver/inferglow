@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/inferglow/model"
-	"github.com/inferglow/security/pii"
 	"github.com/inferglow/session"
 )
 
@@ -59,7 +58,7 @@ type ChatModelAgentConfig struct {
 	MaxRounds     int           // 默认 10
 	StreamTimeout time.Duration // 默认 5 分钟
 	SystemPrompt  string        // 可选系统提示
-	PIIMasker     *pii.Masker   // 可选 PII 脱敏 (nil 禁用)
+	PIIMasker     PIIMasker     // 可选 PII 脱敏 (nil 禁用)
 }
 
 // ChatModelAgentOption configures a ChatModelAgent at construction time.
@@ -90,7 +89,7 @@ func WithAgentStreamTimeout(d time.Duration) ChatModelAgentOption {
 // propagated to the underlying Agent (and thus to the session for input
 // masking and to the final response for output masking). Pass nil to
 // disable PII masking.
-func WithAgentPIIMasker(m *pii.Masker) ChatModelAgentOption {
+func WithAgentPIIMasker(m PIIMasker) ChatModelAgentOption {
 	return func(c *ChatModelAgentConfig) { c.PIIMasker = m }
 }
 

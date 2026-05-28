@@ -31,6 +31,7 @@ import (
 
 	"github.com/inferglow/audit"
 	"github.com/inferglow/model"
+	"github.com/inferglow/observability/otel"
 	"github.com/inferglow/orchestrator/actionruntime"
 )
 
@@ -65,6 +66,20 @@ type Engine struct {
 	// constructed via a struct literal without fields, in which case all
 	// cancel checks are skipped.
 	cancelManager *CancelManager
+
+	// outputSchema is the optional L4 output schema used for post-validation
+	// of the LLM response. When non-nil, executeLoop also injects the L3
+	// schema prompt into the system prompt as a fallback for providers that
+	// cannot enforce json_schema-level response_format. Set by Agent.Run from
+	// the runConfig.outputSchema (populated via WithOutputSchema). nil
+	// disables both L3 and L4 (default).
+	outputSchema *model.OutputSchema
+
+	// tracer 是可选的 OpenTelemetry tracer，供 ResumeFlow 等 Engine 方法
+	// 创建语义 span（如 SpanResume）。Agent.Run 在执行 executeFlow 前会把
+	// runConfig.tracer 写入该字段，使后续 ResumeFlow 调用也能产出 span。
+	// nil 时所有 Engine 层 span 退化为 no-op。
+	tracer *otel.Tracer
 }
 
 // newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
@@ -261,6 +276,15 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			},
 		}
 
+		// L3 prompt injection: when outputSchema is configured and the
+		// provider cannot enforce json_schema-level response_format (no
+		// response_format set, or explicitly degraded to json_object),
+		// append a schema description to the system prompt so the model
+		// has prompt-level guidance for the expected JSON structure.
+		if e.outputSchema != nil && shouldInjectSchemaPrompt(req) {
+			req.System += formatSchemaInstruction(req.Output)
+		}
+
 		// Call LLM
 		data, err := e.modelReq.GenerateRequestData(ctx, req)
 		if err != nil {
@@ -314,6 +338,46 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 		cancelTimeout()
+
+		// L4 post-validation: when outputSchema is configured, validate the
+		// collected content against the schema. On validation failure, retry
+		// by re-calling the model (up to MaxRetries times). The first
+		// attempt reuses the already-collected content; subsequent attempts
+		// issue a fresh model call with the same req.
+		if e.outputSchema != nil {
+			validator := model.NewOutputValidator(e.outputSchema)
+			validator.MaxRetries = 2
+
+			firstContent := content.String()
+			isFirst := true
+
+			validatedResp, valErr := validator.ValidateAndRetryWithFetch(ctx, func(ctx context.Context) (*model.ModelResponse, error) {
+				if isFirst {
+					isFirst = false
+					return &model.ModelResponse{Content: firstContent}, nil
+				}
+				retryData, rErr := e.modelReq.GenerateRequestData(ctx, req)
+				if rErr != nil {
+					return nil, rErr
+				}
+				retryTimeoutCtx, cancelRetry := context.WithTimeout(ctx, streamTimeout)
+				defer cancelRetry()
+				retryStream, rErr := e.modelReq.RequestModel(retryTimeoutCtx, retryData)
+				if rErr != nil {
+					return nil, rErr
+				}
+				var retryContent strings.Builder
+				for chunk := range retryStream {
+					retryContent.WriteString(chunk.Delta)
+				}
+				return &model.ModelResponse{Content: retryContent.String()}, nil
+			})
+			if valErr != nil {
+				return nil, fmt.Errorf("L4 output validation failed: %w", valErr)
+			}
+			content.Reset()
+			content.WriteString(validatedResp.Content)
+		}
 
 		// Approximate token accumulation: count characters in this round's
 		// LLM output as a simple proxy. The model package's StreamChunk.Usage
