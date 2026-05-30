@@ -2,7 +2,7 @@
 
 ## 一、分层架构
 
-InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 6 个独立子模块组成（model / schema / flow / action / session / sandbox），编排层（orchestrator）把它们粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
+InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 8 个独立子模块组成（model / schema / flow / action / session / sandbox / resource / approval），编排层（orchestrator）把它们粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -15,7 +15,8 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 │  ┌───────────────┐   ┌───────────────────┐   ┌──────────────────┐   │
 │  │  agent.Agent  │──▶│  agent.Engine     │──▶│ actionruntime.   │   │
 │  │  (用户入口)    │   │  (PLAN-EXECUTE   │   │ ActionDispatcher │   │
-│  │               │   │   循环引擎)       │   │ (并发执行+审计)   │   │
+│  │  +Strategy    │   │   循环引擎)       │   │ (并发执行+审计)   │   │
+│  │  +Extensions  │   │                   │   │ +DAGActionFlow   │   │
 │  └──────┬────────┘   └─────────┬─────────┘   └────────┬─────────┘   │
 │         │                      │                      │             │
 │         │     ┌────────────────┴────────┐             │             │
@@ -35,6 +36,15 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 │  │ (桥接 session/    │   │ (LLM 输出→Decision 解析+循环控制)     │   │
 │  │  action 到 engine)│   └──────────────────────────────────────┘   │
 │  └───────────────────┘                                              │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  orchestrator 子包                                            │   │
+│  │  recordstore/  — 统一执行记录存储（Record/Checkpoint/Event）   │   │
+│  │  taskcontext/  — 任务上下文聚合（ContextSource + Budget）      │   │
+│  │  taskdag/      — 模型生成的 DAG 执行（TopoSort + Executor）    │   │
+│  │  skill/        — 技能库管理（安装/版本/绑定）                   │   │
+│  │  blocks/       — 结构化可组合执行块（Reason/Act/Intent）       │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
                                    │
         ┌──────────────────────────┼──────────────────────────┐
@@ -62,6 +72,12 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 │  components     │      │   builtins       │
 │  Prompt/Tool    │      │  内置 Action/    │
 │  通用接口        │      │  Policy/Tool     │
+└─────────────────┘      └──────────────────┘
+
+┌─────────────────┐      ┌──────────────────┐
+│   resource      │      │   approval       │
+│  执行资源生命    │      │  策略审批框架     │
+│  周期管理        │      │  可插拔 Handler  │
 └─────────────────┘      └──────────────────┘
 ```
 
@@ -109,8 +125,12 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 | `security` | 无 |
 | `observability` | 无 |
 | `workspace` | 无 |
+| `resource` | 无（独立 Go module，无 inferglow 内部依赖） |
+| `approval` | 无（独立 Go module，无 inferglow 内部依赖） |
 | `components` | 无 |
 | `builtins` | 无 |
+
+> **注**：`resource` 和 `approval` 是独立 Go module（各有自己的 `go.mod`），不依赖任何 inferglow 内部模块。它们通过 `orchestrator/agent` 的 `AgentExtensions` 可选注入，零注入 = 零变化 = 向后兼容。
 
 > 注意：`security/pii` 的 `Masker` 类型在运行时被 `orchestrator/agent` 引用（通过 `session.MessageMasker` 接口），但这是接口依赖而非编译期包依赖——`session` 只定义接口，`pii.Masker` 实现它。
 
@@ -251,13 +271,15 @@ inferglow/
 ├── security/go.mod             module github.com/inferglow/security
 ├── observability/go.mod        module github.com/inferglow/observability
 ├── workspace/go.mod            module github.com/inferglow/workspace
+├── resource/go.mod             module github.com/inferglow/resource    (新增: 执行资源管理)
+├── approval/go.mod             module github.com/inferglow/approval    (新增: 策略审批框架)
 ├── orchestrator/go.mod         module github.com/inferglow/orchestrator
 ├── components/go.mod           module github.com/inferglow/components
 ├── builtins/go.mod             module github.com/inferglow/builtins
 └── examples/go.mod             module github.com/inferglow/examples
 ```
 
-> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），子模块各自独立。`orchestrator/go.mod` 通过 6 条 `replace` 指令把基础模块指向本地 `../` 路径。
+> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），子模块各自独立。`orchestrator/go.mod` 通过 6 条 `replace` 指令把基础模块指向本地 `../` 路径。`resource/` 和 `approval/` 是独立 Go module，无 inferglow 内部依赖。
 
 ## 六、与旧版 ARCHITECTURE.md 的差异
 
@@ -275,5 +297,15 @@ inferglow/
 | 限流 | 未提及 | ✅ `security/ratelimit/` 已实现 |
 | RBAC | 未提及 | ✅ `security/rbac/` 已实现 |
 | OTel 可观测 | 未提及 | ✅ `observability/otel/` 已实现 |
+| ExecutionResource | 未提及 | ✅ `resource/` 独立模块已实现（Agently 等价） |
+| PolicyApproval | 未提及 | ✅ `approval/` 独立模块已实现（Agently 等价） |
+| RecordStore | 未提及 | ✅ `orchestrator/recordstore/` 已实现（Agently 等价） |
+| TaskContext | 未提及 | ✅ `orchestrator/taskcontext/` 已实现（Agently 等价） |
+| TaskDAG | 未提及 | ✅ `orchestrator/taskdag/` 已实现（Agently 等价） |
+| SkillLibrary | 未提及 | ✅ `orchestrator/skill/` 已实现（Agently 等价） |
+| Blocks 框架 | 未提及 | ✅ `orchestrator/blocks/` 已实现（Agently 等价） |
+| DAGActionFlow | 未提及 | ✅ `orchestrator/actionruntime/dag_flow.go` 已实现 |
+| ExecutionStrategy | 未提及 | ✅ `orchestrator/agent/strategy.go` 已实现 |
+| Workspace 增强 | 未提及 | ✅ `workspace/execution_access.go` + `identity.go` + `context_source.go` 已实现 |
 
 本文档系列反映的是**实际代码状态**，不再使用「主模块待实现」的表述。

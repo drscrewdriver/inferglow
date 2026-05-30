@@ -475,3 +475,247 @@ ag := agent.New(sess, actExt, llm,
     agent.WithPIIMasker(piiMasker),
 )
 ```
+
+---
+
+## 九、Agently 等价组件（新增子包）
+
+以下子包是 Inferglow 对 Agently 框架等价组件的实现。所有组件通过 `AgentExtensions` 可选注入，零注入 = 零变化 = 向后兼容。
+
+### 9.1 recordstore/ — 统一执行记录存储
+
+| 文件 | 内容 |
+|------|------|
+| [store.go](../../orchestrator/recordstore/store.go) | `RecordStore` 接口 + Record/Checkpoint/Snapshot/Event/Scope/EventFilter 类型 |
+| [memory.go](../../orchestrator/recordstore/memory.go) | `MemoryStore` 内存实现（sync.RWMutex 并发安全） |
+
+```go
+type RecordStore interface {
+    AppendRecord(rec Record) error
+    GetRecord(id string) (*Record, error)
+    SaveCheckpoint(executionID string, cp *Checkpoint) error
+    LoadCheckpoint(executionID string) (*Checkpoint, error)
+    SaveSnapshot(executionID string, snap *Snapshot) error
+    LoadSnapshot(executionID string) (*Snapshot, error)
+    AppendEvent(executionID string, evt Event) error
+    QueryEvents(filter EventFilter) ([]Event, error)
+}
+
+type Scope struct {
+    AgentID     string
+    SessionID   string
+    ExecutionID string
+}
+```
+
+### 9.2 taskcontext/ — 任务上下文聚合
+
+| 文件 | 内容 |
+|------|------|
+| [context.go](../../orchestrator/taskcontext/context.go) | `TaskContext` 聚合器 + `ContextSource` 接口 + `ContextReader`（budget 控制） + `ContextBudget` |
+
+```go
+type ContextSource interface {
+    EnumerateDescriptors(ctx context.Context, cursor string, limit int) (*DescriptorPage, error)
+    ReadExact(ctx context.Context, ref SourceRef, maxChars int) (*ContextSourceRead, error)
+}
+
+type TaskContext struct { ... }
+func NewTaskContext() *TaskContext
+func (tc *TaskContext) Attach(source ContextSource) *TaskContext
+func (tc *TaskContext) Put(entry ContextEntry) *TaskContext
+func (tc *TaskContext) Reader(opts ...ReaderOption) *ContextReader
+
+type ContextBudget struct {
+    MaxChars      int
+    MaxBlocks     int
+    MaxBlockChars int
+}
+```
+
+### 9.3 taskdag/ — 模型生成的 DAG 执行
+
+| 文件 | 内容 |
+|------|------|
+| [dag.go](../../orchestrator/taskdag/dag.go) | `TaskDAG` / `TaskNode` 类型 + 哨兵错误 |
+| [validator.go](../../orchestrator/taskdag/validator.go) | `TopoSort`（Kahn 算法）+ `Validate`（重复/缺失/循环检测） |
+| [resolver.go](../../orchestrator/taskdag/resolver.go) | `Handler` / `HandlerResolver` 接口 + `StaticResolver` |
+| [context.go](../../orchestrator/taskdag/context.go) | `TaskDAGContext`（运行时上下文，线程安全） |
+| [executor.go](../../orchestrator/taskdag/executor.go) | `TaskDAGExecutor.Run`（validate → toposort → 顺序执行 + optional 跳过） |
+| [compiler.go](../../orchestrator/taskdag/compiler.go) | `Compile`（TaskDAG → flow.Flow 转换） |
+
+```go
+type TaskDAG struct {
+    ID      string            `json:"id"`
+    Tasks   []TaskNode        `json:"tasks"`
+    Outputs map[string]string `json:"outputs,omitempty"`
+}
+
+type TaskNode struct {
+    ID        string         `json:"id"`
+    Kind      string         `json:"kind"`      // "model", "action", "local"
+    Binding   string         `json:"binding"`
+    DependsOn []string       `json:"depends_on"`
+    Optional  bool           `json:"optional"`
+    Input     map[string]any `json:"input"`
+}
+
+type Handler interface {
+    Execute(ctx context.Context, tctx *TaskDAGContext) (any, error)
+}
+
+type TaskDAGExecutor struct { ... }
+func NewTaskDAGExecutor(resolver HandlerResolver) *TaskDAGExecutor
+func (e *TaskDAGExecutor) Run(ctx context.Context, dag *TaskDAG, input any) (map[string]any, error)
+```
+
+### 9.4 skill/ — 技能库管理
+
+| 文件 | 内容 |
+|------|------|
+| [library.go](../../orchestrator/skill/library.go) | `SkillLibrary`（Install/GetRevision/ListInstalled/Uninstall）+ `SkillRevision` / `SkillRef` / `SkillMode` |
+| [source.go](../../orchestrator/skill/source.go) | `SourceProvider` 接口 + `SkillPackage` + `LocalSourceProvider` |
+| [binding.go](../../orchestrator/skill/binding.go) | `SkillBinding` + `NewSkillBinding` + `HasSkill` |
+
+```go
+type SkillMode string
+const (
+    ModelDecision SkillMode = "model_decision"  // 模型决定调用哪些技能
+    Required      SkillMode = "required"        // 强制调用所有绑定技能
+)
+
+type SkillLibrary struct { ... }
+func NewSkillLibrary(root string) *SkillLibrary
+func (lib *SkillLibrary) Install(source, scope string) (*SkillRevision, error)
+func (lib *SkillLibrary) GetRevision(source, revision string) (*SkillRevision, error)
+```
+
+### 9.5 blocks/ — 结构化可组合执行块
+
+| 文件 | 内容 |
+|------|------|
+| [block.go](../../orchestrator/blocks/block.go) | `FlowBlock` 接口 + `BlockBlueprint` / `BlockRef` + 哨兵错误 |
+| [registry.go](../../orchestrator/blocks/registry.go) | `BlockRegistry`（Register/Get/List/ExecuteBlueprint） |
+| [compiler.go](../../orchestrator/blocks/compiler.go) | `CompileBlueprint`（blueprint → []*flow.Operator） |
+| [builtin_blocks.go](../../orchestrator/blocks/builtin_blocks.go) | 内置块: `ReasonBlock` / `ActBlock` / `IntentBlock` |
+
+```go
+type FlowBlock interface {
+    Name() string
+    BuildOperators(ctx context.Context, blueprint *BlockBlueprint) ([]*flow.Operator, error)
+    Execute(ctx context.Context, input any) (any, error)
+}
+
+type BlockBlueprint struct {
+    Blocks []BlockRef `json:"blocks"`
+}
+```
+
+### 9.6 actionruntime/dag_flow.go — DAG 并发动作执行
+
+| 文件 | 内容 |
+|------|------|
+| [dag_flow.go](../../orchestrator/actionruntime/dag_flow.go) | `DAGActionFlow`（信号量并发控制）+ `ActionResult` + `ActionExecutor` + `DefaultActionExecutor` |
+
+```go
+type DAGActionFlow struct {
+    executor       ActionExecutor
+    maxConcurrency int
+}
+
+func NewDAGActionFlow(executor ActionExecutor) *DAGActionFlow
+func (f *DAGActionFlow) Run(ctx context.Context, calls []ActionCall) ([]*ActionResult, error)
+// 内部: 分析 calls 间的依赖 → 构建 DAG → 拓扑排序 → 按层并发执行
+```
+
+### 9.7 agent/strategy.go — 多执行策略
+
+| 文件 | 内容 |
+|------|------|
+| [strategy.go](../../orchestrator/agent/strategy.go) | `ExecutionStrategy` 接口 + `DirectStrategy`（PLAN→EXECUTE）+ `TaskDAGStrategy`（DAG 执行） |
+| [extensions.go](../../orchestrator/agent/extensions.go) | `AgentExtensions` + `DefaultExtensions` + `ErrInvalidDAGInput` |
+
+```go
+type ExecutionStrategy interface {
+    Name() string
+    Execute(ctx context.Context, agent *Agent, input any) (any, error)
+}
+
+type AgentExtensions struct {
+    Strategy ExecutionStrategy  // nil = 默认 PLAN→EXECUTE 循环
+}
+```
+
+---
+
+## 十、独立模块（resource/ 和 approval/）
+
+### 10.1 resource/ — 执行资源生命周期管理
+
+独立 Go module（`github.com/inferglow/resource`），无 inferglow 内部依赖。
+
+| 文件 | 内容 |
+|------|------|
+| [provider.go](../../resource/provider.go) | `Resource` 接口 (ID/Type/Execute/HealthCheck/Close) + `ResourceProvider` 接口 + `ResourceResult` |
+| [types.go](../../resource/types.go) | `Requirement`, `ResourceConfig`, `ResourceStatus`, `State` 常量 |
+| [handle.go](../../resource/handle.go) | `ResourceHandle` 状态机 (creating→ready→busy↔idle→closed/failed) |
+| [manager.go](../../resource/manager.go) | `ResourceManager` (RegisterProvider/Ensure/Release/ReleaseScope) + handle 复用 via reuseKey |
+| [builtin_providers.go](../../resource/builtin_providers.go) | `NoopResource` + `NoopProvider` 测试用 |
+
+```go
+type Resource interface {
+    ID() string
+    Type() string  // "bash", "python", "sqlite", "browser", "mcp"
+    Execute(ctx context.Context, cmd any) (*ResourceResult, error)
+    HealthCheck(ctx context.Context) error
+    Close() error
+}
+
+type ResourceProvider interface {
+    Type() string
+    Capabilities() []string
+    Create(ctx context.Context, config ResourceConfig) (Resource, error)
+    Probe(ctx context.Context) error
+}
+
+type ResourceManager struct { ... }
+func (m *ResourceManager) Declare(req Requirement) (*ResourceHandle, error)
+func (m *ResourceManager) Ensure(ctx context.Context, req Requirement) (*ResourceHandle, error)
+func (m *ResourceManager) Release(handle *ResourceHandle) error
+func (m *ResourceManager) ReleaseScope(scope string) error
+```
+
+### 10.2 approval/ — 策略审批框架
+
+独立 Go module（`github.com/inferglow/approval`），无 inferglow 内部依赖。
+
+| 文件 | 内容 |
+|------|------|
+| [types.go](../../approval/types.go) | `DecisionStatus` / `RiskLevel` / `Request` / `Decision` / `AccessPolicy` / `ApprovalHandler` 接口 |
+| [manager.go](../../approval/manager.go) | `PolicyApprovalManager` (RegisterHandler/SetDefaultHandler/Resolve/ListHandlers) |
+| [access_policy.go](../../approval/access_policy.go) | `evaluatePolicy`（denied→allowed→risk 预检）+ `MergePolicies`（策略合并） |
+| [builtin_handlers.go](../../approval/builtin_handlers.go) | 内置 handler: `AutoApproveHandler` / `FailClosedHandler` / `InputTimeoutFailHandler` |
+
+```go
+type ApprovalHandler interface {
+    Name() string
+    Resolve(req *Request) (*Decision, error)
+}
+
+type PolicyApprovalManager struct { ... }
+func (m *PolicyApprovalManager) RegisterHandler(h ApprovalHandler) error
+func (m *PolicyApprovalManager) SetDefaultHandler(name string) error
+func (m *PolicyApprovalManager) Resolve(ctx context.Context, req *Request) (*Decision, error)
+```
+
+---
+
+## 十一、workspace 增强（执行访问控制 + 内容身份）
+
+在原有 `workspace/` 模块基础上新增三个文件：
+
+| 文件 | 内容 |
+|------|------|
+| [execution_access.go](../../workspace/execution_access.go) | `ExecutionAccessGrant`（ReadPaths/WritePaths/ExpiresAt）+ `ExecutionAccessStore`（Grant/Revoke/CheckRead/CheckWrite） |
+| [identity.go](../../workspace/identity.go) | `ContentIdentity`（SHA-256 + 版本化追踪）+ `IdentityCatalog`（ObservePath/GetVersion） |
+| [context_source.go](../../workspace/context_source.go) | `WorkspaceContextSource`（实现 `taskcontext.ContextSource` 接口，WalkDir 枚举 + ReadFile） |

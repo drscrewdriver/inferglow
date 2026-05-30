@@ -840,14 +840,16 @@ func NewAgentWithBlueprint(ctx context.Context, blueprint []ToolBlueprint, role 
 
 | 模块 | 优先级 | 计划状态 | 实际状态 | 说明 |
 |------|--------|---------|---------|------|
-| `security/` | P3 | 7 个子模块设计 | ❌ **完全不存在** | 零文件，`package security` 不存在 |
-| `builtins/actions/` | P1 | 8 个内置 Action 设计 | ❌ **完全不存在** | 零文件，`package builtins` 不存在 |
-| `rag/` | P1 | 完整管道设计 | ❌ **完全不存在** | 零文件 |
-| `model/pool.go` | P1 | ModelPool 路由/降级设计 | ❌ **不存在** | model/ 目录无 pool.go |
-| `session/memory_plugin.go` | P2 | 记忆插件系统设计 | ❌ **不存在** | session/ 只有 persistence.go |
-| `orchestrator/eventbus.go` | P3 | EventCenter 设计 | ❌ **不存在** | orchestrator/ 仅有 agent/ + actionruntime/ |
+| `security/` | P3 | 7 个子模块设计 | ✅ **已实现** | pii/prompt_injection/ratelimit/rbac/agenthook/sessionhook |
+| `builtins/` | P1 | 8 个内置 Action 设计 | ✅ **已实现** | actions/policies/tools 子包 |
+| `resource/` | P0 | Agently 等价 | ✅ **已实现** | 独立 Go module，执行资源生命周期管理 |
+| `approval/` | P1 | Agently 等价 | ✅ **已实现** | 独立 Go module，策略审批框架 |
+| `rag/` | P1 | 完整管道设计 | ❌ **未实现** | 零代码 |
+| `model/pool.go` | P1 | ModelPool 路由/降级设计 | ❌ **未实现** | model/ 目录无 pool.go |
+| `session/memory_plugin.go` | P2 | 记忆插件系统设计 | ❌ **未实现** | session/ 只有 persistence.go |
+| `orchestrator/eventbus.go` | P3 | EventCenter 设计 | ❌ **未实现** | orchestrator/ 新增 recordstore/taskcontext/taskdag/skill/blocks 子包，但无 eventbus |
 
-**结论：6 个核心缺失模块，0/6 已实现。全部处于零进度。**
+**结论：原 6 个缺失模块中 4 个已实现（security/builtins/resource/approval），2 个仍未实现（rag/model pool），另新增 Agently 等价组件 10 个全部完成。**
 
 ### 7.4 代码质量改进（9.4 — P3）
 
@@ -875,13 +877,13 @@ func NewAgentWithBlueprint(ctx context.Context, blueprint []ToolBlueprint, role 
 
 | 项目 | 计划状态 | 实际状态 | 说明 |
 |------|---------|---------|------|
-| TaskDAG | DAG 图编排 | ❌ 未实现 | 零代码 |
-| Agently 上层应用 | 应用层 | ❌ 未实现 | 仅有对标分析文档 |
+| TaskDAG | DAG 图编排 | ✅ 已实现 | `orchestrator/taskdag/` — TopoSort + Executor + Compile(→flow.Flow) |
+| Agently 等价组件 | 10 个组件 | ✅ 已实现 | resource/approval/recordstore/taskcontext/taskdag/skill/blocks/dag_flow/strategy/workspace增强 |
 | REST/WebSocket 服务 | HTTP API | ❌ 未实现 | MCP 仅支持 stdio，HTTP/SSE 传输缺失 |
 | Deep Agents | 子 Agent 派生 | ❌ 未实现 | 零代码 |
 | Multi-Agent | 多 Agent 协作 | ❌ 未实现 | 零代码 |
 
-**结论：长期愿景全部处于零进度。**
+**结论：TaskDAG 和 Agently 等价组件已完整实现，其余长期愿景仍处于零进度。**
 
 ### 7.7 综合完成率
 
