@@ -274,3 +274,215 @@ flow.Resume(ctx, snapshot)
 - `OpSubFlow` 算子允许 Flow 嵌套调用另一个 Flow
 
 两者是互补的编排能力：Flow 面向**确定性流程**，Agent 面向**LLM 驱动的非确定性决策**。通过 FlowContext 注入，flow 步骤可复用 orchestrator 的全部横切能力。
+
+---
+
+## 六、flow 模块内部双范式分析
+
+当前 `flow/` 模块共 19,314 行（19 个非测试文件），内部实际包含**两套独立的编排范式**，共存于同一个 Go package 中：
+
+### 6.1 范式 A：Step-based 线性执行
+
+面向**确定性 DAG/管道**编排，由 `Flow` → `Step` → `Engine.Execute()` 构成。
+
+| 文件 | 行数 | 核心类型 |
+|------|------|----------|
+| `flow.go` | 165 | `Flow`, `Edge`, `Branch`, `FlowBuilder` |
+| `step.go` | 67 | `Step`, `StepFunc`, `StepBuilder` |
+| `engine.go` | 305 | `Execution`, `ExecutionState`, `ExecutionStatus`, `Flow.Execute()` |
+| `step_validate.go` | 52 | Step 校验逻辑 |
+| `flow_context.go` | 137 | `FlowContext` 接口, `Span`, `SpanKind` |
+| `pause.go` | 176 | `PausePoint`, Pause/Resume 基础 |
+
+**总计约 900 行**，是 flow 模块中较小的一部分。
+
+**外部消费者**：
+- `orchestrator/agent/` — `WithFlow(f *flow.Flow)` 切换到 flow 编排模式
+- `orchestrator/taskdag/compiler.go` — `Compile(dag *TaskDAG) *flow.Flow` 将 DAG 编译为 Flow
+- `orchestrator/agent/flow_exec.go` — `executeFlow()` 执行 Flow 并处理 Pause/Resume
+
+### 6.2 范式 B：Signal-driven 算子系统（TriggerFlow）
+
+面向**事件驱动/信号传播**编排，由 `TriggerFlow` → `Operator` → `SignalNet` 构成。
+
+| 文件 | 行数 | 核心类型 |
+|------|------|----------|
+| `operator.go` | 174 | `Operator`, `OperatorKind`, `OperatorHandler`, `OperatorContext`, `OperatorRegistry` |
+| `operator_handlers.go` | 1013 | 12 种内置 Handler（Chunk/SignalGate/BatchFanout/BatchCollect/MatchRoute/ForEach/MatchCase/MatchCollect/CollectBranch/InterventionPoint/SubFlow/ResultSink） |
+| `operator_runtime.go` | 78 | `OperatorRuntime` |
+| `triggerflow_blueprint.go` | 573 | `TriggerFlowBlueprint`, `TriggerFlow<T,S,R>`, `FlowTriggerFlowDefinition` |
+| `triggerflow_contract.go` | 183 | `Contract<T,S,R>` 泛型契约 |
+| `signal.go` | 460 | `Signal`, `SignalNet`, `TriggerFlowRuntimeData`, `DynamicBinding` |
+| `action_operator.go` | 79 | `OpAction`, `ActionOperatorHandler`（桥接 action/） |
+
+**总计约 2,560 行**（不含基础设施）。
+
+**外部消费者**：
+- `orchestrator/blocks/` — 使用 `flow.Operator`, `flow.OpResultSink`, `flow.OpMatchRoute` 编译 Block 为算子图
+
+### 6.3 范式 C：基础设施 / 横切能力
+
+服务于上述两套范式的共享基础设施：
+
+| 文件 | 行数 | 核心类型 | 服务对象 |
+|------|------|----------|----------|
+| `persistence.go` | 716 | `ExecutionPersistence`, `CheckpointStore`, `ExecutionSnapshot`, `CheckpointManager` | 主要服务 Flow（方法挂在 `*Flow` 上） |
+| `subflow.go` | 543 | `SubFlowFrame`, `ChildFlow`, `SubFlowRegistry` | 两套范式均可使用 |
+| `inputsource.go` | 572 | `InputSource`, `StaticValueSource`, `EnvSource`, `SessionSource`, `HTTPSource`, `MultiSource` | 主要服务 TriggerFlow |
+| `lifecycle.go` | 254 | `LifecycleMachine`, `LifecycleState` | 两套范式共享 |
+| `goroutine_pool.go` | 228 | `WorkerPool` | TriggerFlow 并发控制 |
+| `callable_ref.go` | 308 | `HandlerRegistry` | Operator 可序列化引用 |
+
+**总计约 2,621 行**。
+
+### 6.4 耦合分析
+
+两套范式在同一个 Go package 内存在**双向耦合**：
+
+```
+Step-based (A)                    Signal-driven (B)
+─────────────                    ─────────────────
+engine.go                         
+  └── PauseSignalFrom(ctx) ──────▶ signal.go (PauseSignal)
+                                  
+action_operator.go                
+  └── OpAction, ActionOperator ──▶ operator.go (OperatorKind, OperatorHandler)
+  
+                                  persistence.go
+                                    └── func (f *Flow) SaveCheckpoint() ──▶ flow.go (*Flow)
+                                    └── func (f *Flow) Pause() ──────────▶ flow.go (*Flow)
+```
+
+**关键耦合点**：
+1. `persistence.go` 的 Checkpoint/Pause/Resume 方法直接挂在 `*Flow` 上 → 与 Step-based 强绑定
+2. `engine.go` 引用 `PauseSignalFrom(ctx)` → Step-based 执行使用了 signal 包的信号机制
+3. `action_operator.go` 是桥接层 → 将 action/ 暴露为 Operator，纯属于范式 B
+4. `blocks/` 只使用 `Operator` 类型 → 与 Step-based 完全无关
+
+### 6.5 当前架构的合理性
+
+**现状合理之处**：
+- 两套范式共享 `FlowContext`、`LifecycleMachine`、`CheckpointStore` 等基础设施，避免重复实现
+- 同一个 Go package 允许类型互相引用，无需额外接口层
+- `flow` 作为独立 Go module，对外提供完整的编排能力
+
+**现状的问题**：
+- `flow` 模块名过于笼统，实际包含两个截然不同的编排模型
+- 仅使用 Step-based 的用户被迫携带 TriggerFlow 的 10K+ 行代码
+- `blocks/` 只依赖 `Operator` 相关类型，但概念上属于不同层次
+- 模块职责边界模糊：flow 既是「DAG 执行引擎」又是「信号驱动算子框架」
+
+---
+
+## 七、理想架构调整方案（脱离版本限制）
+
+如果脱离当前版本兼容性限制，最科学的调整方式是**按范式拆分为独立模块**，保留共享基础设施层：
+
+### 7.1 目标拓扑
+
+```
+当前:                                  理想:
+                                       
+flow/ (19K行, 双范式混合)              flow/ (~900行, 纯 Step-based)
+├── flow.go                            ├── flow.go
+├── step.go                            ├── step.go
+├── engine.go                          ├── engine.go
+├── operator.go          ◀── 耦合      ├── step_validate.go
+├── operator_handlers.go               └── flow_context.go
+├── triggerflow_blueprint.go           
+├── signal.go                      triggerflow/ (~2.5K行, 纯信号驱动)
+├── persistence.go         ◀── 跨范式  ├── operator.go
+├── subflow.go                       ├── operator_handlers.go
+├── inputsource.go                   ├── operator_runtime.go
+├── lifecycle.go                     ├── triggerflow_blueprint.go
+├── goroutine_pool.go                ├── triggerflow_contract.go
+└── callable_ref.go                  ├── signal.go
+                                     ├── action_operator.go
+orchestrator/                        └── lifecycle.go
+├── agent/ (uses Flow, Step)         
+├── taskdag/ (compiles to Flow)   flowinfra/ (~2.6K行, 共享基础设施)
+└── blocks/ (uses Operator)        ├── persistence.go
+                                   ├── subflow.go
+                                   ├── inputsource.go
+                                   ├── goroutine_pool.go
+                                   └── callable_ref.go
+                                   
+                               orchestrator/
+                               ├── agent/ (uses flow/)
+                               ├── taskdag/ (compiles to flow/)
+                               └── blocks/ (uses triggerflow/)
+```
+
+### 7.2 拆分方案详细说明
+
+#### 模块 1：`flow/`（保留原名，纯 Step-based）
+
+**保留文件**：`flow.go`, `step.go`, `engine.go`, `step_validate.go`, `flow_context.go`
+
+**职责**：确定性 DAG/管道编排。`Flow` 定义步骤图，`Engine.Execute()` 按拓扑顺序执行。
+
+**对外接口不变**：`Flow`, `Step`, `FlowBuilder`, `Execution`, `FlowContext`, `Span` 等类型保持原签名。
+
+**依赖**：`schema`（Step 可选 OutputSchema 校验）
+
+**从 flowinfra/ 引入**：`CheckpointStore`, `ExecutionSnapshot`（persistence 核心类型，因为 `*Flow` 的方法需要它们）
+
+#### 模块 2：`triggerflow/`（新模块，纯信号驱动）
+
+**包含文件**：`operator.go`, `operator_handlers.go`, `operator_runtime.go`, `triggerflow_blueprint.go`, `triggerflow_contract.go`, `signal.go`, `action_operator.go`, `lifecycle.go`
+
+**职责**：事件驱动算子编排。`TriggerFlow<T,S,R>` 泛型定义 + `SignalNet` 信号传播 + 13 种内置算子。
+
+**依赖**：`flow`（`FlowContext` 接口、`Span`）、`schema`
+
+**关键**：`TriggerFlow` 不再与 `Flow` 类型耦合，而是通过 `FlowContext` 接口间接使用。
+
+#### 模块 3：`flowinfra/`（新模块，共享基础设施）
+
+**包含文件**：`persistence.go`, `subflow.go`, `inputsource.go`, `goroutine_pool.go`, `callable_ref.go`
+
+**职责**：为 `flow` 和 `triggerflow` 提供共用的持久化、子流程、输入源、并发池等基础设施。
+
+**依赖**：`schema`
+
+### 7.3 拆分后的依赖关系
+
+```
+orchestrator ──▶ flow ──▶ schema
+    │             │
+    │             └──▶ flowinfra (persistence types)
+    │
+    ├──▶ triggerflow ──▶ flow (FlowContext interface)
+    │                └──▶ flowinfra
+    │
+    └──▶ blocks ──▶ triggerflow (Operator types only)
+```
+
+### 7.4 拆分的收益
+
+| 维度 | 当前 | 拆分后 |
+|------|------|--------|
+| 模块职责 | `flow` = DAG + 信号驱动（模糊） | `flow` = DAG, `triggerflow` = 信号驱动（清晰） |
+| 最小依赖 | 使用 Step-based 需携带全部 19K 行 | 使用 Step-based 仅依赖 ~900 行 + flowinfra |
+| 概念清晰度 | 「flow 是什么」需要长篇解释 | 模块名即职责 |
+| 独立演进 | 两套范式互相制约 | 可独立发展，共享基础设施 |
+| blocks/ 归属 | 依赖 flow.Operator（概念上属于 triggerflow） | 直接依赖 triggerflow（语义正确） |
+
+### 7.5 拆分的成本与风险
+
+| 成本项 | 评估 |
+|--------|------|
+| 新增 2 个 Go module | 低：go.mod + replace 指令 |
+| 跨模块类型引用 | 中：`persistence.go` 的 `*Flow` 方法需要重构为独立函数或接口 |
+| `FlowContext` 接口归属 | 低：保留在 `flow/` 中，`triggerflow/` 依赖 `flow/` |
+| 测试迁移 | 低：测试文件随源文件移动 |
+| 向后兼容 | 中：`orchestrator/blocks/` 的 import 路径从 `flow` 改为 `triggerflow` |
+
+### 7.6 迁移路径（如需执行）
+
+1. **Phase 1**：创建 `flowinfra/` 模块，将 `persistence.go`、`subflow.go`、`inputsource.go`、`goroutine_pool.go`、`callable_ref.go` 移入。`flow/` 通过 re-export 保持向后兼容。
+2. **Phase 2**：创建 `triggerflow/` 模块，将算子相关文件移入。`flow/` 保留类型别名（`type Operator = triggerflow.Operator`）过渡。
+3. **Phase 3**：更新 `orchestrator/blocks/` 的 import 路径直接引用 `triggerflow/`。移除 `flow/` 中的类型别名。
+4. **Phase 4**：重构 `persistence.go` 中挂在 `*Flow` 上的方法为独立的 `CheckpointManager` 方法，解除 flow ↔ flowinfra 循环依赖。
+
+> **注**：当前阶段不建议立即执行此拆分。TriggerFlow 功能刚经历增强，处于活跃开发期。建议在 TriggerFlow API 稳定后再考虑模块拆分。当前文档记录此方案作为架构演进方向。

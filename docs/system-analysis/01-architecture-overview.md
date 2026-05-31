@@ -87,7 +87,12 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 
 ```
                     ┌──────────────┐
-                    │ orchestrator │  (编排层，依赖下方 5 个基础模块 + flow)
+                    │ orchestrator │  (编排层)
+                    │              │
+                    │  agent/    ──┼──▶ flow (Step-based: Flow, Step, Execution)
+                    │  taskdag/  ──┼──▶ flow (Step-based: FlowBuilder → Flow)
+                    │  blocks/   ──┼──▶ flow (Signal-driven: Operator, OpResultSink)
+                    │              │
                     └──────┬───────┘
         ┌──────────┬───────┼────────┬──────────┬────────────┐
         ▼          ▼       ▼        ▼          ▼            ▼
@@ -103,18 +108,32 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
    └────┬───┘
         │
         ▼
-   ┌────────┐
-   │  flow  │
-   └────────┘
+   ┌──────────────────────────────────────────────────┐
+   │  flow  (19K行, 双范式共存于同一 Go package)       │
+   │                                                  │
+   │  范式 A: Step-based (~900行)                     │
+   │    Flow → Step → Engine.Execute()                │
+   │    消费者: orchestrator/agent/, orchestrator/taskdag/ │
+   │                                                  │
+   │  范式 B: Signal-driven (~2.5K行)                   │
+   │    TriggerFlow → Operator → SignalNet            │
+   │    消费者: orchestrator/blocks/                    │
+   │                                                  │
+   │  范式 C: 共享基础设施 (~2.6K行)                    │
+   │    persistence / subflow / inputsource / lifecycle│
+   └──────────────────────────────────────────────────┘
 ```
 
-> **注**：orchestrator 另外依赖 `flow` 模块（编排引擎），`flow` 依赖 `schema`；上图 `model → schema → flow` 链已过期，正确关系为 `orchestrator → flow → schema`，且 `schema` 不依赖 `model`。
+> **注**：`flow` 模块内部包含两套编排范式（详见 [03-flow.md 第六节](./03-flow.md)）。理想情况下范式 B 可拆分为独立的 `triggerflow/` 模块，但当前处于活跃开发期，暂不拆分。
 
 **关键依赖事实（来自 `go.mod`）：**
 
 | 模块 | 直接依赖（inferglow 内部） |
 |------|---------------------------|
-| `orchestrator` | `action` `audit` `model` `security` `session` `sandbox` |
+| `orchestrator` | `action` `audit` `flow` `model` `observability` `session`（子包 recordstore/taskcontext/taskdag/skill/blocks 在模块内部） |
+| `orchestrator/agent` | `flow` 的 Step-based API（Flow, Step, Execution, FlowContext） |
+| `orchestrator/taskdag` | `flow` 的 Step-based API（FlowBuilder → Flow） |
+| `orchestrator/blocks` | `flow` 的 Signal-driven API（Operator, OpResultSink, OpMatchRoute） |
 | `schema` | `model` |
 | `flow` | `schema` |
 | `action` | `sandbox`（仅 `executor_sandbox.go` 一个文件） |
