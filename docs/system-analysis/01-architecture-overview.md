@@ -121,6 +121,10 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
    │                                                  │
    │  范式 C: 共享基础设施 (~2.6K行)                    │
    │    persistence / subflow / inputsource / lifecycle│
+   │                                                  │
+   │  FlowContext 桥接:                                │
+   │    RunAgent / RunAgentParallel                    │
+   │    使 Step 可嵌入 Agent 多轮循环（顺序降级，预留并行）│
    └──────────────────────────────────────────────────┘
 ```
 
@@ -131,7 +135,7 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 | 模块 | 直接依赖（inferglow 内部） |
 |------|---------------------------|
 | `orchestrator` | `action` `audit` `flow` `model` `observability` `session`（子包 recordstore/taskcontext/taskdag/skill/blocks 在模块内部） |
-| `orchestrator/agent` | `flow` 的 Step-based API（Flow, Step, Execution, FlowContext） |
+| `orchestrator/agent` | `flow` 的 Step-based API（Flow, Step, Execution）+ FlowContext.RunAgent/RunAgentParallel（Step 内嵌 Agent 多轮循环） |
 | `orchestrator/taskdag` | `flow` 的 Step-based API（FlowBuilder → Flow） |
 | `orchestrator/blocks` | `flow` 的 Signal-driven API（Operator, OpResultSink, OpMatchRoute） |
 | `schema` | `model` |
@@ -326,5 +330,7 @@ inferglow/
 | DAGActionFlow | 未提及 | ✅ `orchestrator/actionruntime/dag_flow.go` 已实现 |
 | ExecutionStrategy | 未提及 | ✅ `orchestrator/agent/strategy.go` 已实现 |
 | Workspace 增强 | 未提及 | ✅ `workspace/execution_access.go` + `identity.go` + `context_source.go` 已实现 |
+| FlowContext.RunAgent 桥接 | 未提及 | ✅ `flow/flow_context.go` 新增 RunAgent/RunAgentParallel + AgentRunOptions/AgentSubTask 类型，使 Step 可嵌入 Agent 多轮循环 |
+| AgentStep 工厂 | 未提及 | ✅ `orchestrator/agent/agent_step.go` 提供 NewAgentStepFunc + NewParallelAgentStepFunc 工厂函数 |
 
 本文档系列反映的是**实际代码状态**，不再使用「主模块待实现」的表述。

@@ -486,3 +486,103 @@ orchestrator ──▶ flow ──▶ schema
 4. **Phase 4**：重构 `persistence.go` 中挂在 `*Flow` 上的方法为独立的 `CheckpointManager` 方法，解除 flow ↔ flowinfra 循环依赖。
 
 > **注**：当前阶段不建议立即执行此拆分。TriggerFlow 功能刚经历增强，处于活跃开发期。建议在 TriggerFlow API 稳定后再考虑模块拆分。当前文档记录此方案作为架构演进方向。
+
+---
+
+## 八、范式选择指南与 Agent 桥接
+
+### 8.1 三种范式的定位
+
+| 范式 | 定义位置 | 控制流驱动方式 | 适合场景 |
+|------|---------|------------------|----------|
+| Step-based Flow | `flow/` (flow.go, step.go, engine.go) | 引擎按拓扑序主动推进 | 确定性 DAG/管道 |
+| Agent executeLoop | `orchestrator/agent/engine.go` | LLM 多轮 PLAN→EXECUTE 决策 | 智能体迭代任务 |
+| TriggerFlow 算子系统 | `flow/` (triggerflow_blueprint.go, signal.go) | 信号传播触发 Operator | 事件驱动/扇出扇入 |
+
+### 8.2 场景→范式 选择矩阵
+
+| 你的场景 | 推荐范式 | 原因 |
+|----------|----------|------|
+| 顺序固定步骤，无 LLM 决策 | Step-based Flow | 最简单、确定性最高 |
+| 步骤内需要 LLM 多轮决策 | Step-based + AgentStep | Agent loop 嵌套在 Step 中，通过 `FlowContext.RunAgent` |
+| 多个子 Agent 需并行处理 | Step-based + ParallelAgentStep | 通过 `FlowContext.RunAgentParallel`，预留真并行升级 |
+| 流程结构动态变化/扇出扇入 | TriggerFlow | 信号驱动、Operator 组合 |
+| 混合：部分固定+部分智能 | Step-based + AgentStep | 用同一个 Flow 串联不同能力 |
+| 需要人工干预点/外部信号 | TriggerFlow | InterventionPoint + Pause/Resume |
+
+### 8.3 FlowContext Agent 桥接
+
+为解决「Step-based Flow 无法嵌入 Agent 多轮迭代」的架构缺口，`FlowContext` 接口新增了两个方法：
+
+```go
+// FlowContext 新增方法（flow/flow_context.go）
+type AgentRunOptions struct {
+    MaxRounds        int   // 最大迭代轮数，0 = 默认 10
+    SessionIsolation bool  // 是否使用独立 Session
+}
+
+type AgentSubTask struct {
+    Label        string
+    UserMessage  string
+    SystemPrompt string
+    MaxRounds    int
+}
+
+RunAgent(ctx, userMessage, systemPrompt, opts *AgentRunOptions) (string, error)
+RunAgentParallel(ctx, agents []AgentSubTask) ([]string, error)
+```
+
+**实现机制**：`executeFlow` 构建 `flowContextImpl` 时注入 `engine` 引用，`RunAgent` 直接调用 `engine.executeLoop`，复用全部 PLAN→EXECUTE / LoopGuard / Cancel / L3-L4 校验逻辑。
+
+**并行预留**：`RunAgentParallel` 当前为顺序降级执行（每个子任务依次调用 RunAgent）。后续可升级为 goroutine + WaitGroup + WorkerPool 真并行，调用方代码无需修改。
+
+### 8.4 便利工厂函数
+
+`orchestrator/agent` 包提供两个工厂函数，一行代码即可将 Agent 能力嵌入 Flow Step：
+
+```go
+// 单个 Agent Step
+agent.NewAgentStepFunc(agent.AgentStepConfig{
+    SystemPrompt: "You are a code modification agent...",
+    MaxRounds:    5,
+    InputKey:     "task_description",
+    OutputKey:    "modified_code",
+})
+
+// 并行多子 Agent Step
+agent.NewParallelAgentStepFunc(agent.ParallelAgentStepConfig{
+    SubTasks: []agent.SubTaskSpec{
+        {Label: "reviewer", SystemPrompt: "Review...", MaxRounds: 3, OutputKey: "review"},
+        {Label: "tester",   SystemPrompt: "Test...",   MaxRounds: 2, OutputKey: "test"},
+    },
+})
+```
+
+### 8.5 典型流程建模示例
+
+```go
+// GitLab Issue → 收集信息 → 分析方案 → 修改代码(多轮) → 代码审计(多轮)
+flow := flow.NewFlow().
+    AddStep(collectStep).   // 普通 StepFunc: 单次 toolcall
+    To(analyzeStep).        // 普通 StepFunc: 单次 LLM
+    To(agent.NewAgentStepFunc(agent.AgentStepConfig{
+        SystemPrompt: "You are a code modification agent...",
+        MaxRounds:    5,
+    })).Build().
+    To(agent.NewAgentStepFunc(agent.AgentStepConfig{
+        SystemPrompt: "You are a code reviewer...",
+        MaxRounds:    3,
+    })).Build().
+    Build()
+```
+
+### 8.6 并行子 Agent 升级路径
+
+当前实现已预留以下升级空间，后续可在不改调用方代码的情况下完成：
+
+| 升级项 | 当前状态 | 升级后 |
+|--------|---------|----------|
+| `RunAgentParallel` | 顺序降级执行 | goroutine + WaitGroup + WorkerPool 真并行 |
+| `SessionIsolation` | 字段存在，退化为共享 | Session fork，子 Agent 写入不影响外层 |
+| `AgentRunOptions` 新字段 | MaxRounds + SessionIsolation | TokenBudget / PerAgentTimeout / ConcurrencyLimit |
+| 活动任务管理 | 无 | 接入 `orchestrator/taskcontext` TaskContext |
