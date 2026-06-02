@@ -103,6 +103,44 @@ type FlowContext interface {
 	// step 应将该错误作为 StepFunc 的返回值，flow.Execute 会捕获它并将状态
 	// 置为 StatusPaused（而不是 StatusFailed），同时不把它写入 Errors。
 	RequestPause(reason string) error
+
+	// RunAgent 在 step 内部触发一次完整的多轮 Agent 循环（PLAN→EXECUTE）。
+	// opts 为 nil 时使用零值（MaxRounds=10, SessionIsolation=false）。
+	// 返回 Agent 最终回复文本。未配置 Agent 运行时返回 ErrAgentNotConfigured。
+	RunAgent(ctx context.Context, userMessage string, systemPrompt string, opts *AgentRunOptions) (string, error)
+
+	// RunAgentParallel 触发多个子 Agent 循环，全部完成后返回各自结果。
+	// 当前实现为顺序降级执行；后续可升级为真并行（goroutine + WorkerPool），
+	// 调用方代码无需修改。每个子 Agent 自动使用 SessionIsolation=true。
+	RunAgentParallel(ctx context.Context, agents []AgentSubTask) ([]string, error)
+}
+
+// ErrAgentNotConfigured 是 RunAgent / RunAgentParallel 在未配置 Agent 运行时
+// 返回的哨兵错误。通常出现在直接使用 flow.Execute 而非通过 orchestrator/agent
+// 的 executeFlow 路径时（后者会注入 engine 引用）。
+var ErrAgentNotConfigured = errors.New("flow: agent runtime not configured")
+
+// AgentRunOptions 配置单次 Agent 循环的行为。
+// 采用结构化选项而非位置参数，为后续并行子 Agent / Session 隔离 / Token 预算等
+// 扩展预留空间，不破坏已有调用方。
+type AgentRunOptions struct {
+	// MaxRounds 最大迭代轮数。0 = 默认 10。
+	MaxRounds int
+	// SessionIsolation 为 true 时，内嵌 Agent 使用独立 Session（不污染外层会话历史）。
+	// 默认为 false（共享 Session）。
+	SessionIsolation bool
+}
+
+// AgentSubTask 描述 RunAgentParallel 中的一个并行子 Agent 任务。
+type AgentSubTask struct {
+	// Label 是子 Agent 的标识（用于日志/审计区分）。
+	Label string
+	// UserMessage 是该子 Agent 的用户输入。
+	UserMessage string
+	// SystemPrompt 是该子 Agent 的系统提示词。
+	SystemPrompt string
+	// MaxRounds 该子 Agent 的最大迭代轮数。0 = 默认 10。
+	MaxRounds int
 }
 
 // WithFlowContext 将 FlowContext 注入到 context.Context 中。

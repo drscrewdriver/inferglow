@@ -35,6 +35,9 @@ type mockFlowContext struct {
 	actionResult any
 	actionErr    error
 
+	agentResult string
+	agentErr    error
+
 	values map[string]any
 }
 
@@ -89,6 +92,23 @@ func (m *mockFlowContext) CheckOutput(_ string) error { return nil }
 
 // RequestPause 在 mock 上返回 ErrPauseRequested，与真实 flowContextImpl 一致。
 func (m *mockFlowContext) RequestPause(_ string) error { return ErrPauseRequested }
+
+// RunAgent 在 mock 上返回预设的 agentResult / agentErr。
+func (m *mockFlowContext) RunAgent(_ context.Context, _ string, _ string, _ *AgentRunOptions) (string, error) {
+	return m.agentResult, m.agentErr
+}
+
+// RunAgentParallel 在 mock 上顺序调用 RunAgent，返回与 agents 等长的结果。
+func (m *mockFlowContext) RunAgentParallel(_ context.Context, agents []AgentSubTask) ([]string, error) {
+	results := make([]string, len(agents))
+	for i := range agents {
+		results[i] = m.agentResult
+		if m.agentErr != nil {
+			return nil, m.agentErr
+		}
+	}
+	return results, nil
+}
 
 // ============================================================================
 // FlowContext context 注入 / 提取
