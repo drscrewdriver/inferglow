@@ -88,6 +88,7 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 		tracer:     tracer,
 		piiMasker:  nil,
 		outputHook: nil,
+		engine:     e, // 注入 engine，使 step 可调用 RunAgent
 	}
 	if c != nil {
 		// 仅在对应 feature 启用时注入 masker/hook，保持与 executeFlow

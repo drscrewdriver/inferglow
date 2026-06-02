@@ -55,6 +55,10 @@ type flowContextImpl struct {
 	// outputHook 是可选的输出安全钩子。nil 时 CheckOutput 返回 nil。
 	// 用于 step 在产出最终/中间结果时自检 prompt injection。
 	outputHook OutputSecurityHook
+	// engine 是可选的 Engine 引用。nil 时 RunAgent / RunAgentParallel 返回
+	// flow.ErrAgentNotConfigured。由 executeFlow 注入，使 step 可以在内部触发
+	// 多轮 Agent 循环（PLAN→EXECUTE）。
+	engine *Engine
 }
 
 // otelSpanAdapter 把 otel 的 trace.Span 适配为 flow.Span 接口。
@@ -236,4 +240,49 @@ func (fc *flowContextImpl) CheckOutput(output string) error {
 // 不进入返回值（调用方可通过 step log 的 Error 字段观察到）。
 func (fc *flowContextImpl) RequestPause(_ string) error {
 	return flow.ErrPauseRequested
+}
+
+// RunAgent 在 step 内部触发一次完整的多轮 Agent 循环（PLAN→EXECUTE）。
+// 通过 Engine.executeLoop 实现，复用全部 PLAN→EXECUTE / LoopGuard / Cancel / L3-L4 校验逻辑。
+// engine 为 nil 时返回 flow.ErrAgentNotConfigured（未配置 Agent 运行时）。
+func (fc *flowContextImpl) RunAgent(ctx context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
+	if fc.engine == nil {
+		return "", flow.ErrAgentNotConfigured
+	}
+	maxRounds := 10
+	_ = false // sessionIsolation 预留，Phase 2 使用
+	if opts != nil {
+		if opts.MaxRounds > 0 {
+			maxRounds = opts.MaxRounds
+		}
+		// opts.SessionIsolation 预留：当前退化为共享 Session，
+		// Phase 2 实现 Session fork 时在此处创建子 Session 快照。
+	}
+	decision, err := fc.engine.executeLoop(ctx, userMessage, maxRounds, systemPrompt)
+	if err != nil {
+		return "", err
+	}
+	if decision == nil {
+		return "", fmt.Errorf("flow: RunAgent returned nil decision")
+	}
+	return decision.FinalResponse, nil
+}
+
+// RunAgentParallel 触发多个子 Agent 循环，全部完成后返回各自结果。
+// 当前实现为顺序降级执行：每个子任务依次调用 RunAgent。
+// Phase 2 升级：改为 goroutine + sync.WaitGroup + 独立 Session，实现真并行。
+// 保留此方法签名，使调用方代码无需在升级时修改。
+func (fc *flowContextImpl) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
+	results := make([]string, len(agents))
+	for i, sub := range agents {
+		r, err := fc.RunAgent(ctx, sub.UserMessage, sub.SystemPrompt, &flow.AgentRunOptions{
+			MaxRounds:        sub.MaxRounds,
+			SessionIsolation: true, // 并行场景自动隔离
+		})
+		if err != nil {
+			return nil, fmt.Errorf("parallel agent %q (index %d): %w", sub.Label, i, err)
+		}
+		results[i] = r
+	}
+	return results, nil
 }
