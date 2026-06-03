@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/inferglow/action"
@@ -215,4 +216,103 @@ func TestExtractFlowResponse(t *testing.T) {
 			t.Errorf("got %q, want %q (JSON marshal fallback)", got, want)
 		}
 	})
+}
+
+// TestExecuteFlow_RunAgentInStep 验证 flow 步骤中通过 FlowContext.RunAgent
+// 触发多轮 Agent 循环（executeLoop）。step 从 ctx 提取 FlowContext 并调用
+// RunAgent，mock 模型返回 response decision，断言最终响应来自 Agent 循环。
+// 这证明 executeFlow 路径中 engine 引用已正确注入到 flowContextImpl。
+func TestExecuteFlow_RunAgentInStep(t *testing.T) {
+	sess := session.NewSession("test", 10000)
+	actExt := NewActionExtension()
+
+	agentCalled := false
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			agentCalled = true
+			ch := make(chan *model.StreamChunk, 1)
+			ch <- &model.StreamChunk{
+				Delta:  `{"next_action":"response","final_response":"agent-loop-result"}`,
+				IsDone: true,
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	step := flow.NewStep("run-agent", func(ctx context.Context, input any) (any, error) {
+		fc, ok := flow.FlowContextFrom(ctx)
+		if !ok {
+			return nil, errors.New("FlowContext not found in ctx")
+		}
+		result, err := fc.RunAgent(ctx, "do-task", "you are a helper", nil)
+		if err != nil {
+			return nil, fmt.Errorf("RunAgent: %w", err)
+		}
+		return result, nil
+	}).Build()
+	f := flow.NewFlow().AddStep(step).Build()
+
+	agent := New(sess, actExt, mockReq, WithFlow(f))
+	resp, err := agent.Run(context.Background(), "start")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !agentCalled {
+		t.Error("expected model to be invoked via RunAgent→executeLoop, but it was not")
+	}
+	if resp != "agent-loop-result" {
+		t.Errorf("expected %q, got %q", "agent-loop-result", resp)
+	}
+}
+
+// TestExecuteFlow_RunAgentParallelInStep 验证 flow 步骤中通过
+// FlowContext.RunAgentParallel 触发多个子 Agent 循环。当前实现为顺序降级，
+// mock 模型通过计数器为每个子任务返回不同结果，断言所有结果正确收集。
+func TestExecuteFlow_RunAgentParallelInStep(t *testing.T) {
+	sess := session.NewSession("test", 10000)
+	actExt := NewActionExtension()
+
+	var callCount atomic.Int32
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			n := callCount.Add(1)
+			ch := make(chan *model.StreamChunk, 1)
+			ch <- &model.StreamChunk{
+				Delta:  fmt.Sprintf(`{"next_action":"response","final_response":"result-%d"}`, n),
+				IsDone: true,
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	step := flow.NewStep("parallel-agents", func(ctx context.Context, input any) (any, error) {
+		fc, ok := flow.FlowContextFrom(ctx)
+		if !ok {
+			return nil, errors.New("FlowContext not found in ctx")
+		}
+		results, err := fc.RunAgentParallel(ctx, []flow.AgentSubTask{
+			{Label: "task-a", UserMessage: "do-a", SystemPrompt: "sys-a", MaxRounds: 5},
+			{Label: "task-b", UserMessage: "do-b", SystemPrompt: "sys-b", MaxRounds: 5},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("RunAgentParallel: %w", err)
+		}
+		// 合并结果，用逗号分隔
+		return strings.Join(results, ","), nil
+	}).Build()
+	f := flow.NewFlow().AddStep(step).Build()
+
+	agent := New(sess, actExt, mockReq, WithFlow(f))
+	resp, err := agent.Run(context.Background(), "start")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 model calls (one per subtask), got %d", callCount.Load())
+	}
+	if resp != "result-1,result-2" {
+		t.Errorf("expected %q, got %q", "result-1,result-2", resp)
+	}
 }
