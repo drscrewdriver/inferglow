@@ -585,4 +585,17 @@ flow := flow.NewFlow().
 | `RunAgentParallel` | 顺序降级执行 | goroutine + WaitGroup + WorkerPool 真并行 |
 | `SessionIsolation` | 字段存在，退化为共享 | Session fork，子 Agent 写入不影响外层 |
 | `AgentRunOptions` 新字段 | MaxRounds + SessionIsolation | TokenBudget / PerAgentTimeout / ConcurrencyLimit |
-| 活动任务管理 | 无 | 接入 `orchestrator/taskcontext` TaskContext |
+| 活动任务管理 | 无 | 接入 `orchestrator/taskcontext` TaskContext，子 Agent 注册为活跃任务 |
+| Cancel 传播 | Engine 级别共享 ctx | 每个子 Agent 独立 CancelManager，支持选择性取消 |
+
+> **关键约束**：Phase 2 真并行需解决 Session 隔离（多 Agent 同时写 Session 会 race）。`SessionIsolation` 字段 + `RunAgentParallel` 自动隔离标志，使调用方无需关心此细节。
+
+### 8.7 风险评估
+
+| 风险 | 严重度 | 缓解 |
+|------|--------|------|
+| 嵌套 Agent 共享 Session 历史污染 | 中 | SessionIsolation 预留，Phase 2 实现 fork |
+| maxRounds 消耗过多资源 | 低 | 显式控制 + ctx deadline 自然传播 |
+| FlowContext 接口变更影响外部实现 | 低 | flowContextImpl 是唯一正式实现 |
+| Cancel 信号冲突 | 低 | CancelManager 共享，信号自然传播 |
+| 顺序降级不够“并行” | 低 | 当前场景以顺序为主；并行升级仅改内部实现 |
