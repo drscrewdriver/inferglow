@@ -27,9 +27,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
+
+// respToolState accumulates streaming function_call items across Responses API
+// SSE events per output_index.
+type respToolState struct {
+	CallID string
+	Name   string
+	Args   strings.Builder
+}
 
 // OpenAIResponsesProvider implements ModelRequester against the OpenAI
 // Responses API (`/responses` endpoint), the recommended interface for
@@ -45,8 +54,10 @@ import (
 //   - Reasoning content is NOT streamed token-by-token; it is delivered as a
 //     summary at `response.completed`. This provider extracts both string and
 //     list summary formats.
-//   - Tool use is not yet supported. GenerateRequestData returns an explicit
-//     error when req.Tools is set rather than silently dropping it.
+//   - Tool use is supported via the same `tools` field as Chat Completions.
+//     Tool call events: `response.output_item.added` (function_call),
+//     `response.function_call_arguments.delta` (streaming args),
+//     `response.function_call_arguments.done` (final args).
 //
 // Spec: model-parity Phase 2, P0 — OpenAI Responses API Provider.
 type OpenAIResponsesProvider struct {
@@ -103,7 +114,7 @@ func (p *OpenAIResponsesProvider) mapRole(role string) string {
 //   - System message → Options["instructions"]
 //   - developer role (when mapped to "system") → merged into instructions
 //   - all other messages (chat history + current user) → Messages (unchanged)
-//   - Tools → rejected with explicit error
+//   - Tools → passed through to the request body in OpenAI envelope format
 //
 // The actual `input`/`instructions` body fields are emitted by RequestModel
 // from this RequestData so the conversion stays close to where the body is
@@ -116,12 +127,6 @@ func (p *OpenAIResponsesProvider) GenerateRequestData(ctx context.Context, req *
 
 	if req == nil {
 		return nil, fmt.Errorf("model request cannot be nil")
-	}
-
-	// Reject tool use explicitly. The Responses API has a different tool-use
-	// event model; full support is deferred to a later spec.
-	if len(req.Tools) > 0 {
-		return nil, fmt.Errorf("tool use not yet supported by OpenAIResponsesProvider")
 	}
 
 	// Build the instructions (system prompt) and the input messages.
@@ -175,11 +180,20 @@ func (p *OpenAIResponsesProvider) GenerateRequestData(ctx context.Context, req *
 		options["instructions"] = instructions
 	}
 
+	// Copy tools for RequestModel to serialize.
+	var tools []ToolDefinition
+	if len(req.Tools) > 0 {
+		tools = make([]ToolDefinition, len(req.Tools))
+		copy(tools, req.Tools)
+	}
+
 	return &RequestData{
 		Model:       model,
 		Messages:    messages,
+		Tools:       tools,
 		Temperature: temperature,
 		Options:     options,
+		ToolChoice:  req.ToolChoice,
 	}, nil
 }
 
@@ -223,6 +237,21 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 	if data.Temperature > 0 {
 		reqBody["temperature"] = data.Temperature
 	}
+	// Tool definitions: same OpenAI envelope format as Chat Completions.
+	if len(data.Tools) > 0 {
+		type respTool struct {
+			Type     string         `json:"type"`
+			Function ToolDefinition `json:"function"`
+		}
+		respTools := make([]respTool, len(data.Tools))
+		for i, t := range data.Tools {
+			respTools[i] = respTool{Type: "function", Function: t}
+		}
+		reqBody["tools"] = respTools
+	}
+	if data.ToolChoice != nil {
+		reqBody["tool_choice"] = data.ToolChoice
+	}
 	// Pass through remaining non-reserved options (excluding `instructions`
 	// which we already promoted to a top-level field).
 	for k, v := range data.Options {
@@ -265,6 +294,10 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 
 		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
 
+		// Tool call state: accumulate function_call items across events.
+		// Keyed by output_index from the event.
+		toolStates := make(map[int]*respToolState)
+
 		emit := func(schunk *StreamChunk) {
 			select {
 			case stream <- schunk:
@@ -283,7 +316,7 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 			if err != nil {
 				if err == io.EOF {
 					if strings.TrimSpace(line) != "" {
-						p.processResponsesLine(line, emit)
+						p.processResponsesLine(line, emit, toolStates)
 					}
 					return
 				}
@@ -294,7 +327,7 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 				return
 			}
 
-			stop := p.processResponsesLine(line, emit)
+			stop := p.processResponsesLine(line, emit, toolStates)
 			if stop {
 				return
 			}
@@ -315,7 +348,7 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 //   - response.completed         → extract reasoning summary → StreamChunk{IsDone: true, Reasoning: ...}
 //   - response.failed            → StreamChunk{IsDone: true, Meta: {error: ...}}
 //   - [DONE]                     → stream terminator (return true)
-func (p *OpenAIResponsesProvider) processResponsesLine(line string, emit func(*StreamChunk)) bool {
+func (p *OpenAIResponsesProvider) processResponsesLine(line string, emit func(*StreamChunk), toolStates map[int]*respToolState) bool {
 	if !strings.HasPrefix(line, "data: ") {
 		return false
 	}
@@ -346,6 +379,56 @@ func (p *OpenAIResponsesProvider) processResponsesLine(line string, emit func(*S
 		}
 	case "response.output_text.done":
 		// No payload to emit; the accumulated text is already streamed.
+	case "response.output_item.added":
+		// A new output item (e.g. function_call) has been created.
+		if item, ok := event["item"].(map[string]any); ok {
+			itemType, _ := item["type"].(string)
+			if itemType == "function_call" {
+				idx := 0
+				if oi, ok := event["output_index"].(float64); ok {
+					idx = int(oi)
+				}
+				st := &respToolState{}
+				if id, ok := item["call_id"].(string); ok {
+					st.CallID = id
+				}
+				if name, ok := item["name"].(string); ok {
+					st.Name = name
+				}
+				toolStates[idx] = st
+			}
+		}
+	case "response.function_call_arguments.delta":
+		// Partial function call arguments.
+		idx := 0
+		if oi, ok := event["output_index"].(float64); ok {
+			idx = int(oi)
+		}
+		if st, ok := toolStates[idx]; ok {
+			delta, _ := event["delta"].(string)
+			st.Args.WriteString(delta)
+		}
+	case "response.function_call_arguments.done":
+		// Complete function call arguments — emit the tool call.
+		idx := 0
+		if oi, ok := event["output_index"].(float64); ok {
+			idx = int(oi)
+		}
+		if st, ok := toolStates[idx]; ok {
+			args := map[string]any{}
+			if st.Args.Len() > 0 {
+				if err := json.Unmarshal([]byte(st.Args.String()), &args); err != nil {
+					args = map[string]any{"_raw": st.Args.String()}
+				}
+			}
+			tc := ToolCall{
+				ID:        st.CallID,
+				Name:      st.Name,
+				Arguments: args,
+			}
+			emit(&StreamChunk{Tools: []ToolCall{tc}})
+			delete(toolStates, idx)
+		}
 	case "response.reasoning_summary_text.delta":
 		delta, _ := event["delta"].(string)
 		if delta != "" {
@@ -360,7 +443,36 @@ func (p *OpenAIResponsesProvider) processResponsesLine(line string, emit func(*S
 		if respObj, ok := event["response"].(map[string]any); ok {
 			reasoning = extractReasoningSummary(respObj)
 		}
-		emit(&StreamChunk{IsDone: true, Reasoning: reasoning})
+		// Emit any remaining tool calls that were not individually
+		// emitted (defensive fallback).
+		if len(toolStates) > 0 {
+			indices := make([]int, 0, len(toolStates))
+			for idx := range toolStates {
+				indices = append(indices, idx)
+			}
+			sort.Ints(indices)
+			tools := make([]ToolCall, 0, len(indices))
+			for _, idx := range indices {
+				st := toolStates[idx]
+				args := map[string]any{}
+				if st.Args.Len() > 0 {
+					if err := json.Unmarshal([]byte(st.Args.String()), &args); err != nil {
+						args = map[string]any{"_raw": st.Args.String()}
+					}
+				}
+				tools = append(tools, ToolCall{
+					ID:        st.CallID,
+					Name:      st.Name,
+					Arguments: args,
+				})
+			}
+			emit(&StreamChunk{Tools: tools, IsDone: true, Reasoning: reasoning})
+			for k := range toolStates {
+				delete(toolStates, k)
+			}
+		} else {
+			emit(&StreamChunk{IsDone: true, Reasoning: reasoning})
+		}
 	case "response.failed":
 		errMsg := "response failed"
 		if errObj, ok := event["error"].(map[string]any); ok {
@@ -432,6 +544,13 @@ func (p *OpenAIResponsesProvider) BroadcastResponse(ctx context.Context, stream 
 		for chunk := range stream {
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
+			}
+			// Emit tool calls event when present.
+			if len(chunk.Tools) > 0 {
+				events <- &ResultEvent{
+					EventType: ToolCallsEvent,
+					Payload:   chunk.Tools,
+				}
 			}
 			if chunk.IsDone {
 				if meta, ok := chunk.Meta["error"]; ok {

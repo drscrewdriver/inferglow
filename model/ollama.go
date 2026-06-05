@@ -123,11 +123,20 @@ func (p *OllamaProvider) GenerateRequestData(ctx context.Context, req *ModelRequ
 		temperature = 0.7
 	}
 
+	// Copy tools so RequestModel can serialize them into the Ollama request body.
+	var tools []ToolDefinition
+	if len(req.Tools) > 0 {
+		tools = make([]ToolDefinition, len(req.Tools))
+		copy(tools, req.Tools)
+	}
+
 	return &RequestData{
 		Model:       model,
 		Messages:    messages,
+		Tools:       tools,
 		Temperature: temperature,
 		Options:     req.Options,
+		ToolChoice:  req.ToolChoice,
 		// M-MEDIUM-9: pass through Output schema so RequestModel can enable
 		// Ollama JSON mode (format: "json").
 		Output: req.Output,
@@ -173,6 +182,26 @@ func (p *OllamaProvider) RequestModel(ctx context.Context, data *RequestData) (<
 	// response_format; format:"json" is the documented way to request JSON.
 	if data.Output != nil {
 		reqBody["format"] = "json"
+	}
+	// Tool use: Ollama /api/chat supports tools in the same envelope format
+	// as OpenAI: {"type":"function","function":{name,description,parameters}}.
+	// When tools are present, JSON mode (format:"json") is NOT set — the model
+	// uses native function calling instead.
+	if len(data.Tools) > 0 {
+		type ollamaTool struct {
+			Type     string         `json:"type"`
+			Function ToolDefinition `json:"function"`
+		}
+		ollamaTools := make([]ollamaTool, len(data.Tools))
+		for i, t := range data.Tools {
+			ollamaTools[i] = ollamaTool{Type: "function", Function: t}
+		}
+		reqBody["tools"] = ollamaTools
+		// Remove format:"json" if it was set — tools and format are mutually exclusive.
+		delete(reqBody, "format")
+	}
+	if data.ToolChoice != nil {
+		reqBody["tool_choice"] = data.ToolChoice
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -278,20 +307,41 @@ func (p *OllamaProvider) processOllamaLine(
 		return false
 	}
 
-	// 提取内容与推理
-	if chunk.Message != nil && (chunk.Message.Content != "" || chunk.Message.Reasoning != "" || chunk.Message.ReasoningContent != "") {
-		sc := &StreamChunk{IsDone: false}
-		if chunk.Message.Content != "" {
-			sc.Delta = chunk.Message.Content
+	// 提取内容、推理和工具调用
+	if chunk.Message != nil {
+		// Emit tool calls when present (Ollama returns tool_calls in the
+		// done message or in intermediate messages).
+		if len(chunk.Message.ToolCalls) > 0 {
+			tools := make([]ToolCall, 0, len(chunk.Message.ToolCalls))
+			for i, tc := range chunk.Message.ToolCalls {
+				tcID := tc.ID
+				if tcID == "" {
+					tcID = fmt.Sprintf("ollama_tc_%d", i)
+				}
+				tools = append(tools, ToolCall{
+					ID:        tcID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+			emit(&StreamChunk{Tools: tools, IsDone: true})
+			return true
 		}
-		// P2: extract reasoning from message.reasoning or
-		// message.reasoning_content (vendor-dependent field name).
-		if chunk.Message.Reasoning != "" {
-			sc.Reasoning = chunk.Message.Reasoning
-		} else if chunk.Message.ReasoningContent != "" {
-			sc.Reasoning = chunk.Message.ReasoningContent
+
+		if chunk.Message.Content != "" || chunk.Message.Reasoning != "" || chunk.Message.ReasoningContent != "" {
+			sc := &StreamChunk{IsDone: false}
+			if chunk.Message.Content != "" {
+				sc.Delta = chunk.Message.Content
+			}
+			// P2: extract reasoning from message.reasoning or
+			// message.reasoning_content (vendor-dependent field name).
+			if chunk.Message.Reasoning != "" {
+				sc.Reasoning = chunk.Message.Reasoning
+			} else if chunk.Message.ReasoningContent != "" {
+				sc.Reasoning = chunk.Message.ReasoningContent
+			}
+			emit(sc)
 		}
-		emit(sc)
 	}
 
 	// 更新 usage
@@ -360,6 +410,26 @@ func (p *OllamaProvider) processOllamaLineWithMapping(
 	// 更新 usage (struct-based for compatibility)
 	var chunk ollamaChunk
 	_ = json.Unmarshal([]byte(line), &chunk)
+
+	// Extract tool calls from the struct (tool_calls field is always parsed
+	// from the standard Ollama location regardless of ContentMapping).
+	if chunk.Message != nil && len(chunk.Message.ToolCalls) > 0 {
+		tools := make([]ToolCall, 0, len(chunk.Message.ToolCalls))
+		for i, tc := range chunk.Message.ToolCalls {
+			tcID := tc.ID
+			if tcID == "" {
+				tcID = fmt.Sprintf("ollama_tc_%d", i)
+			}
+			tools = append(tools, ToolCall{
+				ID:        tcID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
+		}
+		emit(&StreamChunk{Tools: tools, IsDone: true})
+		return true
+	}
+
 	if chunk.Usage != nil {
 		*usage = &UsageInfo{
 			PromptTokens:     chunk.Usage.PromptEvalCount,
@@ -398,6 +468,13 @@ func (p *OllamaProvider) BroadcastResponse(ctx context.Context, stream <-chan *S
 		for chunk := range stream {
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
+			}
+			// Emit tool calls event when present.
+			if len(chunk.Tools) > 0 {
+				events <- &ResultEvent{
+					EventType: ToolCallsEvent,
+					Payload:   chunk.Tools,
+				}
 			}
 			if chunk.IsDone {
 				if meta, ok := chunk.Meta["error"]; ok {
@@ -489,6 +566,13 @@ type ollamaChunk struct {
 		Content          string `json:"content"`
 		Reasoning        string `json:"reasoning"`
 		ReasoningContent string `json:"reasoning_content"`
+		ToolCalls        []struct {
+			ID       string `json:"id"`
+			Function struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
 	} `json:"message"`
 	Usage *struct {
 		PromptEvalCount    int   `json:"prompt_eval_count"`

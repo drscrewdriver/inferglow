@@ -34,10 +34,11 @@ const (
 
 // ChatMessage 表示一条聊天消息
 type ChatMessage struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content,omitempty"`
-	Name      string     `json:"name,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	Name       string     `json:"name,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"` // for role="tool" messages
 }
 
 // ToolDefinition 定义一个 LLM 可调用的工具
@@ -54,17 +55,20 @@ type ToolCall struct {
 	Arguments map[string]any `json:"-"`
 }
 
-// toolCallWire is the on-wire shape: arguments is a JSON STRING (per OpenAI /
-// Anthropic API spec), not a JSON object. M-MEDIUM-8.
+// toolCallWire is the on-wire shape following the OpenAI tool_calls envelope:
+// {"type":"function","id":"...","function":{"name":"...","arguments":"..."}}
+// Arguments is a JSON STRING (per OpenAI / Anthropic API spec), not a JSON object.
 type toolCallWire struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
-// MarshalJSON serializes ToolCall so that Arguments becomes a JSON string on
-// the wire (matching OpenAI / Anthropic tool_calls[].function.arguments).
-// M-MEDIUM-8: arguments as JSON string, not JSON object.
+// MarshalJSON serializes ToolCall in the OpenAI envelope format so that
+// it can be sent back to the model in assistant messages.
 func (t ToolCall) MarshalJSON() ([]byte, error) {
 	args := "{}"
 	if t.Arguments != nil {
@@ -74,31 +78,33 @@ func (t ToolCall) MarshalJSON() ([]byte, error) {
 		}
 		args = string(b)
 	}
-	return json.Marshal(toolCallWire{
-		ID:        t.ID,
-		Name:      t.Name,
-		Arguments: args,
-	})
+	var w toolCallWire
+	w.Type = "function"
+	w.ID = t.ID
+	w.Function.Name = t.Name
+	w.Function.Arguments = args
+	return json.Marshal(w)
 }
 
-// UnmarshalJSON deserializes ToolCall, accepting both the wire form
-// (arguments as JSON string) and the loose form (arguments as JSON object)
-// for backward compatibility. M-MEDIUM-8.
+// UnmarshalJSON deserializes ToolCall, accepting both the OpenAI envelope
+// form (function.name/function.arguments) and the flat form (name/arguments)
+// for backward compatibility.
 func (t *ToolCall) UnmarshalJSON(data []byte) error {
-	var wire toolCallWire
-	if err := json.Unmarshal(data, &wire); err == nil && wire.Arguments != "" {
-		// First try: arguments is a JSON string (canonical wire form).
-		t.ID = wire.ID
-		t.Name = wire.Name
+	// Try OpenAI envelope first.
+	var w toolCallWire
+	if err := json.Unmarshal(data, &w); err == nil && w.Function.Name != "" {
+		t.ID = w.ID
+		t.Name = w.Function.Name
 		var args map[string]any
-		if err := json.Unmarshal([]byte(wire.Arguments), &args); err != nil {
-			// arguments string isn't a JSON object — keep raw form.
-			args = map[string]any{"_raw": wire.Arguments}
+		if w.Function.Arguments != "" {
+			if err := json.Unmarshal([]byte(w.Function.Arguments), &args); err != nil {
+				args = map[string]any{"_raw": w.Function.Arguments}
+			}
 		}
 		t.Arguments = args
 		return nil
 	}
-	// Fallback: arguments may be a JSON object (loose form).
+	// Fallback: flat form {id, name, arguments}.
 	var loose struct {
 		ID        string         `json:"id"`
 		Name      string         `json:"name"`

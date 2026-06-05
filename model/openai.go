@@ -536,14 +536,58 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 				}
 			}
 		}
-		// Finish detection: still consult the struct's Choices[0].FinishReason
-		// since that's the OpenAI protocol signal (ContentMapping doesn't
-		// redefine the finish marker).
+		// Accumulate tool_call deltas in ContentMapping path as well.
+		// Some vendors use standard tool_calls delta structure even when
+		// content/reasoning paths are non-standard.
 		if len(chunk.Choices) > 0 {
 			c := chunk.Choices[0]
+			for _, tc := range c.Delta.ToolCalls {
+				st, ok := toolStates[tc.Index]
+				if !ok {
+					st = &openAIToolState{}
+					toolStates[tc.Index] = st
+				}
+				if tc.ID != "" {
+					st.ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					st.Name = tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					st.Args.WriteString(tc.Function.Arguments)
+				}
+			}
 			if c.FinishReason == "tool_calls" {
-				// Tool calls not extracted via ContentMapping; clear and skip.
+				// Emit accumulated tool calls.
+				indices := make([]int, 0, len(toolStates))
+				for idx := range toolStates {
+					indices = append(indices, idx)
+				}
+				for i := 1; i < len(indices); i++ {
+					for j := i; j > 0 && indices[j] < indices[j-1]; j-- {
+						indices[j], indices[j-1] = indices[j-1], indices[j]
+					}
+				}
+				tools := make([]ToolCall, 0, len(indices))
+				for _, idx := range indices {
+					st := toolStates[idx]
+					args := map[string]any{}
+					if st.Args.Len() > 0 {
+						if err := json.Unmarshal([]byte(st.Args.String()), &args); err != nil {
+							args = map[string]any{"_raw": st.Args.String()}
+						}
+					}
+					tools = append(tools, ToolCall{
+						ID:        st.ID,
+						Name:      st.Name,
+						Arguments: args,
+					})
+				}
+				result.Tools = tools
 				result.IsDone = true
+				for k := range toolStates {
+					delete(toolStates, k)
+				}
 			} else if c.FinishReason != "" && c.FinishReason != "length" {
 				result.IsDone = true
 			}

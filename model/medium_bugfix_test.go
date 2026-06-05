@@ -384,9 +384,14 @@ func TestToolCallArgumentsSerializedAsJSONString(t *testing.T) {
 	if !ok {
 		t.Fatalf("tool_calls[0] not a map: %T", tcs[0])
 	}
-	args, ok := tc["arguments"]
+	// OpenAI envelope format: arguments is nested inside function object.
+	fn, ok := tc["function"].(map[string]any)
 	if !ok {
-		t.Fatal("arguments field missing")
+		t.Fatalf("tool_calls[0].function not a map: %T", tc["function"])
+	}
+	args, ok := fn["arguments"]
+	if !ok {
+		t.Fatal("function.arguments field missing")
 	}
 	argsStr, ok := args.(string)
 	if !ok {

@@ -33,7 +33,7 @@ import (
 // contract for the OpenAI Responses API:
 //  - messages (non-system) are rewritten into `input` array
 //  - system message becomes `instructions` field
-//  - Tools field is rejected with an explicit error (tool use not yet supported)
+//  - Tools are passed through in OpenAI envelope format
 func TestOpenAIResponses_GenerateRequestData(t *testing.T) {
 	t.Run("rewrites_messages_into_input_with_instructions", func(t *testing.T) {
 		p := &OpenAIResponsesProvider{Model: "gpt-4o"}
@@ -72,7 +72,7 @@ func TestOpenAIResponses_GenerateRequestData(t *testing.T) {
 		}
 	})
 
-	t.Run("tools_rejected_with_explicit_error", func(t *testing.T) {
+	t.Run("tools_passed_through_in_openai_envelope", func(t *testing.T) {
 		p := &OpenAIResponsesProvider{Model: "gpt-4o"}
 		req := &ModelRequest{
 			Instruct: "hi",
@@ -80,12 +80,15 @@ func TestOpenAIResponses_GenerateRequestData(t *testing.T) {
 				{Name: "calc", Description: "calc", Parameters: map[string]any{"type": "object"}},
 			},
 		}
-		_, err := p.GenerateRequestData(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error when Tools is set; Responses API does not yet support tool use")
+		data, err := p.GenerateRequestData(context.Background(), req)
+		if err != nil {
+			t.Fatalf("GenerateRequestData failed: %v", err)
 		}
-		if !strings.Contains(err.Error(), "tool use not yet supported by OpenAIResponsesProvider") {
-			t.Errorf("error = %v, want substring 'tool use not yet supported by OpenAIResponsesProvider'", err)
+		if len(data.Tools) != 1 {
+			t.Fatalf("expected 1 tool, got %d", len(data.Tools))
+		}
+		if data.Tools[0].Name != "calc" {
+			t.Errorf("tool name = %q, want calc", data.Tools[0].Name)
 		}
 	})
 
