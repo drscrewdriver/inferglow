@@ -258,14 +258,11 @@ func (fc *flowContextImpl) RunAgent(ctx context.Context, userMessage string, sys
 		// opts.SessionIsolation 预留：当前退化为共享 Session，
 		// Phase 2 实现 Session fork 时在此处创建子 Session 快照。
 	}
-	decision, err := fc.engine.executeLoop(ctx, userMessage, maxRounds, systemPrompt)
+	resp, err := fc.engine.RunLoop(ctx, userMessage, maxRounds, systemPrompt)
 	if err != nil {
 		return "", err
 	}
-	if decision == nil {
-		return "", fmt.Errorf("flow: RunAgent returned nil decision")
-	}
-	return decision.FinalResponse, nil
+	return resp, nil
 }
 
 // RunAgentParallel 触发多个子 Agent 循环，全部完成后返回各自结果。

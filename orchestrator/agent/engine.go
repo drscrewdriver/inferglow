@@ -106,6 +106,22 @@ func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRe
 	}
 }
 
+// RunLoop executes a complete PLAN→EXECUTE agent loop and returns the final
+// response text. It is the public entry point for external callers (e.g.
+// inferflow's FlowContext) that need multi-turn agent capabilities without
+// depending on the internal executeLoop signature or the actionruntime.Decision
+// type.
+func (e *Engine) RunLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (string, error) {
+	decision, err := e.executeLoop(ctx, userMessage, maxRounds, systemPrompt)
+	if err != nil {
+		return "", err
+	}
+	if decision == nil {
+		return "", fmt.Errorf("agent: RunLoop returned nil decision")
+	}
+	return decision.FinalResponse, nil
+}
+
 // NewEngineWithAudit creates an Engine that appends decision audit entries
 // via hook. The loopGuard is nil. A nil hook is replaced with NoOpHook.
 func NewEngineWithAudit(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester, hook audit.AuditHook) *Engine {
