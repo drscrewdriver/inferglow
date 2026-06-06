@@ -87,6 +87,21 @@ type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) 
 // apply. Returning an empty string means "do not trigger resize".
 type AnalysisHandler func(full []ChatMessage, window []ChatMessage, memo map[string]any) (string, error)
 
+// SessionBackend is the interface that both Session and ThreeZoneSession
+// implement so that SessionExtension can work with either backend.
+type SessionBackend interface {
+	// AddMessage appends a message to the conversation history.
+	AddMessage(role string, content any, name string)
+	// AddMessageWithMeta appends a message carrying extra metadata
+	// (e.g. tool_calls, tool_call_id) to the history.
+	AddMessageWithMeta(role string, content any, name string, meta map[string]any)
+	// PreparePrompt returns the current context window as ChatMessage slice
+	// suitable for consumption by SessionExtension.PreparePrompt.
+	PreparePrompt() []ChatMessage
+	// SaveJSON persists the session state to a JSON file at path.
+	SaveJSON(path string) error
+}
+
 // Session holds the conversation state, including the full context history and the active context window.
 type Session struct {
 	mu sync.RWMutex
@@ -249,6 +264,23 @@ func (s *Session) SetMessageMasker(m MessageMasker) {
 	s.masker = m
 }
 
+// AddMessageWithMeta appends a message with an explicit Meta map.
+// Used by the agent loop to store tool_calls and tool_call_id alongside
+// messages so PreparePrompt can forward them to the model.
+func (s *Session) AddMessageWithMeta(role string, content any, name string, meta map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg := ChatMessage{
+		Role:      role,
+		Content:   content,
+		Name:      name,
+		Meta:      meta,
+		Timestamp: time.Now(),
+	}
+	s.FullContext = append(s.FullContext, msg)
+	s.ContextWindow = append(s.ContextWindow, msg)
+}
+
 // AddChatHistory appends multiple messages to both FullContext and ContextWindow
 func (s *Session) AddChatHistory(messages []ChatMessage) {
 	s.mu.Lock()
@@ -322,7 +354,9 @@ func (s *Session) applyResizeLocked() {
 		return
 	}
 
-	// 旧路径：analysisHandlers 为空 + ResizeHandler 非空 → 按旧逻辑
+	// 旧路径：analysisHandlers 为空 + ResizeHandler 非空 → 按旧逻辑。
+	// 触发条件：字节数 > MaxLength。注意：MaxLength 在此路径下按字节计。
+	// 新部署应优先使用 ThreeZoneSession（maxHistoryBytes 语义明确）。
 	if s.ResizeHandler != nil {
 		totalBytes := 0
 		for _, m := range s.ContextWindow {

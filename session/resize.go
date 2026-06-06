@@ -154,3 +154,65 @@ func TokenAwareResizeHandlerWithMax(maxLength int) ResizeHandler {
 
 // TokenAwareResizeHandler 默认版本，使用 8000 字符作为 maxLength（约 2000 tokens）。
 var TokenAwareResizeHandler = TokenAwareResizeHandlerWithMax(8000)
+
+// SmartCompressResizeHandler returns a ResizeHandler that preserves structure
+// while compressing tool results in the middle of the conversation.
+//
+// Strategy:
+//  1. Keep the first message (system prompt) intact.
+//  2. Keep the most recent maxKeepRecent messages intact.
+//  3. For messages in between: compress role="tool" results to a short
+//     reference marker; preserve assistant/user text messages as-is.
+//
+// This retains the assistant's reasoning chain while dramatically reducing
+// the space consumed by repeated file_read / grep_search results.
+func SmartCompressResizeHandler(maxKeepRecent int) ResizeHandler {
+	return func(fullContext []ChatMessage, contextWindow []ChatMessage) ([]ChatMessage, error) {
+		if len(contextWindow) <= maxKeepRecent+1 {
+			result := make([]ChatMessage, len(contextWindow))
+			copy(result, contextWindow)
+			return result, nil
+		}
+
+		result := make([]ChatMessage, 0, len(contextWindow))
+		// Keep first message (typically system prompt).
+		result = append(result, contextWindow[0])
+
+		middle := contextWindow[1 : len(contextWindow)-maxKeepRecent]
+		for _, m := range middle {
+			if m.Role == "tool" {
+				// Compress tool result to a short marker.
+				marker := "[previously executed tool]"
+				if path, ok := extractFilePath(m.Meta); ok {
+					marker = "[previously read: " + path + "]"
+				}
+				result = append(result, ChatMessage{
+					Role:      "tool",
+					Content:   marker,
+					Name:      m.Name,
+					Meta:      m.Meta,
+					Timestamp: m.Timestamp,
+				})
+			} else {
+				// Preserve assistant/user text (reasoning chain).
+				result = append(result, m)
+			}
+		}
+
+		// Keep recent messages intact.
+		result = append(result, contextWindow[len(contextWindow)-maxKeepRecent:]...)
+		return result, nil
+	}
+}
+
+// extractFilePath tries to find a file path in tool message metadata.
+// Returns ("", false) when no path can be determined.
+func extractFilePath(meta map[string]any) (string, bool) {
+	if meta == nil {
+		return "", false
+	}
+	if p, ok := meta["path"].(string); ok && p != "" {
+		return p, true
+	}
+	return "", false
+}

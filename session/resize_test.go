@@ -255,3 +255,74 @@ func TestSimpleCutPreservesOrder(t *testing.T) {
 		t.Errorf("last message should be 'third', got %q", resized[len(resized)-1].Content)
 	}
 }
+
+// TestSmartCompressResizeHandler verifies that tool results in the middle are
+// compressed while recent messages and the first message are preserved.
+func TestSmartCompressResizeHandler(t *testing.T) {
+	handler := SmartCompressResizeHandler(3)
+
+	window := []ChatMessage{
+		{Role: "system", Content: "You are helpful"},
+		{Role: "user", Content: "Read file A"},
+		{Role: "tool", Content: "... 20KB of file content ...", Meta: map[string]any{"path": "/a.go"}},
+		{Role: "assistant", Content: "Let me analyze this"},
+		{Role: "user", Content: "Read file B"},
+		{Role: "tool", Content: "... 30KB of file content ...", Meta: map[string]any{"path": "/b.go"}},
+		{Role: "assistant", Content: "Now I'll write the fix"},
+		{Role: "user", Content: "Please proceed"},
+		{Role: "assistant", Content: "Writing files now"},
+	}
+
+	resized, err := handler(nil, window)
+	if err != nil {
+		t.Fatalf("SmartCompressResizeHandler failed: %v", err)
+	}
+
+	// First message (system) should be preserved.
+	if resized[0].Role != "system" {
+		t.Errorf("first message should be system, got %q", resized[0].Role)
+	}
+
+	// Last 3 messages should be preserved intact.
+	if len(resized) < 4 {
+		t.Fatalf("expected at least 4 messages, got %d", len(resized))
+	}
+	if resized[len(resized)-1].Content != "Writing files now" {
+		t.Errorf("last message should be 'Writing files now', got %q", resized[len(resized)-1].Content)
+	}
+
+	// Middle tool results should be compressed.
+	for _, m := range resized[1 : len(resized)-3] {
+		if m.Role == "tool" {
+			content, _ := m.Content.(string)
+			if len(content) > 100 {
+				t.Errorf("middle tool result should be compressed, got %d bytes: %q", len(content), content)
+			}
+		}
+	}
+}
+
+// TestSmartCompressResizeHandlerSmallWindow verifies no compression when
+// the window is already small enough.
+func TestSmartCompressResizeHandlerSmallWindow(t *testing.T) {
+	handler := SmartCompressResizeHandler(10)
+
+	window := []ChatMessage{
+		{Role: "system", Content: "You are helpful"},
+		{Role: "user", Content: "Hello"},
+		{Role: "tool", Content: "big content here", Meta: map[string]any{"path": "/x.go"}},
+	}
+
+	resized, err := handler(nil, window)
+	if err != nil {
+		t.Fatalf("SmartCompressResizeHandler failed: %v", err)
+	}
+
+	if len(resized) != len(window) {
+		t.Errorf("small window should be unchanged, got %d vs %d", len(resized), len(window))
+	}
+	// Tool content should NOT be compressed in small windows.
+	if resized[2].Content != "big content here" {
+		t.Errorf("tool content should be preserved in small window, got %q", resized[2].Content)
+	}
+}

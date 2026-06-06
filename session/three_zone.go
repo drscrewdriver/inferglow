@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -95,6 +96,64 @@ func (s *ThreeZoneSession) SetImmutablePrefix(systemPrompt string, tools []any) 
 	}
 	s.immutableHash = s.computeImmutableHash()
 	return nil
+}
+
+// --- SessionBackend interface implementation ---
+
+// AddMessage implements SessionBackend by appending to Zone 2 (append-only history).
+func (s *ThreeZoneSession) AddMessage(role string, content any, name string) {
+	s.AddToHistory(ChatMessage{
+		Role:      role,
+		Content:   content,
+		Name:      name,
+		Timestamp: time.Now(),
+	})
+}
+
+// AddMessageWithMeta implements SessionBackend by appending a message with
+// metadata to Zone 2. The meta map is preserved so tool_calls and
+// tool_call_id survive through to PreparePrompt.
+func (s *ThreeZoneSession) AddMessageWithMeta(role string, content any, name string, meta map[string]any) {
+	s.AddToHistory(ChatMessage{
+		Role:      role,
+		Content:   content,
+		Name:      name,
+		Meta:      meta,
+		Timestamp: time.Now(),
+	})
+}
+
+// PreparePrompt implements SessionBackend by delegating to BuildPrompt.
+// Returns the full prompt (Zone 1 + Zone 2 + Zone 3) as session.ChatMessage.
+func (s *ThreeZoneSession) PreparePrompt() []ChatMessage {
+	return s.BuildPrompt()
+}
+
+// SaveJSON implements SessionBackend by serializing the three-zone state
+// to a JSON file. The format is compatible with LoadJSON for crash recovery.
+func (s *ThreeZoneSession) SaveJSON(path string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data := struct {
+		ID                string        `json:"id"`
+		ImmutablePrefix   []ChatMessage `json:"immutable_prefix"`
+		AppendOnlyHistory []ChatMessage `json:"append_only_history"`
+		VolatileScratch   []ChatMessage `json:"volatile_scratch"`
+		MaxHistoryBytes   int           `json:"max_history_bytes"`
+		ImmutableHash     string        `json:"immutable_hash"`
+	}{
+		ID:                s.id,
+		ImmutablePrefix:   s.immutablePrefix,
+		AppendOnlyHistory: s.appendOnlyHistory,
+		VolatileScratch:   s.volatileScratch,
+		MaxHistoryBytes:   s.maxHistoryBytes,
+		ImmutableHash:     s.immutableHash,
+	}
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0644)
 }
 
 // AddToHistory appends a message to Zone 2 (append-only).
