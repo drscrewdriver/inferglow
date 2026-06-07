@@ -23,6 +23,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/inferglow/flow"
@@ -360,6 +361,17 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 		return response, nil
 	}
 
-	// LLM decided to execute but has no final response — this is an error
+	// LLM decided to execute but has no final response — attempt synthesis
+	// to produce a summary from the conversation so far.
+	if decision.FinalResponse == "" && decision.NextAction == "execute" {
+		synthResp, synthErr := a.engine.synthesiseResponse(ctx, c.systemPrompt)
+		if synthErr != nil {
+			return "", fmt.Errorf("agent: synthesis call failed: %w", synthErr)
+		}
+		if synthResp != "" {
+			a.session.AddAssistantMessage(synthResp)
+			return synthResp, nil
+		}
+	}
 	return "", ErrNoFinalResponse
 }

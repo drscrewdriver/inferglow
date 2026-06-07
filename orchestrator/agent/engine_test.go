@@ -22,6 +22,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/inferglow/action"
@@ -154,8 +158,9 @@ func TestEngine_ExecuteThenResponse(t *testing.T) {
 	}
 }
 
-func TestEngine_MaxRounds(t *testing.T) {
-	// Test that loop terminates when maxRounds is reached
+func TestEngine_ToolCallCap(t *testing.T) {
+	// Test that loop terminates when tool-call cap is reached.
+	// Use a small custom cap to keep the test fast.
 	sess := NewSessionExtension(session.NewSession("test", 10000))
 	actExt := NewActionExtension()
 
@@ -174,21 +179,22 @@ func TestEngine_MaxRounds(t *testing.T) {
 	}
 
 	engine := &Engine{
-		session:   sess,
-		actionExt: actExt,
-		modelReq:  mockReq,
+		session:           sess,
+		actionExt:         actExt,
+		modelReq:          mockReq,
+		maxToolCallRounds: 5, // small cap for fast test
 	}
 
-	decision, err := engine.executeLoop(context.Background(), "test", 2, "")
+	decision, err := engine.executeLoop(context.Background(), "test", 0, "")
 	if err != nil {
 		t.Fatalf("executeLoop returned error: %v", err)
 	}
 	if decision.NextAction != "execute" {
-		t.Error("Expected execute (loop was forced to stop)")
+		t.Error("Expected execute (loop was forced to stop by tool cap)")
 	}
-	// maxRounds=2 意味着最多执行 2 轮 after first call, so 3 total
-	if callCount != 3 {
-		t.Errorf("Expected 3 calls, got %d", callCount)
+	// maxToolCallRounds=5 means the loop runs 5 tool rounds
+	if callCount != 5 {
+		t.Errorf("Expected 5 calls (tool cap), got %d", callCount)
 	}
 }
 
@@ -432,5 +438,320 @@ func TestEngine_ToolDefsHashChangesWhenToolsChange(t *testing.T) {
 	hash2 := engine.ToolDefsHash()
 	if hash1 == hash2 {
 		t.Errorf("hash should change when tool set changes, both = %s", hash1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// formatToolResult tests
+// ---------------------------------------------------------------------------
+
+// fileReadResult mirrors builtins/actions.FileReadResult so we can test
+// formatToolResult without importing the builtins package (which would
+// create a circular dependency risk).
+type fileReadResult struct {
+	Path      string `json:"path"`
+	BytesRead int64  `json:"bytes_read"`
+	Content   string `json:"content"`
+}
+
+type fileWriteResult struct {
+	Path         string `json:"path"`
+	BytesWritten int64  `json:"bytes_written"`
+}
+
+func TestFormatToolResult_FileWrite(t *testing.T) {
+	ar := &action.ActionResult{
+		OK:     true,
+		Status: "success",
+		Result: fileWriteResult{Path: "/tmp/hello.go", BytesWritten: 42},
+	}
+	got := formatToolResult(ar)
+
+	var parsed fileWriteResult
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("formatToolResult output is not valid JSON: %v\noutput: %s", err, got)
+	}
+	if parsed.Path != "/tmp/hello.go" {
+		t.Errorf("Path = %q, want /tmp/hello.go", parsed.Path)
+	}
+	if parsed.BytesWritten != 42 {
+		t.Errorf("BytesWritten = %d, want 42", parsed.BytesWritten)
+	}
+}
+
+func TestFormatToolResult_FileRead(t *testing.T) {
+	content := "package main\n\nfunc main() {}\n"
+	ar := &action.ActionResult{
+		OK:     true,
+		Status: "success",
+		Result: fileReadResult{Path: "/tmp/hello.go", BytesRead: int64(len(content)), Content: content},
+	}
+	got := formatToolResult(ar)
+
+	var parsed fileReadResult
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("formatToolResult output is not valid JSON: %v\noutput: %s", err, got)
+	}
+	if parsed.Path != "/tmp/hello.go" {
+		t.Errorf("Path = %q, want /tmp/hello.go", parsed.Path)
+	}
+	if parsed.Content != content {
+		t.Errorf("Content mismatch: got %q, want %q", parsed.Content, content)
+	}
+	if parsed.BytesRead != int64(len(content)) {
+		t.Errorf("BytesRead = %d, want %d", parsed.BytesRead, len(content))
+	}
+}
+
+func TestFormatToolResult_Error(t *testing.T) {
+	ar := &action.ActionResult{OK: false, Status: "error", Error: "file not found"}
+	got := formatToolResult(ar)
+	if got != "error: file not found" {
+		t.Errorf("got %q, want %q", got, "error: file not found")
+	}
+}
+
+func TestFormatToolResult_Nil(t *testing.T) {
+	got := formatToolResult(nil)
+	if got != "null" {
+		t.Errorf("got %q, want %q", got, "null")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// E2E: file_write → tool result → session → file_read → tool result → response
+// ---------------------------------------------------------------------------
+
+func TestEngine_FileWriteThenRead_E2E(t *testing.T) {
+	// Create a temp directory for file operations.
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "hello.txt")
+	expectedContent := "hello from agent test"
+
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	// Register real file_write and file_read actions.
+	writeAction, err := action.New("file_write", "Write content to a file.", func(ctx context.Context, input map[string]any) (any, error) {
+		path, _ := input["path"].(string)
+		content, _ := input["content"].(string)
+		if e := os.WriteFile(path, []byte(content), 0o644); e != nil {
+			return nil, e
+		}
+		return fileWriteResult{Path: path, BytesWritten: int64(len(content))}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAction.Schema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":    map[string]any{"type": "string"},
+			"content": map[string]any{"type": "string"},
+		},
+		"required": []string{"path", "content"},
+	}
+
+	readAction, err := action.New("file_read", "Read a file.", func(ctx context.Context, input map[string]any) (any, error) {
+		path, _ := input["path"].(string)
+		data, e := os.ReadFile(path)
+		if e != nil {
+			return nil, e
+		}
+		return fileReadResult{Path: path, BytesRead: int64(len(data)), Content: string(data)}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readAction.Schema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{"type": "string"},
+		},
+		"required": []string{"path"},
+	}
+
+	if err := actExt.Register(writeAction); err != nil {
+		t.Fatal(err)
+	}
+	if err := actExt.Register(readAction); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock model: 3 phases
+	//   Call 1: file_write tool call
+	//   Call 2: file_read tool call
+	//   Call 3: final response with the content
+	callCount := 0
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			ch := make(chan *model.StreamChunk, 1)
+			callCount++
+			switch callCount {
+			case 1:
+				// file_write
+				ch <- &model.StreamChunk{
+					Delta: "",
+					Tools: []model.ToolCall{
+						{
+							ID:        "call_write_1",
+							Name:      "file_write",
+							Arguments: map[string]any{"path": testFile, "content": expectedContent},
+						},
+					},
+					IsDone: true,
+				}
+			case 2:
+				// file_read
+				ch <- &model.StreamChunk{
+					Delta: "",
+					Tools: []model.ToolCall{
+						{
+							ID:        "call_read_1",
+							Name:      "file_read",
+							Arguments: map[string]any{"path": testFile},
+						},
+					},
+					IsDone: true,
+				}
+			default:
+				// final response
+				ch <- &model.StreamChunk{
+					Delta:  `{"next_action":"response","final_response":"done"}`,
+					IsDone: true,
+				}
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  mockReq,
+	}
+
+	decision, err := engine.executeLoop(context.Background(), "write then read", 10, "")
+	if err != nil {
+		t.Fatalf("executeLoop error: %v", err)
+	}
+	if decision.NextAction != "response" {
+		t.Fatalf("expected response, got %q", decision.NextAction)
+	}
+	if decision.FinalResponse != "done" {
+		t.Errorf("FinalResponse = %q, want %q", decision.FinalResponse, "done")
+	}
+
+	// Verify the file was actually written.
+	data, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
+	if string(data) != expectedContent {
+		t.Errorf("file content = %q, want %q", string(data), expectedContent)
+	}
+
+	// Verify session history contains proper tool result messages.
+	msgs := sess.PreparePrompt()
+	// Expected messages: system(none) + user + assistant(tool_calls:write) + tool(write_result) + assistant(tool_calls:read) + tool(read_result) + assistant(response)
+	var toolMsgs []model.ChatMessage
+	var assistantMsgs []model.ChatMessage
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			toolMsgs = append(toolMsgs, m)
+		}
+		if m.Role == "assistant" {
+			assistantMsgs = append(assistantMsgs, m)
+		}
+	}
+
+	if len(toolMsgs) != 2 {
+		t.Fatalf("expected 2 tool result messages, got %d", len(toolMsgs))
+	}
+	// First tool result: file_write
+	if toolMsgs[0].ToolCallID != "call_write_1" {
+		t.Errorf("tool[0].ToolCallID = %q, want call_write_1", toolMsgs[0].ToolCallID)
+	}
+	var writeRes fileWriteResult
+	if err := json.Unmarshal([]byte(toolMsgs[0].Content), &writeRes); err != nil {
+		t.Fatalf("tool[0].Content not valid JSON: %v (content=%q)", err, toolMsgs[0].Content)
+	}
+	if writeRes.BytesWritten != int64(len(expectedContent)) {
+		t.Errorf("write result BytesWritten = %d, want %d", writeRes.BytesWritten, len(expectedContent))
+	}
+
+	// Second tool result: file_read
+	if toolMsgs[1].ToolCallID != "call_read_1" {
+		t.Errorf("tool[1].ToolCallID = %q, want call_read_1", toolMsgs[1].ToolCallID)
+	}
+	var readRes fileReadResult
+	if err := json.Unmarshal([]byte(toolMsgs[1].Content), &readRes); err != nil {
+		t.Fatalf("tool[1].Content not valid JSON: %v (content=%q)", err, toolMsgs[1].Content)
+	}
+	if readRes.Content != expectedContent {
+		t.Errorf("read result Content = %q, want %q", readRes.Content, expectedContent)
+	}
+
+	// Verify assistant messages carry tool_calls.
+	if len(assistantMsgs) < 2 {
+		t.Fatalf("expected >=2 assistant messages, got %d", len(assistantMsgs))
+	}
+	if len(assistantMsgs[0].ToolCalls) != 1 || assistantMsgs[0].ToolCalls[0].Name != "file_write" {
+		t.Errorf("assistant[0] should have file_write tool call, got %+v", assistantMsgs[0].ToolCalls)
+	}
+	if len(assistantMsgs[1].ToolCalls) != 1 || assistantMsgs[1].ToolCalls[0].Name != "file_read" {
+		t.Errorf("assistant[1] should have file_read tool call, got %+v", assistantMsgs[1].ToolCalls)
+	}
+}
+
+// TestTruncateToolResult verifies that large tool results are truncated
+// while small ones pass through unchanged.
+func TestTruncateToolResult(t *testing.T) {
+	// Small result: should pass through unchanged.
+	small := `{"status":"ok"}`
+	if got := truncateToolResult(small, 4096); got != small {
+		t.Errorf("small result should pass through unchanged, got %q", got)
+	}
+
+	// Large result: should be truncated.
+	large := strings.Repeat("x", 10000)
+	got := truncateToolResult(large, 4096)
+	if len(got) >= len(large) {
+		t.Errorf("large result should be truncated: got %d bytes, original %d bytes", len(got), len(large))
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Error("truncated result should contain 'truncated' marker")
+	}
+	if !strings.Contains(got, "10000 bytes total") {
+		t.Error("truncated result should contain original size")
+	}
+}
+
+// TestFormatToolResult_Truncation verifies that formatToolResult applies
+// truncation to large action results.
+func TestFormatToolResult_Truncation(t *testing.T) {
+	// Large result that should be truncated.
+	bigContent := strings.Repeat("A", 8000)
+	result := &action.ActionResult{
+		OK:     true,
+		Status: "success",
+		Result: bigContent,
+	}
+	got := formatToolResult(result)
+	if len(got) > defaultToolResultMaxBytes+200 { // some margin for the marker
+		t.Errorf("formatToolResult should truncate: got %d bytes, limit %d", len(got), defaultToolResultMaxBytes)
+	}
+
+	// Nil result should return "null".
+	if formatToolResult(nil) != "null" {
+		t.Error("nil result should return 'null'")
+	}
+
+	// Error result.
+	errResult := &action.ActionResult{OK: false, Error: "something failed"}
+	got = formatToolResult(errResult)
+	if got != "error: something failed" {
+		t.Errorf("error result: got %q", got)
 	}
 }

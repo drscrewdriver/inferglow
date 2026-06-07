@@ -77,3 +77,54 @@ func TestSessionExtension_AddActionResult(t *testing.T) {
 		t.Error("Content should not be empty")
 	}
 }
+
+// TestSessionExtension_FileReadDedup verifies that repeated file_read
+// results for the same path are replaced with a short reference marker.
+func TestSessionExtension_FileReadDedup(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	// First read: full content should be stored.
+	firstContent := `{"path":"/src/main.go","bytes_read":1024,"content":"package main..."}`
+	ext.AddToolResultNamed("tc1", "file_read", firstContent)
+
+	// Second read of the same file: should be replaced with a marker.
+	secondContent := `{"path":"/src/main.go","bytes_read":1024,"content":"package main..."}`
+	ext.AddToolResultNamed("tc2", "file_read", secondContent)
+
+	prompt := ext.PreparePrompt()
+	if len(prompt) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(prompt))
+	}
+
+	// First message should have the original content.
+	if prompt[0].Content != firstContent {
+		t.Errorf("first message should have original content, got %q", prompt[0].Content)
+	}
+
+	// Second message should be the dedup marker.
+	if prompt[1].Content == secondContent {
+		t.Error("second message should be dedup marker, not the full content")
+	}
+	if len(prompt[1].Content) >= len(secondContent) {
+		t.Errorf("dedup marker should be shorter than original: got %d >= %d", len(prompt[1].Content), len(secondContent))
+	}
+}
+
+// TestSessionExtension_NonFileReadNotDedup verifies that non-file_read tools
+// are not subject to deduplication.
+func TestSessionExtension_NonFileReadNotDedup(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	content := `{"result":"output"}`
+	ext.AddToolResultNamed("tc1", "bash_executor", content)
+	ext.AddToolResultNamed("tc2", "bash_executor", content)
+
+	prompt := ext.PreparePrompt()
+	if len(prompt) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(prompt))
+	}
+	// Both should have the original content.
+	if prompt[0].Content != content || prompt[1].Content != content {
+		t.Error("non-file_read results should not be deduplicated")
+	}
+}

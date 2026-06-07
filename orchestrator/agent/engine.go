@@ -23,17 +23,45 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/inferglow/action"
 	"github.com/inferglow/audit"
 	"github.com/inferglow/model"
 	"github.com/inferglow/observability/otel"
 	"github.com/inferglow/orchestrator/actionruntime"
 )
+
+// ErrToolCallCapReached is returned when the agent hits the hard cap on
+// consecutive tool-execution rounds without the model producing a final
+// response. The caller should treat this as a runaway tool loop.
+var ErrToolCallCapReached = errors.New("agent: tool-call round cap reached without final response")
+
+// DefaultMaxToolCallRounds is the hard cap on consecutive tool-execution
+// rounds within a single executeLoop run. Prevents infinite loops when the
+// model keeps calling tools without producing a final response. Tool rounds
+// do NOT count against maxRounds (the main round counter), but this separate
+// limit ensures the agent cannot run away.
+//
+// Set to 80 to accommodate complex tasks that require extensive file
+// exploration (10-15 reads) followed by multi-file code generation (5-10
+// writes) and verification (3-5 bash calls). Smaller values (e.g. 25)
+// caused the agent to hit the cap during exploration without ever writing
+// code, resulting in empty synthesis responses.
+const DefaultMaxToolCallRounds = 80
+
+// toolCallStaleThreshold is the number of consecutive identical tool-call
+// batches before the agent injects a nudge message. When the model calls
+// the same tool with the same arguments multiple times in a row, it is
+// likely stuck in a loop. The nudge tells it to move on.
+const toolCallStaleThreshold = 3
 
 // Engine orchestrates the PLAN → EXECUTE loop.
 type Engine struct {
@@ -80,6 +108,10 @@ type Engine struct {
 	// runConfig.tracer 写入该字段，使后续 ResumeFlow 调用也能产出 span。
 	// nil 时所有 Engine 层 span 退化为 no-op。
 	tracer *otel.Tracer
+
+	// maxToolCallRounds caps the number of tool-execution rounds per
+	// executeLoop run. Zero means use DefaultMaxToolCallRounds.
+	maxToolCallRounds int
 }
 
 // newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
@@ -119,7 +151,46 @@ func (e *Engine) RunLoop(ctx context.Context, userMessage string, maxRounds int,
 	if decision == nil {
 		return "", fmt.Errorf("agent: RunLoop returned nil decision")
 	}
+
+	// When the loop exits with an "execute" decision (e.g. maxRounds reached
+	// while the model was still using tools), FinalResponse is empty. Make
+	// one final synthesis call without tools so the model summarises the
+	// conversation instead of leaving the caller with an empty string.
+	if decision.FinalResponse == "" && decision.NextAction == "execute" {
+		synthResp, synthErr := e.synthesiseResponse(ctx, systemPrompt)
+		if synthErr != nil {
+			return "", fmt.Errorf("agent: synthesis call failed: %w", synthErr)
+		}
+		decision.FinalResponse = synthResp
+	}
+
 	return decision.FinalResponse, nil
+}
+
+// synthesiseResponse makes a single LLM call without tools, asking the model
+// to summarise the conversation so far. Used when the agent loop exits
+// (e.g. maxRounds) while the model was still in "execute" mode.
+func (e *Engine) synthesiseResponse(ctx context.Context, systemPrompt string) (string, error) {
+	synthReq := &model.ModelRequest{
+		System:      systemPrompt + "\n\nYou have finished using tools. Now provide a comprehensive summary of what was accomplished. Do NOT call any tools.",
+		ChatHistory: e.session.PreparePrompt(),
+		Options:     map[string]any{"force_json": false},
+	}
+	data, err := e.modelReq.GenerateRequestData(ctx, synthReq)
+	if err != nil {
+		return "", err
+	}
+	synthCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	stream, err := e.modelReq.RequestModel(synthCtx, data)
+	if err != nil {
+		return "", err
+	}
+	var content strings.Builder
+	for chunk := range stream {
+		content.WriteString(chunk.Delta)
+	}
+	return strings.TrimSpace(content.String()), nil
 }
 
 // NewEngineWithAudit creates an Engine that appends decision audit entries
@@ -205,6 +276,17 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 	var prevOutput string
 
 	round := 0
+	toolCallRounds := 0
+	maxTCR := e.maxToolCallRounds
+	if maxTCR <= 0 {
+		maxTCR = DefaultMaxToolCallRounds
+	}
+	// Tool-call dedup: detect when the model is stuck calling the same
+	// tool with the same arguments repeatedly.
+	var lastToolSig string
+	var staleCount int
+	halfwayWarned := false
+	prefixSet := false // tracks whether SetImmutablePrefix has been called this loop
 	for {
 		// LoopGuard check before the LLM call. State reflects what's known
 		// at this point: round index, previous round's ActionCalls (nil on
@@ -256,11 +338,49 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 
 		// Build ModelRequest
 		tools := e.buildToolDefinitions()
+		hasTools := len(tools) > 0
+
+		// Set the immutable prefix (Zone 1) on the first iteration so the
+		// backend can maximize prefix cache hits. Only done once per loop
+		// since the system prompt and tool definitions are stable.
+		if !prefixSet {
+			// Convert tools to []any for the zone API.
+			toolsAny := make([]any, len(tools))
+			for i, t := range tools {
+				toolsAny[i] = t
+			}
+			if err := e.session.SetImmutablePrefix(systemPrompt, toolsAny); err != nil {
+				log.Printf("[agent] SetImmutablePrefix failed (non-fatal): %v", err)
+			}
+			prefixSet = true
+		}
+
 		req := &model.ModelRequest{
 			System:      systemPrompt,
 			ChatHistory: e.session.PreparePrompt(),
 			Tools:       tools,
-			Output: &model.OutputSchema{
+			ToolChoice: func() any {
+				if hasTools {
+					return "auto"
+				}
+				return nil
+			}(),
+			Options: func() map[string]any {
+				if hasTools {
+					// With tools, skip force_json to allow native function calling.
+					// response_format conflicts with tool_calls in OpenAI-compatible APIs.
+					// Increase max_tokens for agent loops to handle large tool arguments
+					// (e.g., code_executor with multi-KB source code).
+					return map[string]any{"max_tokens": 16384}
+				}
+				return map[string]any{"force_json": true}
+			}(),
+		}
+		// Only set Output schema when there are NO tools. When tools are
+		// present, the model uses native function calling instead of a
+		// custom JSON schema for action dispatch.
+		if !hasTools {
+			req.Output = &model.OutputSchema{
 				Type: "object",
 				Properties: map[string]any{
 					"next_action": map[string]any{
@@ -282,14 +402,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 						"description": "The response to return when next_action is \"response\"",
 					},
 				},
-			},
-			// O-CRITICAL-1: hint to OpenAI-compatible providers that we
-			// expect a JSON object so they set response_format in the
-			// request body. Providers that don't support response_format
-			// (Anthropic, Ollama) simply ignore this option.
-			Options: map[string]any{
-				"force_json": true,
-			},
+			}
 		}
 
 		// L3 prompt injection: when outputSchema is configured and the
@@ -324,8 +437,9 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			return nil, err
 		}
 
-		// Collect response content
+		// Collect response content and native tool calls
 		var content strings.Builder
+		var nativeToolCalls []model.ToolCall
 	streamLoop:
 		for {
 			select {
@@ -334,14 +448,14 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					break streamLoop
 				}
 				content.WriteString(chunk.Delta)
+				// Collect native tool calls from the stream.
+				if len(chunk.Tools) > 0 {
+					nativeToolCalls = append(nativeToolCalls, chunk.Tools...)
+				}
 			case <-timeoutCtx.Done():
 				cancelTimeout()
 				return nil, timeoutCtx.Err()
 			case <-preemptCh:
-				// Point 3: preempted (CancelImmediate or timeout escalation).
-				// Complete any pending cancel so its handle unblocks, then
-				// surface the preempt as an error. CompleteCancel preserves
-				// an ErrCancelTimeout already set by CheckTimeoutEscalation.
 				cancelTimeout()
 				if e.cancelManager != nil && e.cancelManager.HasPendingCancel() {
 					e.cancelManager.CompleteCancel(nil)
@@ -354,6 +468,10 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 		cancelTimeout()
+
+		// Debug: log what the LLM returned
+		log.Printf("[agent-debug] round=%d contentLen=%d nativeToolCalls=%d content_preview=%q",
+			round, content.Len(), len(nativeToolCalls), truncate(content.String(), 200))
 
 		// L4 post-validation: when outputSchema is configured, validate the
 		// collected content against the schema. On validation failure, retry
@@ -395,24 +513,35 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			content.WriteString(validatedResp.Content)
 		}
 
-		// Approximate token accumulation: count characters in this round's
-		// LLM output as a simple proxy. The model package's StreamChunk.Usage
-		// is *UsageInfo and may be nil; this char-count proxy keeps the
-		// engine decoupled from provider-specific usage shapes.
+		// Approximate token accumulation
 		totalTokens += len(content.String())
 
-		// Parse decision
-		decision, err := actionruntime.ParseDecision(content.String())
-		if err != nil {
-			// O-MEDIUM-1: Planning fallback strategy. When the LLM emits
-			// content that cannot be parsed as a structured decision (pure
-			// prose, empty, or irreparably malformed JSON), degrade to a
-			// "response" decision whose FinalResponse is the raw LLM output
-			// so the loop can still terminate and surface the model's reply
-			// to the user instead of failing the whole Run.
+		// Build decision: prefer native tool calls over custom JSON schema.
+		var decision *actionruntime.Decision
+		if len(nativeToolCalls) > 0 {
+			// Native function calling: model returned tool_calls.
+			e.session.AddAssistantToolCalls(nativeToolCalls)
+
+			actionCalls := make([]actionruntime.ActionCall, 0, len(nativeToolCalls))
+			for _, tc := range nativeToolCalls {
+				actionCalls = append(actionCalls, actionruntime.ActionCall{
+					Name:   tc.Name,
+					Params: tc.Arguments,
+				})
+			}
 			decision = &actionruntime.Decision{
-				NextAction:    "response",
-				FinalResponse: content.String(),
+				NextAction:  "execute",
+				ActionCalls: actionCalls,
+			}
+		} else {
+			// No native tool calls — parse the text content as a decision.
+			var parseErr error
+			decision, parseErr = actionruntime.ParseDecision(content.String())
+			if parseErr != nil {
+				decision = &actionruntime.Decision{
+					NextAction:    "response",
+					FinalResponse: content.String(),
+				}
 			}
 		}
 
@@ -468,11 +597,79 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		dispatcher := actionruntime.NewActionDispatcherWithAudit(e.actionExt.GetRegistry(), e.auditHook)
 		results := dispatcher.Execute(ctx, decision.ActionCalls)
 
-		// Add results to session
-		for i, call := range decision.ActionCalls {
-			if i < len(results) {
-				e.session.AddActionResult(call.Name, results[i])
+		// Add results to session using native tool message format when
+		// native tool calls were used, or legacy system-message format
+		// for the custom-decision fallback.
+		if len(nativeToolCalls) > 0 {
+			// Native function calling: add role="tool" messages with tool_call_id.
+			for i, tc := range nativeToolCalls {
+				if i < len(results) {
+					resultContent := formatToolResult(results[i])
+					e.session.AddToolResultNamed(tc.ID, tc.Name, resultContent)
+				}
 			}
+		} else {
+			// Legacy custom-decision: add as system messages.
+			for i, call := range decision.ActionCalls {
+				if i < len(results) {
+					e.session.AddActionResult(call.Name, results[i])
+				}
+			}
+		}
+
+		// Tool-call dedup: detect when the model is stuck calling the same
+		// tool with the same arguments. Build a signature from the current
+		// batch and compare with the previous one.
+		if len(decision.ActionCalls) > 0 {
+			var sigParts []string
+			for _, ac := range decision.ActionCalls {
+				paramJSON, _ := json.Marshal(ac.Params)
+				sigParts = append(sigParts, ac.Name+":"+string(paramJSON))
+			}
+			curSig := strings.Join(sigParts, "|")
+			if curSig == lastToolSig {
+				staleCount++
+			} else {
+				staleCount = 1
+				lastToolSig = curSig
+			}
+			if staleCount == toolCallStaleThreshold {
+				nudge := fmt.Sprintf(
+					"[system nudge] You have called the same tool with the same arguments %d times in a row. "+
+						"This is likely unproductive. Please change your approach: either use different tools, "+
+						"different arguments, or provide your final response/summary now.",
+					staleCount,
+				)
+				log.Printf("[agent] stale tool-call detected (%d consecutive identical calls); injecting nudge", staleCount)
+				// Use user message instead of system to avoid "System message must be at the beginning" API error.
+				e.session.AddUserMessage(nudge)
+			}
+			if staleCount > 0 && staleCount%toolCallStaleThreshold == 0 && staleCount > toolCallStaleThreshold {
+				// Escalating nudge for persistent loops
+				nudge := fmt.Sprintf(
+					"[system nudge] WARNING: You are stuck in a loop. You have made %d identical tool-call rounds. "+
+						"STOP calling tools and provide your FINAL RESPONSE now based on what you already know.",
+					staleCount,
+				)
+				log.Printf("[agent] persistent stale loop (%d rounds); injecting escalation", staleCount)
+				// Use user message instead of system to avoid "System message must be at the beginning" API error.
+				e.session.AddUserMessage(nudge)
+			}
+		}
+
+		// Halfway warning: when tool-call rounds reach 50%% of the hard cap,
+		// inject a system message encouraging the model to wrap up.
+		if !halfwayWarned && toolCallRounds >= maxTCR/2 {
+			halfwayWarned = true
+			warning := fmt.Sprintf(
+				"[system] You have used %d of %d allowed tool-call rounds. "+
+					"If you have gathered enough context, begin writing files or "+
+					"provide your final summary now. Do NOT continue exploring.",
+				toolCallRounds, maxTCR,
+			)
+			log.Printf("[agent] halfway warning at %d/%d tool-call rounds", toolCallRounds, maxTCR)
+			// Use user message instead of system to avoid "System message must be at the beginning" API error.
+			e.session.AddUserMessage(warning)
 		}
 
 		// Point 6: CancelAfterToolCalls safe-point. The tool batch has
@@ -493,7 +690,31 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			e.turnLoop.EnterIdle()
 		}
 
-		round++
+		// Clear Zone 3 (volatile scratch) so per-round reasoning state does
+		// not leak into the next round. No-op for backends without zones.
+		e.session.ClearVolatileScratch()
+
+		// Only increment the main round counter for "response" decisions.
+		// Tool-execution rounds (native function calls or custom action
+		// dispatch) do NOT count against maxRounds — the agent may need
+		// many tool calls to fulfil a single user request, and capping
+		// the total rounds would prematurely truncate legitimate workflows.
+		if decision.NextAction != "execute" {
+			round++
+		} else {
+			// Tool-execution round: count toward the hard cap.
+			toolCallRounds++
+			if toolCallRounds >= maxTCR {
+				log.Printf("[agent] tool-call cap reached (%d rounds); triggering synthesis",
+					toolCallRounds)
+				// Return an empty-execute decision so RunLoop/Agent.Run
+				// triggers the synthesis fallback instead of erroring.
+				return &actionruntime.Decision{
+					NextAction:    "execute",
+					FinalResponse: "",
+				}, nil
+			}
+		}
 	}
 }
 
@@ -542,4 +763,48 @@ func (e *Engine) buildToolDefinitions() []model.ToolDefinition {
 // hash can share a prefix cache for Zone 1 (immutable prefix).
 func (e *Engine) ToolDefsHash() string {
 	return e.toolDefsHash
+}
+
+// defaultToolResultMaxBytes is the maximum byte size of a tool result
+// content before it is truncated. 4096 bytes keeps individual tool results
+// (especially file_read) from dominating the context window.
+const defaultToolResultMaxBytes = 4096
+
+// truncateToolResult shortens s to at most maxBytes bytes. When truncation
+// occurs the head (first half) and tail (last quarter) are preserved with a
+// marker indicating the original size. This prevents a single large tool
+// result (e.g. a 27 KB file_read) from consuming the entire context budget.
+func truncateToolResult(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	head := s[:maxBytes/2]
+	tail := s[len(s)-maxBytes/4:]
+	return head + "\n... [truncated, " + strconv.Itoa(len(s)) + " bytes total] ...\n" + tail
+}
+
+// formatToolResult converts an *action.ActionResult into a human-readable
+// string suitable for sending back to the model as a tool message content.
+// Results exceeding defaultToolResultMaxBytes are truncated to keep the
+// context window compact.
+func formatToolResult(result *action.ActionResult) string {
+	var raw string
+	if result == nil {
+		raw = "null"
+	} else if result.Error != "" {
+		raw = fmt.Sprintf("error: %s", result.Error)
+	} else if b, err := json.Marshal(result.Result); err == nil {
+		raw = string(b)
+	} else {
+		raw = fmt.Sprintf("%v", result.Result)
+	}
+	return truncateToolResult(raw, defaultToolResultMaxBytes)
+}
+
+// truncate returns the first n characters of s, or s itself if shorter.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

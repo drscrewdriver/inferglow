@@ -70,16 +70,27 @@ func TestAgentRunResponse(t *testing.T) {
 	}
 }
 
-func TestAgentRunExecuteNoResponseReturnsError(t *testing.T) {
+func TestAgentRunExecuteNoResponseTriggersSynthesis(t *testing.T) {
 	sess := session.NewSession("test", 10000)
 	actExt := NewActionExtension()
 
+	callCount := 0
 	mockReq := &mockModelRequester{
 		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
 			ch := make(chan *model.StreamChunk, 1)
-			ch <- &model.StreamChunk{
-				Delta:  `{"next_action":"execute","action_calls":[{"name":"test","params":{}}]}`,
-				IsDone: true,
+			callCount++
+			// First calls return execute, synthesis call returns response
+			if callCount <= 5 {
+				ch <- &model.StreamChunk{
+					Delta:  `{"next_action":"execute","action_calls":[{"name":"test","params":{}}]}`,
+					IsDone: true,
+				}
+			} else {
+				// Synthesis call returns a response
+				ch <- &model.StreamChunk{
+					Delta:  "synthesis summary",
+					IsDone: true,
+				}
 			}
 			close(ch)
 			return ch, nil
@@ -87,9 +98,14 @@ func TestAgentRunExecuteNoResponseReturnsError(t *testing.T) {
 	}
 
 	agent := New(sess, actExt, mockReq)
-	_, err := agent.Run(context.Background(), "test")
-	if err != ErrNoFinalResponse {
-		t.Errorf("Expected ErrNoFinalResponse, got %v", err)
+	// Use a small tool-call cap to keep the test fast.
+	agent.engine.maxToolCallRounds = 5
+	result, err := agent.Run(context.Background(), "test")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if result != "synthesis summary" {
+		t.Errorf("Expected synthesis summary, got %q", result)
 	}
 }
 
