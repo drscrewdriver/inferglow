@@ -63,13 +63,62 @@ type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) 
 type AnalysisHandler func(full []ChatMessage, window []ChatMessage, memo map[string]any) (string, error)
 ```
 
-### 1.3 三种内置 Resize 策略（[resize.go](../../session/resize.go)）
+### 1.3 四种内置 Resize 策略（[resize.go](../../session/resize.go)）
 
 | 策略 | 函数 | 行为 |
 |------|------|------|
 | **SimpleCut** | `SimpleCutResizeHandler` | 从前面丢弃，保留最近消息 |
 | **SummaryFirst** | `SummaryFirstResizeHandler` | 保留首条 + 末尾 2 条 + 中间摘要 |
 | **TokenAware** | `TokenAwareResizeHandler` | 按 token 估算裁剪（`len/4 = 1 token`） |
+| **SmartCompress** | `SmartCompressResizeHandler` | 保留首条 + 最近 N 条，中间 tool 结果压缩为标记 |
+
+#### SmartCompress 策略详细说明
+
+`SmartCompressResizeHandler(maxKeepRecent int)` 是 v2 新增的高级压缩策略，专为长对话场景设计：
+
+- **第一条消息**（通常 system prompt）始终保留
+- **最近 N 条**消息完整保留
+- **中间区域**：`role="tool"` 的消息被压缩为 `[previously executed tool]` 或 `[previously read: /path/to/file]`（从 Meta 提取文件路径）
+- **assistant/user 文本消息**（推理链）始终保留
+
+这种策略在大幅减少工具结果占用的同时，保留 assistant 的完整推理链，对 prefix cache 命中率非常友好。
+
+### 1.3.1 多策略注册表（[resize.go](../../session/resize.go)）
+
+v2 起 Session 支持多 resize 策略注册：
+
+```go
+// 旧路径（单一 handler，仍兼容）
+sess.ResizeHandler = TokenAwareResizeHandler
+
+// 新路径（多策略）
+sess.SetResizeStrategies(
+    SnipFromHead(4),
+    PruneLowValue(64),
+    SmartCompressResizeHandler(8),
+)
+```
+
+多策略路径通过 `AnalysisHandler` 决定使用哪个策略：分析器遍历 `full/window` 计算是否需要 resize，返回策略名；`resizeHandlers` 按名查找并执行。
+
+### 1.3.2 SessionBackend 统一抽象（v2）
+
+v2 新增 `SessionBackend` 接口，统一 `Session` 和 `ThreeZoneSession` 的使用方式：
+
+```go
+type SessionBackend interface {
+    AddMessage(role string, content any, name string)
+    AddMessageWithMeta(role string, content any, name string, meta map[string]any)
+    PreparePrompt() []ChatMessage
+    SaveJSON(path string) error
+}
+```
+
+这使得 `SessionExtension` 不再依赖具体类型，可透明切换 `Session` / `ThreeZoneSession`。
+
+同时 `Session` 和 `ThreeZoneSession` 均实现了 `AddMessageWithMeta`：允许在消息中附带 `tool_calls`、`tool_call_id` 等元数据，这些元数据通过 `PreparePrompt()` 完整传递给 LLM。
+
+`ThreeZoneSession.SaveJSON()` 将三区状态序列化到 JSON 文件，格式兼容 `LoadJSON`，支持 crash recovery。
 
 ### 1.4 安全钩子接口
 
