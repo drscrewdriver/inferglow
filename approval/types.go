@@ -43,6 +43,12 @@ const (
 	// DecisionPending means the request requires further input (e.g.
 	// human approval) and cannot be resolved immediately.
 	DecisionPending DecisionStatus = "pending"
+
+	// DecisionAllowed means the request bypasses the approval flow
+	// entirely (e.g. via AutoAllowHandler). It is treated like
+	// DecisionApproved for execution gating but signals that no
+	// approval was actually granted.
+	DecisionAllowed DecisionStatus = "allowed"
 )
 
 // RiskLevel classifies the risk of an approval request.
@@ -148,3 +154,30 @@ func RiskExceeds(a, b RiskLevel) bool {
 // handler. If approval is not received within this duration, the request
 // is denied.
 const AutoApproveTimeout = 30 * time.Second
+
+// Record stores the outcome of an approval request submitted via
+// PolicyApprovalManager.Submit. Records that are immediately resolved
+// (approved/denied/allowed by policy or handler) are returned without
+// being persisted; pending records are stored for later manual
+// resolution via ResolveRecord.
+type Record struct {
+	// ID is the unique identifier assigned to persisted (pending)
+	// records. Immediately-resolved records have an empty ID.
+	ID string `json:"id"`
+
+	// Request is the original approval request.
+	Request *Request `json:"request"`
+
+	// Status is the current lifecycle state of the record.
+	Status DecisionStatus `json:"status"`
+
+	// Approver is the identity that manually resolved the record, if
+	// applicable.
+	Approver string `json:"approver,omitempty"`
+
+	// CreatedAt is when the record was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// UpdatedAt is when the record was last modified.
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}

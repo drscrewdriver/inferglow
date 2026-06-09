@@ -21,15 +21,15 @@
 package model
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
+
+	"github.com/inferglow/model/internal/ssestream"
 )
 
 // DefaultMaxTokens is the default max_tokens value sent to OpenAI-compatible
@@ -114,22 +114,13 @@ func (p *OpenAICompatibleProvider) CacheCapability() CacheCapability {
 // mapRole applies RoleMapping to the given role. If no mapping exists, the
 // role is returned unchanged.
 func (p *OpenAICompatibleProvider) mapRole(role string) string {
-	if p.RoleMapping == nil {
-		return role
-	}
-	if mapped, ok := p.RoleMapping[role]; ok && mapped != "" {
-		return mapped
-	}
-	return role
+	return ssestream.MapRole(role, p.RoleMapping)
 }
 
 // effectiveHTTPClient returns the configured HTTPClient or a sane fallback
 // with a 5-minute timeout (long enough for streaming responses).
 func (p *OpenAICompatibleProvider) effectiveHTTPClient() *http.Client {
-	if p.HTTPClient != nil {
-		return p.HTTPClient
-	}
-	return &http.Client{Timeout: 5 * time.Minute}
+	return ssestream.EffectiveHTTPClient(p.HTTPClient)
 }
 
 // GenerateRequestData 将 ModelRequest 转换为 OpenAI API 格式
@@ -423,61 +414,29 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// 启动 goroutine 解析 SSE 流
-	stream := make(chan *StreamChunk, 64)
-	go func() {
-		defer close(stream)
-		defer resp.Body.Close()
+	// 启动 goroutine 解析 SSE 流。The goroutine skeleton, emit closure,
+	// ctx.Done() polling, and EOF/error handling are provided by
+	// ssestream.RunLines (D7-4 deduplication).
+	//
+	// M-CRITICAL-2: accumulate streaming tool_call arguments per index.
+	toolStates := make(map[int]*openAIToolState)
+	var usage *UsageInfo
 
-		// Use bufio.Reader so we can poll ctx.Done() between reads.
-		// M-MEDIUM-6: increase buffer to 1MB so large SSE lines (e.g. tool_call
-		// arguments with big JSON payloads) don't trigger excessive refills.
-		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
-		var usage *UsageInfo
-
-		// M-CRITICAL-2: accumulate streaming tool_call arguments per index.
-		toolStates := make(map[int]*openAIToolState)
-
-		emit := func(schunk *StreamChunk) {
-			select {
-			case stream <- schunk:
-			case <-ctx.Done():
-			}
+	parse := func(line string, emit func(*StreamChunk)) bool {
+		if u := p.processOpenAILine(line, usage, toolStates, emit); u != nil {
+			usage = u
 		}
+		return false
+	}
 
-		for {
-			// M-CRITICAL-3: poll context before each read so a cancelled
-			// consumer doesn't leak this goroutine.
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err == io.EOF {
-					if strings.TrimSpace(line) != "" {
-						if processed := p.processOpenAILine(line, usage, toolStates, emit); processed != nil {
-							usage = processed
-						}
-					}
-					return
-				}
-				emit(&StreamChunk{
-					IsDone: true,
-					Meta:   map[string]any{"error": err.Error()},
-				})
-				return
-			}
-
-			if u := p.processOpenAILine(line, usage, toolStates, emit); u != nil {
-				usage = u
-			}
+	errorChunk := func(err error) *StreamChunk {
+		return &StreamChunk{
+			IsDone: true,
+			Meta:   map[string]any{"error": err.Error()},
 		}
-	}()
+	}
 
-	return stream, nil
+	return ssestream.RunLines(ctx, resp.Body, parse, errorChunk), nil
 }
 
 // processOpenAILine parses one SSE line and emits any resulting StreamChunk
@@ -489,12 +448,10 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 	toolStates map[int]*openAIToolState,
 	emit func(*StreamChunk),
 ) *UsageInfo {
-	if !strings.HasPrefix(line, "data: ") {
+	data, ok := ssestream.ParseDataLine(line)
+	if !ok {
 		return nil
 	}
-
-	data := strings.TrimPrefix(line, "data: ")
-	data = strings.TrimSpace(data)
 	if data == "[DONE]" || data == "" {
 		return nil
 	}

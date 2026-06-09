@@ -16,6 +16,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/inferglow/approval v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -36,3 +37,5 @@ require (
 replace github.com/inferglow/action => ../action
 
 replace github.com/inferglow/sandbox => ../sandbox
+
+replace github.com/inferglow/approval => ../approval

@@ -59,4 +59,6 @@ replace github.com/inferglow/security => ./../security
 
 replace github.com/inferglow/workspace => ./../workspace
 
+replace github.com/inferglow/approval => ./../approval
+
 replace github.com/docker/go-connections v0.7.0 => github.com/docker/go-connections v0.4.0

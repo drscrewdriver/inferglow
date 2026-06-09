@@ -61,13 +61,15 @@ func TestIntegration_ManagerWithBuiltinProviders(t *testing.T) {
 }
 
 // TestIntegration_AutoFallbackChain verifies that when only TrustedLocal is
-// available, SelectSandbox(ModeAuto) returns TrustedLocal.
+// available and the trusted fallback is explicitly allowed,
+// SelectSandbox(ModeAuto) returns TrustedLocal.
 func TestIntegration_AutoFallbackChain(t *testing.T) {
 	m := NewManager()
 	// Register only TrustedLocal — Docker/GVisor/LocalSandbox not registered
 	if err := m.Register(NewTrustedLocalProvider()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
+	m.AllowTrustedFallback = true
 	p, err := m.SelectSandbox(ModeAuto)
 	if err != nil {
 		t.Fatalf("SelectSandbox(ModeAuto): %v", err)
@@ -92,6 +94,9 @@ func TestIntegration_AutoFallbackWithAllRegistered(t *testing.T) {
 		_ = m.Register(gvisorProv)
 	}
 	_ = m.Register(NewLocalSandboxProvider())
+	// Allow the trusted_local fallback so that in environments without
+	// docker/runsc the auto chain still resolves to trusted_local.
+	m.AllowTrustedFallback = true
 	p, err := m.SelectSandbox(ModeAuto)
 	if err != nil {
 		t.Fatalf("SelectSandbox(ModeAuto): %v", err)
@@ -268,7 +273,8 @@ func TestIntegration_AutoNoneAvailableWhenOnlyStubs(t *testing.T) {
 	_, err := m.SelectSandbox(ModeAuto)
 	// LocalSandbox is named "local" which is in the fallback chain, but
 	// InspectAvailability returns false, so auto should fail.
-	// However, the fallback chain is gvisor → docker → local → trusted_local.
+	// The fallback chain is gvisor → docker → local (trusted_local is only
+	// added when AllowTrustedFallback is true, which it is not here).
 	// Only "local" is registered and it's unavailable, so we get ErrNoAvailableSandbox.
 	if !errors.Is(err, ErrNoAvailableSandbox) {
 		t.Errorf("expected ErrNoAvailableSandbox, got %v", err)

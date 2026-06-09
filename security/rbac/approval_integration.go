@@ -33,10 +33,10 @@ var ErrApprovalDenied = errors.New("rbac: approval denied")
 
 // ApprovalRequest is the rbac-local request type passed to an Approver.
 // It intentionally mirrors only the fields the identity layer needs to
-// forward; callers adapt it to sandbox.ApprovalRequest (or any other
+// forward; callers adapt it to approval.Request (or any other
 // approval backend) at the integration boundary. Keeping the type
-// local avoids importing the sandbox package, which would create a
-// circular dependency (sandbox ← action ← … while security must stay
+// local avoids importing the approval package, which would create a
+// circular dependency (approval ← action ← … while security must stay
 // dependency-free).
 type ApprovalRequest struct {
 	// ActionName is the name of the Action requesting approval.
@@ -58,9 +58,8 @@ type ApprovalDecision struct {
 
 // Approver is the business-layer abstraction that the rbac package
 // relies on. The concrete implementation is supplied by the caller
-// (typically a thin adapter around sandbox.ApprovalService /
-// ApprovalHandler), which keeps the security module free of any
-// sandbox import.
+// (typically a thin adapter around approval.PolicyApprovalManager),
+// which keeps the security module free of any approval import.
 //
 // Relationship between the two layers:
 //

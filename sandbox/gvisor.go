@@ -106,6 +106,12 @@ func (p *GVisorProvider) CreateHandle(cfg map[string]any, policy *ExecutionPolic
 }
 
 // GVisorHandle is a Handle backed by a Docker container running with the runsc (gVisor) runtime.
+//
+// It embeds *DockerHandle and therefore inherits all container lifecycle
+// behaviour, including the network_access policy enforcement in
+// DockerHandle.Start(): when the policy NetworkAccess.Level is
+// NetworkAccessNone, the container is created with NetworkDisabled=true so
+// the gVisor sandbox has no network stack.
 type GVisorHandle struct {
 	*DockerHandle
 }

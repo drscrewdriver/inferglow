@@ -410,3 +410,109 @@ func TestDockerProviderImplementsProvider(t *testing.T) {
 	p := NewDockerProviderWithClient(mc)
 	var _ Provider = p
 }
+
+// TestDockerHandleStart_NetworkDisabledForNonePolicy verifies that when the
+// policy NetworkAccess.Level is NetworkAccessNone, the container is created
+// with NetworkDisabled=true (enforcing the network_access policy).
+func TestDockerHandleStart_NetworkDisabledForNonePolicy(t *testing.T) {
+	var seenDisabled *bool
+	mc := &mockDockerClient{
+		createFn: func(config *ContainerConfig, hostConfig *HostConfig, networkingConfig *NetworkSettings, containerConfig *ContainerConfig, opts ...any) (*ContainerCreateResult, error) {
+			d := config.NetworkDisabled
+			seenDisabled = &d
+			return &ContainerCreateResult{ID: "abc123"}, nil
+		},
+		startFn: func(containerID string, opts ...any) error { return nil },
+	}
+	p := NewDockerProviderWithClient(mc)
+	policy := ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessNone}}
+	h, _ := p.CreateHandle(nil, &policy)
+	dh := h.(*DockerHandle)
+
+	if err := dh.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if seenDisabled == nil {
+		t.Fatal("ContainerCreate was not called")
+	}
+	if !*seenDisabled {
+		t.Errorf("NetworkDisabled = false, want true for network_access=none")
+	}
+}
+
+// TestDockerHandleStart_NetworkEnabledForFullPolicy verifies that non-"none"
+// levels leave networking enabled.
+func TestDockerHandleStart_NetworkEnabledForFullPolicy(t *testing.T) {
+	var seenDisabled *bool
+	mc := &mockDockerClient{
+		createFn: func(config *ContainerConfig, hostConfig *HostConfig, networkingConfig *NetworkSettings, containerConfig *ContainerConfig, opts ...any) (*ContainerCreateResult, error) {
+			d := config.NetworkDisabled
+			seenDisabled = &d
+			return &ContainerCreateResult{ID: "abc123"}, nil
+		},
+		startFn: func(containerID string, opts ...any) error { return nil },
+	}
+	p := NewDockerProviderWithClient(mc)
+	policy := ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessFull}}
+	h, _ := p.CreateHandle(nil, &policy)
+	dh := h.(*DockerHandle)
+
+	if err := dh.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if seenDisabled == nil {
+		t.Fatal("ContainerCreate was not called")
+	}
+	if *seenDisabled {
+		t.Errorf("NetworkDisabled = true, want false for network_access=full")
+	}
+}
+
+// TestDockerHandleStart_NetworkEnabledForNilPolicy verifies that a nil/empty
+// policy (no network restriction requested) leaves networking enabled,
+// preserving the pre-fix default behaviour.
+func TestDockerHandleStart_NetworkEnabledForNilPolicy(t *testing.T) {
+	var seenDisabled *bool
+	mc := &mockDockerClient{
+		createFn: func(config *ContainerConfig, hostConfig *HostConfig, networkingConfig *NetworkSettings, containerConfig *ContainerConfig, opts ...any) (*ContainerCreateResult, error) {
+			d := config.NetworkDisabled
+			seenDisabled = &d
+			return &ContainerCreateResult{ID: "abc123"}, nil
+		},
+		startFn: func(containerID string, opts ...any) error { return nil },
+	}
+	p := NewDockerProviderWithClient(mc)
+	// No Level set on the policy → networking stays enabled.
+	policy := ExecutionPolicy{}
+	h, _ := p.CreateHandle(nil, &policy)
+	dh := h.(*DockerHandle)
+
+	if err := dh.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if seenDisabled == nil {
+		t.Fatal("ContainerCreate was not called")
+	}
+	if *seenDisabled {
+		t.Errorf("NetworkDisabled = true, want false for empty policy")
+	}
+}
+
+// TestNetworkDisabledForPolicyHelper directly exercises the helper.
+func TestNetworkDisabledForPolicyHelper(t *testing.T) {
+	if !networkDisabledForPolicy(&ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessNone}}) {
+		t.Errorf("networkDisabledForPolicy(none) = false, want true")
+	}
+	if networkDisabledForPolicy(&ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessFull}}) {
+		t.Errorf("networkDisabledForPolicy(full) = true, want false")
+	}
+	if networkDisabledForPolicy(&ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessEgressOnly}}) {
+		t.Errorf("networkDisabledForPolicy(egress_only) = true, want false")
+	}
+	if networkDisabledForPolicy(nil) {
+		t.Errorf("networkDisabledForPolicy(nil) = true, want false")
+	}
+	if networkDisabledForPolicy(&ExecutionPolicy{}) {
+		t.Errorf("networkDisabledForPolicy(empty) = true, want false")
+	}
+}

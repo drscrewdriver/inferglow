@@ -36,6 +36,12 @@ type Manager struct {
 	mu          sync.RWMutex
 	providers   map[string]Provider
 	defaultMode SandboxMode
+	// AllowTrustedFallback gates whether ModeAuto may fall back to the
+	// trusted_local backend, which provides no isolation. It defaults to
+	// false so that ModeAuto returns an error rather than silently executing
+	// unisolated commands. Set to true only in explicitly trusted
+	// environments.
+	AllowTrustedFallback bool
 }
 
 // NewManager returns an empty Manager ready to register providers.
@@ -88,21 +94,30 @@ func (m *Manager) List() []string {
 	return names
 }
 
-// autoFallbackOrder is the order of preference for ModeAuto selection.
-// gvisor → docker → local → trusted_local
-var autoFallbackOrder = []SandboxMode{ModeGVisor, ModeDocker, ModeLocal, ModeTrustedLocal}
+// autoFallbackOrder is the order of preference for ModeAuto selection among
+// isolated backends: gvisor → docker → local. trusted_local is intentionally
+// excluded because it provides no isolation; it is only appended to the chain
+// when Manager.AllowTrustedFallback is true.
+var autoFallbackOrder = []SandboxMode{ModeGVisor, ModeDocker, ModeLocal}
 
 // SelectSandbox picks a Provider for the given mode.
 //
-// For ModeAuto, it walks the fallback chain (gvisor → docker → local →
-// trusted_local), calling InspectAvailability on each registered provider,
-// returning the first available one. Returns ErrNoAvailableSandbox if none
-// are available.
+// For ModeAuto, it walks the isolated fallback chain (gvisor → docker →
+// local), calling InspectAvailability on each registered provider and
+// returning the first available one. trusted_local is only considered when
+// Manager.AllowTrustedFallback is true. Returns ErrNoAvailableSandbox if no
+// suitable (isolated) backend is available — it never silently falls back to
+// the no-isolation trusted_local backend unless that fallback is explicitly
+// allowed.
 func (m *Manager) SelectSandbox(mode SandboxMode) (Provider, error) {
 	if mode == ModeAuto {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
-		for _, candidate := range autoFallbackOrder {
+		chain := autoFallbackOrder
+		if m.AllowTrustedFallback {
+			chain = append(append([]SandboxMode{}, autoFallbackOrder...), ModeTrustedLocal)
+		}
+		for _, candidate := range chain {
 			p, ok := m.providers[string(candidate)]
 			if !ok {
 				continue

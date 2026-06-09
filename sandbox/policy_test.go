@@ -94,3 +94,80 @@ func TestDefaultPolicy(t *testing.T) {
 		t.Errorf("DefaultPolicy().Timeout = %v, want 0", p.Timeout)
 	}
 }
+
+func TestNetworkAccessLevelRank(t *testing.T) {
+	cases := []struct {
+		level NetworkAccessLevel
+		want  int
+	}{
+		{NetworkAccessNone, 0},
+		{NetworkAccessEgressOnly, 1},
+		{NetworkAccessFull, 2},
+		{"", 0},            // empty → most restrictive
+		{"bogus", 0},       // unknown → most restrictive (deny-by-default)
+	}
+	for _, c := range cases {
+		if got := c.level.Rank(); got != c.want {
+			t.Errorf("%q.Rank() = %d, want %d", c.level, got, c.want)
+		}
+	}
+}
+
+func TestMoreRestrictiveNetwork(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b NetworkAccessLevel
+		want NetworkAccessLevel
+	}{
+		{"baseline none, llm full → none", NetworkAccessNone, NetworkAccessFull, NetworkAccessNone},
+		{"baseline full, llm none → none", NetworkAccessFull, NetworkAccessNone, NetworkAccessNone},
+		{"baseline egress_only, llm none → none", NetworkAccessEgressOnly, NetworkAccessNone, NetworkAccessNone},
+		{"baseline egress_only, llm full → egress_only", NetworkAccessEgressOnly, NetworkAccessFull, NetworkAccessEgressOnly},
+		{"baseline none, llm unspecified → none", NetworkAccessNone, "", NetworkAccessNone},
+		{"baseline unspecified, llm full → none (deny default)", "", NetworkAccessFull, NetworkAccessNone},
+		{"baseline full, llm unspecified → full", NetworkAccessFull, "", NetworkAccessFull},
+		{"both unspecified → none", "", "", NetworkAccessNone},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := MoreRestrictiveNetwork(c.a, c.b); got != c.want {
+				t.Errorf("MoreRestrictiveNetwork(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDefaultDenyBaseline(t *testing.T) {
+	b := DefaultDenyBaseline()
+	if b.NetworkAccess != NetworkAccessNone {
+		t.Errorf("NetworkAccess = %q, want %q", b.NetworkAccess, NetworkAccessNone)
+	}
+	if b.ApprovalRequired != true {
+		t.Errorf("ApprovalRequired = %v, want true", b.ApprovalRequired)
+	}
+	if b.Timeout != 30*time.Second {
+		t.Errorf("Timeout = %v, want 30s", b.Timeout)
+	}
+	if b.MaxOutputBytes <= 0 {
+		t.Errorf("MaxOutputBytes = %d, want > 0", b.MaxOutputBytes)
+	}
+	if b.PathAllowlist != nil {
+		t.Errorf("PathAllowlist = %v, want nil", b.PathAllowlist)
+	}
+	if b.IsZero() {
+		t.Errorf("DefaultDenyBaseline().IsZero() = true, want false (baseline is configured)")
+	}
+}
+
+func TestServerPolicyBaselineIsZero(t *testing.T) {
+	if !(ServerPolicyBaseline{}).IsZero() {
+		t.Errorf("zero-value ServerPolicyBaseline.IsZero() = false, want true")
+	}
+	// Setting any field makes it non-zero.
+	if (ServerPolicyBaseline{ApprovalRequired: true}).IsZero() {
+		t.Errorf("ServerPolicyBaseline{ApprovalRequired:true}.IsZero() = true, want false")
+	}
+	if (ServerPolicyBaseline{NetworkAccess: NetworkAccessFull}).IsZero() {
+		t.Errorf("ServerPolicyBaseline{NetworkAccess:Full}.IsZero() = true, want false")
+	}
+}

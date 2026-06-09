@@ -21,7 +21,6 @@
 package model
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,7 +28,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
+
+	"github.com/inferglow/model/internal/ssestream"
 )
 
 // respToolState accumulates streaming function_call items across Responses API
@@ -89,23 +89,14 @@ func (p *OpenAIResponsesProvider) Name() string {
 // effectiveHTTPClient returns the configured HTTPClient or a sane fallback
 // with a 5-minute timeout (long enough for streaming responses).
 func (p *OpenAIResponsesProvider) effectiveHTTPClient() *http.Client {
-	if p.HTTPClient != nil {
-		return p.HTTPClient
-	}
-	return &http.Client{Timeout: 5 * time.Minute}
+	return ssestream.EffectiveHTTPClient(p.HTTPClient)
 }
 
 // mapRole applies RoleMapping to the given role. If no mapping exists, the
 // role is returned unchanged. Mirrors OpenAICompatibleProvider.mapRole so
 // Responses-API callers get consistent role handling.
 func (p *OpenAIResponsesProvider) mapRole(role string) string {
-	if p.RoleMapping == nil {
-		return role
-	}
-	if mapped, ok := p.RoleMapping[role]; ok && mapped != "" {
-		return mapped
-	}
-	return role
+	return ssestream.MapRole(role, p.RoleMapping)
 }
 
 // GenerateRequestData converts a ModelRequest into the Responses API shape.
@@ -287,54 +278,24 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 		return nil, fmt.Errorf("Responses API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	stream := make(chan *StreamChunk, 64)
-	go func() {
-		defer close(stream)
-		defer resp.Body.Close()
+	// SSE goroutine skeleton, emit closure, ctx.Done() polling, and
+	// EOF/error handling are provided by ssestream.RunLines (D7-4 deduplication).
+	// Tool call state: accumulate function_call items across events.
+	// Keyed by output_index from the event.
+	toolStates := make(map[int]*respToolState)
 
-		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
+	parse := func(line string, emit func(*StreamChunk)) bool {
+		return p.processResponsesLine(line, emit, toolStates)
+	}
 
-		// Tool call state: accumulate function_call items across events.
-		// Keyed by output_index from the event.
-		toolStates := make(map[int]*respToolState)
-
-		emit := func(schunk *StreamChunk) {
-			select {
-			case stream <- schunk:
-			case <-ctx.Done():
-			}
+	errorChunk := func(err error) *StreamChunk {
+		return &StreamChunk{
+			IsDone: true,
+			Meta:   map[string]any{"error": err.Error()},
 		}
+	}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err == io.EOF {
-					if strings.TrimSpace(line) != "" {
-						p.processResponsesLine(line, emit, toolStates)
-					}
-					return
-				}
-				emit(&StreamChunk{
-					IsDone: true,
-					Meta:   map[string]any{"error": err.Error()},
-				})
-				return
-			}
-
-			stop := p.processResponsesLine(line, emit, toolStates)
-			if stop {
-				return
-			}
-		}
-	}()
-
-	return stream, nil
+	return ssestream.RunLines(ctx, resp.Body, parse, errorChunk), nil
 }
 
 // processResponsesLine parses one SSE line and emits any resulting StreamChunk.
@@ -349,12 +310,8 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 //   - response.failed            → StreamChunk{IsDone: true, Meta: {error: ...}}
 //   - [DONE]                     → stream terminator (return true)
 func (p *OpenAIResponsesProvider) processResponsesLine(line string, emit func(*StreamChunk), toolStates map[int]*respToolState) bool {
-	if !strings.HasPrefix(line, "data: ") {
-		return false
-	}
-	data := strings.TrimPrefix(line, "data: ")
-	data = strings.TrimSpace(data)
-	if data == "" {
+	data, ok := ssestream.ParseDataLine(line)
+	if !ok || data == "" {
 		return false
 	}
 	if data == "[DONE]" {

@@ -248,3 +248,250 @@ func TestManagerListHandlers(t *testing.T) {
 		t.Fatalf("expected 2 handlers, got %d", len(names))
 	}
 }
+
+func TestAutoAllowHandler(t *testing.T) {
+	h := AutoAllowHandler{}
+	if h.Name() != "auto_allow" {
+		t.Fatalf("Name() = %q, want %q", h.Name(), "auto_allow")
+	}
+	req := &Request{RequestID: "r1", Source: "action", Capability: "bash"}
+	d, err := h.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if d.Status != DecisionAllowed || !d.Approved {
+		t.Errorf("expected allowed/approved, got status=%q approved=%v", d.Status, d.Approved)
+	}
+}
+
+func TestDecisionAllowedConstant(t *testing.T) {
+	if string(DecisionAllowed) != "allowed" {
+		t.Errorf("DecisionAllowed = %q, want %q", DecisionAllowed, "allowed")
+	}
+}
+
+// --- Submit / record management tests ---
+
+func TestSubmit_NoHandler_PendingRecord(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{RequestID: "r1", Source: "sandbox", Capability: "docker"}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionPending {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionPending)
+	}
+	if rec.ID == "" {
+		t.Error("pending record should have a non-empty ID")
+	}
+	if rec.CreatedAt.IsZero() {
+		t.Error("CreatedAt should not be zero")
+	}
+}
+
+func TestSubmit_PolicyDenied(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{
+		RequestID:  "r1",
+		Capability: "docker",
+		Policy: &AccessPolicy{
+			DeniedCapabilities: []string{"docker"},
+		},
+	}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionDenied {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionDenied)
+	}
+	if rec.ID != "" {
+		t.Errorf("auto-decided record should have empty ID, got %q", rec.ID)
+	}
+}
+
+func TestSubmit_PolicyAllowed(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{
+		RequestID:  "r1",
+		Capability: "trusted_local",
+		Policy: &AccessPolicy{
+			AllowedCapabilities: []string{"trusted_local"},
+		},
+	}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionApproved {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionApproved)
+	}
+}
+
+func TestSubmit_HandlerApproved(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_ = m.RegisterHandler(AutoApproveHandler{}, false)
+	_ = m.SetDefaultHandler("auto_approve")
+
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionApproved {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionApproved)
+	}
+}
+
+func TestSubmit_HandlerAllowed(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_ = m.RegisterHandler(AutoAllowHandler{}, false)
+	_ = m.SetDefaultHandler("auto_allow")
+
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionAllowed {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionAllowed)
+	}
+}
+
+func TestSubmit_HandlerPending_StoresRecord(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_ = m.RegisterHandler(InputTimeoutFailHandler{}, false)
+	_ = m.SetDefaultHandler("input_timeout_fail")
+
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionPending {
+		t.Errorf("Status = %q, want %q", rec.Status, DecisionPending)
+	}
+	if rec.ID == "" {
+		t.Error("pending record should have a non-empty ID")
+	}
+	// Verify the record is stored.
+	got, err := m.GetRecord(rec.ID)
+	if err != nil {
+		t.Fatalf("GetRecord error: %v", err)
+	}
+	if got.ID != rec.ID {
+		t.Errorf("GetRecord ID = %q, want %q", got.ID, rec.ID)
+	}
+}
+
+func TestSubmit_GlobalPolicy(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	m.SetPolicy(&AccessPolicy{
+		DeniedCapabilities: []string{"evil_provider"},
+	})
+
+	req := &Request{RequestID: "r1", Capability: "evil_provider"}
+	rec, err := m.Submit(req)
+	if err != nil {
+		t.Fatalf("Submit error: %v", err)
+	}
+	if rec.Status != DecisionDenied {
+		t.Errorf("Status = %q, want %q (global policy denied)", rec.Status, DecisionDenied)
+	}
+}
+
+func TestResolveRecord_Approved(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, _ := m.Submit(req)
+
+	resolved, err := m.ResolveRecord(rec.ID, true, "admin")
+	if err != nil {
+		t.Fatalf("ResolveRecord error: %v", err)
+	}
+	if resolved.Status != DecisionApproved {
+		t.Errorf("Status = %q, want %q", resolved.Status, DecisionApproved)
+	}
+	if resolved.Approver != "admin" {
+		t.Errorf("Approver = %q, want %q", resolved.Approver, "admin")
+	}
+}
+
+func TestResolveRecord_Denied(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, _ := m.Submit(req)
+
+	resolved, err := m.ResolveRecord(rec.ID, false, "admin")
+	if err != nil {
+		t.Fatalf("ResolveRecord error: %v", err)
+	}
+	if resolved.Status != DecisionDenied {
+		t.Errorf("Status = %q, want %q", resolved.Status, DecisionDenied)
+	}
+}
+
+func TestResolveRecord_NotFound(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_, err := m.ResolveRecord("nonexistent", true, "admin")
+	if !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("expected ErrRecordNotFound, got %v", err)
+	}
+}
+
+func TestResolveRecord_AlreadyResolved(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	req := &Request{RequestID: "r1", Capability: "docker"}
+	rec, _ := m.Submit(req)
+
+	_, err := m.ResolveRecord(rec.ID, true, "admin")
+	if err != nil {
+		t.Fatalf("first ResolveRecord error: %v", err)
+	}
+	_, err = m.ResolveRecord(rec.ID, false, "admin")
+	if !errors.Is(err, ErrAlreadyResolved) {
+		t.Fatalf("expected ErrAlreadyResolved, got %v", err)
+	}
+}
+
+func TestGetRecord_NotFound(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_, err := m.GetRecord("nonexistent")
+	if !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("expected ErrRecordNotFound, got %v", err)
+	}
+}
+
+func TestListRecords(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	for i := 0; i < 3; i++ {
+		req := &Request{RequestID: "r" + string(rune('1'+i)), Capability: "docker"}
+		m.Submit(req)
+	}
+	records := m.ListRecords()
+	if len(records) != 3 {
+		t.Errorf("ListRecords returned %d records, want 3", len(records))
+	}
+}
+
+func TestResolve_UsesGlobalPolicy(t *testing.T) {
+	m := NewPolicyApprovalManager()
+	_ = m.RegisterHandler(AutoApproveHandler{}, false)
+	_ = m.SetDefaultHandler("auto_approve")
+	m.SetPolicy(&AccessPolicy{
+		DeniedCapabilities: []string{"bash"},
+	})
+
+	req := &Request{RequestID: "r1", Capability: "bash"}
+	d, err := m.Resolve(context.Background(), req, "")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if d.Approved {
+		t.Error("expected denied by global policy, got approved")
+	}
+	if !d.PolicyOverride {
+		t.Error("expected PolicyOverride=true")
+	}
+}

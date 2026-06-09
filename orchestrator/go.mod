@@ -29,6 +29,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/inferglow/approval v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -78,3 +79,5 @@ replace github.com/inferglow/session => ../session
 replace github.com/inferglow/flow => ../flow
 
 replace github.com/inferglow/schema => ../schema
+
+replace github.com/inferglow/approval => ../approval

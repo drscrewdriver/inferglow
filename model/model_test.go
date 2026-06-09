@@ -198,7 +198,6 @@ func TestAllTypesJSONRoundTrip(t *testing.T) {
 		{"StreamChunk", StreamChunk{Delta: "test", IsDone: true}},
 		{"ResultEvent", ResultEvent{EventType: EventDelta, Payload: "test"}},
 		{"OutputSchema", OutputSchema{Type: "object", Properties: map[string]any{}, Required: []string{"name"}}},
-		{"ActionResult", ActionResult{Name: "test", Success: true}},
 	}
 
 	for _, tt := range tests {

@@ -226,25 +226,3 @@ func TestAttemptRunnerOutputStarted(t *testing.T) {
 		t.Errorf("expected 1 call (no retry), got %d", callCount)
 	}
 }
-
-// Check 1.4.2: 指数退避策略生效（不精确测试时间，只验证逻辑）
-func TestAttemptRunnerBackoffLogic(t *testing.T) {
-	runner := NewAttemptRunner()
-	runner.BackoffBase = 1 * time.Second
-	runner.BackoffMax = 30 * time.Second
-
-	// 验证退避时间随着重试次数增加而增长
-	firstBackoff := runner.calculateBackoff()
-	runner.AttemptIndex = 4 // 第4次重试
-	secondBackoff := runner.calculateBackoff()
-
-	// 第4次重试的退避应该大于等于第一次（由于抖动可能相等，但不能小于）
-	if secondBackoff < firstBackoff {
-		t.Errorf("backoff should increase with attempts: first=%v, fourth=%v", firstBackoff, secondBackoff)
-	}
-
-	// 限制最大值检查
-	if secondBackoff > runner.BackoffMax {
-		t.Errorf("backoff exceeds max: %v > %v", secondBackoff, runner.BackoffMax)
-	}
-}

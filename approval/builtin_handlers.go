@@ -27,6 +27,7 @@ var (
 	_ ApprovalHandler = (*AutoApproveHandler)(nil)
 	_ ApprovalHandler = (*FailClosedHandler)(nil)
 	_ ApprovalHandler = (*InputTimeoutFailHandler)(nil)
+	_ ApprovalHandler = (*AutoAllowHandler)(nil)
 )
 
 // AutoApproveHandler approves every request unconditionally.
@@ -83,5 +84,25 @@ func (InputTimeoutFailHandler) Resolve(req *Request) (*Decision, error) {
 		Metadata: map[string]string{
 			"timeout": AutoApproveTimeout.String(),
 		},
+	}, nil
+}
+
+// AutoAllowHandler completely bypasses the approval flow, returning a
+// DecisionAllowed status. Unlike AutoApproveHandler (which approves
+// through the approval flow), AutoAllowHandler signals that approval
+// was not required at all. Callers that gate execution on approval
+// should treat DecisionAllowed the same as DecisionApproved.
+type AutoAllowHandler struct{}
+
+// Name returns "auto_allow".
+func (AutoAllowHandler) Name() string { return "auto_allow" }
+
+// Resolve returns an allowed decision.
+func (AutoAllowHandler) Resolve(req *Request) (*Decision, error) {
+	return &Decision{
+		Status:   DecisionAllowed,
+		Approved: true,
+		Reason:   fmt.Sprintf("auto-allowed by auto_allow handler (source=%s, capability=%s)", req.Source, req.Capability),
+		Handler:  "auto_allow",
 	}, nil
 }

@@ -133,26 +133,6 @@ func TestAttachmentFields(t *testing.T) {
 	}
 }
 
-// Check: ActionResult 类型定义
-func TestActionResultFields(t *testing.T) {
-	result := ActionResult{
-		Name:    "get_weather",
-		Success: true,
-		Output:  map[string]any{"temp": 25},
-		Error:   "",
-	}
-
-	if result.Name != "get_weather" {
-		t.Errorf("Name = %q, want %q", result.Name, "get_weather")
-	}
-	if !result.Success {
-		t.Error("Success should be true")
-	}
-	if result.Output == nil {
-		t.Error("Output should not be nil")
-	}
-}
-
 // Check: RequestData Options 传递
 func TestRequestDataOptions(t *testing.T) {
 	req := &RequestData{
@@ -210,9 +190,6 @@ func TestModelRequestAttachmentAndExamples(t *testing.T) {
 		Attachment: []Attachment{
 			{Type: "image", Data: map[string]any{}},
 		},
-		Actions: []ActionResult{
-			{Name: "test", Success: true},
-		},
 		Output: &OutputSchema{Type: "object"},
 	}
 
@@ -221,9 +198,6 @@ func TestModelRequestAttachmentAndExamples(t *testing.T) {
 	}
 	if len(req.Attachment) != 1 {
 		t.Errorf("Attachment length = %d, want 1", len(req.Attachment))
-	}
-	if len(req.Actions) != 1 {
-		t.Errorf("Actions length = %d, want 1", len(req.Actions))
 	}
 	if req.Output == nil {
 		t.Error("Output should not be nil")

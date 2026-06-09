@@ -232,8 +232,11 @@ func (h *DockerHandle) Start(ctx context.Context) error {
 	}
 
 	config := &ContainerConfig{
-		Image:           h.image,
-		NetworkDisabled: false,
+		Image: h.image,
+		// Enforce the network_access policy: "none" fully disables the
+		// container network stack. This was previously hardcoded to false,
+		// which let the LLM-controlled policy be silently ignored.
+		NetworkDisabled: networkDisabledForPolicy(h.policy),
 		// Keep the container alive so that Execute can run commands in it.
 		// Without an explicit long-running command, alpine's default /bin/sh
 		// exits immediately when there is no TTY, causing the container to
@@ -427,6 +430,13 @@ type PortMapping struct {
 // newRealDockerClient creates a real Docker client.
 func newRealDockerClient() (DockerClient, error) {
 	return newRealDockerClientImpl()
+}
+
+// networkDisabledForPolicy reports whether the container network stack should
+// be fully disabled, based on the ExecutionPolicy network access level. A nil
+// policy or any level other than NetworkAccessNone leaves networking enabled.
+func networkDisabledForPolicy(policy *ExecutionPolicy) bool {
+	return policy != nil && policy.NetworkAccess.Level == NetworkAccessNone
 }
 
 // joinArgv joins command arguments into a shell-safe string.

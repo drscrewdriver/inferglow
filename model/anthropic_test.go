@@ -636,6 +636,158 @@ func TestAnthropicRequestDataNilError(t *testing.T) {
 	}
 }
 
+// Check: P0-1 — multi-turn native tool call history is converted to
+// Anthropic content-block format (tool_use / tool_result) on the wire.
+// Assistant tool_calls become tool_use blocks; role="tool" messages become
+// role="user" with tool_result blocks; consecutive tool results merge into a
+// single user message to preserve alternating roles.
+func TestAnthropicMultiTurnToolCallConversion(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	provider := &AnthropicCompatibleProvider{
+		BaseURL: server.URL,
+		APIKey:  "anthropic-key",
+		Model:   "claude-3-5-sonnet-20241022",
+	}
+
+	// Simulate a second-round request: the session already contains the
+	// first user turn, an assistant tool_call, and the tool result.
+	data := &RequestData{
+		Model: "claude-3-5-sonnet-20241022",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "What's the weather in Beijing?"},
+			{
+				Role:    "assistant",
+				Content: "Let me check the weather.",
+				ToolCalls: []ToolCall{
+					{
+						ID:        "toolu_01",
+						Name:      "get_weather",
+						Arguments: map[string]any{"location": "Beijing"},
+					},
+				},
+			},
+			{Role: "tool", ToolCallID: "toolu_01", Content: "sunny, 28C"},
+			// Second tool call cycle: consecutive tool results must merge.
+			{
+				Role: "assistant",
+				ToolCalls: []ToolCall{
+					{ID: "toolu_02", Name: "get_time", Arguments: map[string]any{"zone": "UTC"}},
+					{ID: "toolu_03", Name: "get_humidity", Arguments: nil},
+				},
+			},
+			{Role: "tool", ToolCallID: "toolu_02", Content: "12:00 UTC"},
+			{Role: "tool", ToolCallID: "toolu_03", Content: "45%"},
+		},
+		Options: map[string]any{"max_tokens": 100},
+	}
+
+	stream, err := provider.RequestModel(context.Background(), data)
+	if err != nil {
+		t.Fatalf("RequestModel failed: %v", err)
+	}
+	for range stream {
+	}
+
+	rawMsgs, ok := receivedBody["messages"].([]any)
+	if !ok {
+		t.Fatalf("expected messages slice, got %T", receivedBody["messages"])
+	}
+	if len(rawMsgs) != 5 {
+		t.Fatalf("expected 5 messages after merge, got %d", len(rawMsgs))
+	}
+
+	// Message 0: plain user text → string content.
+	m0 := rawMsgs[0].(map[string]any)
+	if m0["role"] != "user" {
+		t.Errorf("m0 role = %v, want user", m0["role"])
+	}
+	if m0["content"] != "What's the weather in Beijing?" {
+		t.Errorf("m0 content = %v", m0["content"])
+	}
+
+	// Message 1: assistant with text + tool_use block.
+	m1 := rawMsgs[1].(map[string]any)
+	if m1["role"] != "assistant" {
+		t.Errorf("m1 role = %v, want assistant", m1["role"])
+	}
+	b1 := m1["content"].([]any)
+	if len(b1) != 2 {
+		t.Fatalf("m1 expected 2 blocks, got %d", len(b1))
+	}
+	tb := b1[0].(map[string]any)
+	if tb["type"] != "text" || tb["text"] != "Let me check the weather." {
+		t.Errorf("m1 text block = %v", tb)
+	}
+	tu := b1[1].(map[string]any)
+	if tu["type"] != "tool_use" || tu["id"] != "toolu_01" || tu["name"] != "get_weather" {
+		t.Errorf("m1 tool_use block = %v", tu)
+	}
+	if in, ok := tu["input"].(map[string]any); !ok || in["location"] != "Beijing" {
+		t.Errorf("m1 tool_use input = %v", tu["input"])
+	}
+
+	// Message 2: single tool_result → role="user" with one tool_result block.
+	m2 := rawMsgs[2].(map[string]any)
+	if m2["role"] != "user" {
+		t.Errorf("m2 role = %v, want user", m2["role"])
+	}
+	b2 := m2["content"].([]any)
+	if len(b2) != 1 {
+		t.Fatalf("m2 expected 1 block, got %d", len(b2))
+	}
+	tr := b2[0].(map[string]any)
+	if tr["type"] != "tool_result" || tr["tool_use_id"] != "toolu_01" || tr["content"] != "sunny, 28C" {
+		t.Errorf("m2 tool_result block = %v", tr)
+	}
+
+	// Message 3: assistant with two tool_use blocks (no text).
+	m3 := rawMsgs[3].(map[string]any)
+	if m3["role"] != "assistant" {
+		t.Errorf("m3 role = %v, want assistant", m3["role"])
+	}
+	b3 := m3["content"].([]any)
+	if len(b3) != 2 {
+		t.Fatalf("m3 expected 2 tool_use blocks, got %d", len(b3))
+	}
+	if b3[0].(map[string]any)["id"] != "toolu_02" {
+		t.Errorf("m3 first tool_use id = %v", b3[0].(map[string]any)["id"])
+	}
+	if b3[1].(map[string]any)["id"] != "toolu_03" {
+		t.Errorf("m3 second tool_use id = %v", b3[1].(map[string]any)["id"])
+	}
+	// nil Arguments must surface as an empty object, not null.
+	if in, ok := b3[1].(map[string]any)["input"].(map[string]any); !ok || len(in) != 0 {
+		t.Errorf("m3 nil-arguments input = %v", b3[1].(map[string]any)["input"])
+	}
+
+	// Message 4: two consecutive tool results merged into ONE user message
+	// with two tool_result blocks, preserving alternating user/assistant roles.
+	m4 := rawMsgs[4].(map[string]any)
+	if m4["role"] != "user" {
+		t.Errorf("m4 role = %v, want user", m4["role"])
+	}
+	b4 := m4["content"].([]any)
+	if len(b4) != 2 {
+		t.Fatalf("m4 expected 2 merged tool_result blocks, got %d", len(b4))
+	}
+	r0 := b4[0].(map[string]any)
+	if r0["type"] != "tool_result" || r0["tool_use_id"] != "toolu_02" || r0["content"] != "12:00 UTC" {
+		t.Errorf("m4 first tool_result = %v", r0)
+	}
+	r1 := b4[1].(map[string]any)
+	if r1["type"] != "tool_result" || r1["tool_use_id"] != "toolu_03" || r1["content"] != "45%" {
+		t.Errorf("m4 second tool_result = %v", r1)
+	}
+}
+
 // Check: 非流式响应（mock server 返回完整 message 后用 stream:true 解析）
 // 此场景模拟 Anthropic 真实流式响应被一次性返回的情况
 func TestAnthropicNonStreamingResponse(t *testing.T) {

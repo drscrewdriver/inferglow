@@ -21,14 +21,14 @@
 package model
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
+
+	"github.com/inferglow/model/internal/ssestream"
 )
 
 // AnthropicCompatibleProvider Anthropic Claude Messages API 兼容 Provider 实现
@@ -58,10 +58,7 @@ func (p *AnthropicCompatibleProvider) CacheCapability() CacheCapability {
 // effectiveHTTPClient returns the configured HTTPClient or a sane fallback
 // with a 5-minute timeout (long enough for streaming responses).
 func (p *AnthropicCompatibleProvider) effectiveHTTPClient() *http.Client {
-	if p.HTTPClient != nil {
-		return p.HTTPClient
-	}
-	return &http.Client{Timeout: 5 * time.Minute}
+	return ssestream.EffectiveHTTPClient(p.HTTPClient)
 }
 
 // anthropicBlockState tracks the current content block during SSE parsing.
@@ -164,6 +161,78 @@ func (p *AnthropicCompatibleProvider) GenerateRequestData(ctx context.Context, r
 	}, nil
 }
 
+// anthropicMessages converts provider-agnostic ChatMessages (OpenAI-style
+// tool_calls / tool_call_id) into Anthropic's content-block message format.
+//
+// P0-1: without this adaptation layer, multi-turn native tool calls fail
+// because the Anthropic API rejects OpenAI-style tool_calls/tool_call_id
+// fields on the second round.
+//
+// Mapping:
+//   - assistant + ToolCalls → content array with optional text block followed
+//     by {"type":"tool_use","id":...,"name":...,"input":{...}} blocks
+//   - role="tool" + tool_call_id → role="user" with content array containing
+//     {"type":"tool_result","tool_use_id":...,"content":"..."} blocks.
+//     Consecutive tool messages are merged into a single user message so the
+//     result preserves the strictly alternating user/assistant roles that the
+//     Anthropic API requires.
+//   - plain text messages keep string content (Anthropic accepts both forms).
+func anthropicMessages(msgs []ChatMessage) []map[string]any {
+	result := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		switch {
+		case m.Role == "tool":
+			block := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Content,
+			}
+			// Merge into the previous message when it is a user message
+			// already carrying tool_result blocks, to keep alternation.
+			if len(result) > 0 {
+				prev := result[len(result)-1]
+				if prev["role"] == "user" {
+					if blocks, ok := prev["content"].([]map[string]any); ok {
+						prev["content"] = append(blocks, block)
+						continue
+					}
+				}
+			}
+			result = append(result, map[string]any{
+				"role":    "user",
+				"content": []map[string]any{block},
+			})
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			blocks := make([]map[string]any, 0, 1+len(m.ToolCalls))
+			if m.Content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				input := tc.Arguments
+				if input == nil {
+					input = map[string]any{}
+				}
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Name,
+					"input": input,
+				})
+			}
+			result = append(result, map[string]any{
+				"role":    "assistant",
+				"content": blocks,
+			})
+		default:
+			result = append(result, map[string]any{
+				"role":    m.Role,
+				"content": m.Content,
+			})
+		}
+	}
+	return result
+}
+
 // RequestModel 发送 HTTP POST 请求到 {BaseURL}/v1/messages，使用 SSE 流式
 func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *RequestData) (<-chan *StreamChunk, error) {
 	if data == nil {
@@ -182,10 +251,11 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 	// TrimRight(baseURL,"/") + "/v1/messages" behavior.
 	url := ResolveURL(baseURL, "/v1/messages", p.FullURL)
 
-	// 构建请求体
+	// 构建请求体。P0-1: messages 经过 anthropicMessages 转换为 Anthropic
+	// content-block 格式，使多轮 native tool call 可正确往返。
 	reqBody := map[string]any{
 		"model":      data.Model,
-		"messages":   data.Messages,
+		"messages":   anthropicMessages(data.Messages),
 		"stream":     true,
 		"max_tokens": 1024,
 	}
@@ -249,59 +319,23 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	stream := make(chan *StreamChunk, 64)
-	go func() {
-		defer close(stream)
-		defer resp.Body.Close()
+	// SSE goroutine skeleton, emit closure, ctx.Done() polling, and
+	// EOF/error handling are provided by ssestream.RunLines (D7-4 deduplication).
+	// 跟踪当前 content block 状态
+	blocks := make(map[int]*anthropicBlockState)
 
-		// M-CRITICAL-3: use bufio.Reader so we can poll ctx.Done() between reads.
-		// M-MEDIUM-6: 1MB buffer for large SSE lines.
-		reader := bufio.NewReaderSize(resp.Body, 1024*1024)
+	parse := func(line string, emit func(*StreamChunk)) bool {
+		return p.processAnthropicLine(line, blocks, emit)
+	}
 
-		// 跟踪当前 content block 状态
-		blocks := make(map[int]*anthropicBlockState)
-
-		// M-CRITICAL-4: emit selects on ctx.Done() so the goroutine exits
-		// even if the channel buffer is full and the consumer has stopped.
-		emit := func(schunk *StreamChunk) {
-			select {
-			case stream <- schunk:
-			case <-ctx.Done():
-			}
+	errorChunk := func(err error) *StreamChunk {
+		return &StreamChunk{
+			IsDone: true,
+			Meta:   map[string]any{"error": err.Error()},
 		}
+	}
 
-		for {
-			// M-CRITICAL-3: poll context before each read so a cancelled
-			// consumer doesn't leak this goroutine.
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err == io.EOF {
-					if strings.TrimSpace(line) != "" {
-						p.processAnthropicLine(line, blocks, emit)
-					}
-					return
-				}
-				emit(&StreamChunk{
-					IsDone: true,
-					Meta:   map[string]any{"error": err.Error()},
-				})
-				return
-			}
-
-			stop := p.processAnthropicLine(line, blocks, emit)
-			if stop {
-				return
-			}
-		}
-	}()
-
-	return stream, nil
+	return ssestream.RunLines(ctx, resp.Body, parse, errorChunk), nil
 }
 
 // processAnthropicLine parses one SSE line and emits any resulting
@@ -311,13 +345,8 @@ func (p *AnthropicCompatibleProvider) processAnthropicLine(
 	blocks map[int]*anthropicBlockState,
 	emit func(*StreamChunk),
 ) bool {
-	if !strings.HasPrefix(line, "data: ") {
-		return false
-	}
-
-	payload := strings.TrimPrefix(line, "data: ")
-	payload = strings.TrimSpace(payload)
-	if payload == "" {
+	payload, ok := ssestream.ParseDataLine(line)
+	if !ok || payload == "" {
 		return false
 	}
 

@@ -32,7 +32,6 @@ type ModelRequest struct { //nolint:revive
 	ChatHistory  []ChatMessage
 	Info         map[string]any
 	Tools        []ToolDefinition
-	Actions      []ActionResult
 	Examples     []Example
 	Attachment   []Attachment
 	Output       *OutputSchema
@@ -117,22 +116,35 @@ type Attachment struct {
 	Data any
 }
 
-// ActionResult 动作执行结果
-type ActionResult struct {
-	Name    string
-	Success bool
-	Output  any
-	Error   string
-}
-
-// ModelRequester 统一模型请求接口
-type ModelRequester interface { //nolint:revive
+// StreamRequester is the core interface for streaming model requests. It
+// covers provider identity plus the request-building and streaming path used
+// by the agent production code (Engine). Callers that only need to drive a
+// streaming request — such as orchestrator/agent.Engine — can depend on this
+// narrower interface instead of the full ModelRequester.
+type StreamRequester interface {
 	// Name 返回 Provider 名称
 	Name() string
 	// GenerateRequestData 将 ModelRequest 转换为 Provider 特定格式
 	GenerateRequestData(ctx context.Context, req *ModelRequest) (*RequestData, error)
 	// RequestModel 发送请求并返回流式 channel
 	RequestModel(ctx context.Context, data *RequestData) (<-chan *StreamChunk, error)
+}
+
+// ResponseBroadcaster is the interface for multi-consumer response
+// broadcasting. It converts a StreamChunk channel into a ResultEvent channel
+// so that stream events (deltas, usage, reasoning, meta) can be fanned out to
+// multiple consumers. The agent production path (Engine) does not require
+// this capability; it is used by code that needs the richer event stream.
+type ResponseBroadcaster interface {
 	// BroadcastResponse 将 stream 广播为 ResultEvent channel
 	BroadcastResponse(ctx context.Context, stream <-chan *StreamChunk) (<-chan *ResultEvent, error)
+}
+
+// ModelRequester 统一模型请求接口. It is the backward-compatible composition
+// of StreamRequester and ResponseBroadcaster. Existing code that depends on
+// the full provider capability (registry, pool, router, failover) continues
+// to use this interface unchanged; providers implement both halves.
+type ModelRequester interface { //nolint:revive
+	StreamRequester
+	ResponseBroadcaster
 }

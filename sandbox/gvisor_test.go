@@ -270,3 +270,44 @@ func TestGVisorHandleNotRunning(t *testing.T) {
 		t.Fatalf("expected ErrHandleNotRunning, got %v", err)
 	}
 }
+
+// TestGVisorHandleNetworkDisabledForNonePolicy verifies that GVisorHandle
+// inherits the network_access enforcement from its embedded DockerHandle:
+// when the policy level is NetworkAccessNone, the container is created with
+// NetworkDisabled=true. This test does not require runsc on PATH because it
+// constructs the GVisorHandle directly around a DockerHandle backed by a
+// mock client.
+func TestGVisorHandleNetworkDisabledForNonePolicy(t *testing.T) {
+	var seenDisabled *bool
+	mc := &mockDockerClient{
+		createFn: func(config *ContainerConfig, hostConfig *HostConfig, networkingConfig *NetworkSettings, containerConfig *ContainerConfig, opts ...any) (*ContainerCreateResult, error) {
+			d := config.NetworkDisabled
+			seenDisabled = &d
+			if hostConfig.Runtime != "runsc" {
+				t.Errorf("hostConfig.Runtime = %q, want %q", hostConfig.Runtime, "runsc")
+			}
+			return &ContainerCreateResult{ID: "gvisor-net"}, nil
+		},
+		startFn: func(containerID string, opts ...any) error { return nil },
+	}
+	dockerProv := NewDockerProviderWithClient(mc)
+	policy := ExecutionPolicy{NetworkAccess: NetworkPolicy{Level: NetworkAccessNone}}
+	dh, err := dockerProv.CreateHandle(nil, &policy)
+	if err != nil {
+		t.Fatalf("docker CreateHandle returned error: %v", err)
+	}
+	// Wrap as a GVisorHandle (mimicking GVisorProvider.CreateHandle) without
+	// needing runsc on PATH.
+	gvh := &GVisorHandle{DockerHandle: dh.(*DockerHandle)}
+	gvh.DockerHandle.runtime = "runsc"
+
+	if err := gvh.Start(nil); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if seenDisabled == nil {
+		t.Fatal("ContainerCreate was not called")
+	}
+	if !*seenDisabled {
+		t.Errorf("NetworkDisabled = false, want true for network_access=none under gVisor")
+	}
+}

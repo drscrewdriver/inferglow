@@ -153,6 +153,9 @@ func TestManagerSelectSandboxAutoOnlyTrustedLocal(t *testing.T) {
 	m := NewManager()
 	p := &mgrMockProvider{name: "trusted_local", kind: "local", available: true}
 	_ = m.Register(p)
+	// trusted_local provides no isolation; ModeAuto only uses it when the
+	// fallback is explicitly allowed.
+	m.AllowTrustedFallback = true
 	got, err := m.SelectSandbox(ModeAuto)
 	if err != nil {
 		t.Fatalf("SelectSandbox(ModeAuto) failed: %v", err)
@@ -205,6 +208,9 @@ func TestManagerSelectSandboxAutoFallsBackToTrustedLocal(t *testing.T) {
 	_ = m.Register(gvisor)
 	_ = m.Register(docker)
 	_ = m.Register(trusted)
+	// No isolated backend is available; only allow trusted_local via the
+	// explicit fallback switch.
+	m.AllowTrustedFallback = true
 	got, err := m.SelectSandbox(ModeAuto)
 	if err != nil {
 		t.Fatalf("SelectSandbox(ModeAuto) failed: %v", err)
@@ -228,6 +234,38 @@ func TestManagerSelectSandboxAutoNoneAvailable(t *testing.T) {
 	}
 }
 
+// TestManagerSelectSandboxAutoRejectsTrustedFallbackByDefault verifies that
+// ModeAuto does NOT fall back to trusted_local when AllowTrustedFallback is
+// false (the default), even if trusted_local is the only available provider.
+func TestManagerSelectSandboxAutoRejectsTrustedFallbackByDefault(t *testing.T) {
+	m := NewManager()
+	trusted := &mgrMockProvider{name: "trusted_local", kind: "local", available: true}
+	_ = m.Register(trusted)
+	// AllowTrustedFallback defaults to false → trusted_local is excluded
+	// from the auto chain.
+	_, err := m.SelectSandbox(ModeAuto)
+	if !errors.Is(err, ErrNoAvailableSandbox) {
+		t.Fatalf("expected ErrNoAvailableSandbox (no isolated backend), got %v", err)
+	}
+}
+
+// TestManagerSelectSandboxAutoAllowsTrustedFallbackWhenConfigured verifies
+// that setting AllowTrustedFallback=true re-enables the trusted_local
+// fallback in ModeAuto.
+func TestManagerSelectSandboxAutoAllowsTrustedFallbackWhenConfigured(t *testing.T) {
+	m := NewManager()
+	trusted := &mgrMockProvider{name: "trusted_local", kind: "local", available: true}
+	_ = m.Register(trusted)
+	m.AllowTrustedFallback = true
+	got, err := m.SelectSandbox(ModeAuto)
+	if err != nil {
+		t.Fatalf("SelectSandbox(ModeAuto) failed: %v", err)
+	}
+	if got.Name() != "trusted_local" {
+		t.Fatalf("expected trusted_local, got %s", got.Name())
+	}
+}
+
 func TestManagerSelectSandboxAutoSkipsInspectError(t *testing.T) {
 	// Provider whose InspectAvailability returns error should be skipped
 	m := NewManager()
@@ -235,6 +273,9 @@ func TestManagerSelectSandboxAutoSkipsInspectError(t *testing.T) {
 	trusted := &mgrMockProvider{name: "trusted_local", kind: "local", available: true}
 	_ = m.Register(gvisor)
 	_ = m.Register(trusted)
+	// gVisor errors and no other isolated backend is registered; allow the
+	// trusted_local fallback so selection still succeeds.
+	m.AllowTrustedFallback = true
 	got, err := m.SelectSandbox(ModeAuto)
 	if err != nil {
 		t.Fatalf("SelectSandbox(ModeAuto) failed: %v", err)

@@ -2,7 +2,10 @@ module github.com/inferglow/action
 
 go 1.25.0
 
-require github.com/inferglow/sandbox v0.0.0-00010101000000-000000000000
+require (
+	github.com/inferglow/approval v0.0.0
+	github.com/inferglow/sandbox v0.0.0-00010101000000-000000000000
+)
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
@@ -38,3 +41,5 @@ require (
 )
 
 replace github.com/inferglow/sandbox => ../sandbox
+
+replace github.com/inferglow/approval => ../approval
