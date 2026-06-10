@@ -24,13 +24,21 @@ import (
 	"strings"
 )
 
+// TotalContentBytes returns the sum of the byte length of every message's
+// string content in msgs, as computed by ContentToString. It replaces the
+// duplicated `for _, m := range msgs { total += len(ContentToString(m.Content)) }`
+// idiom that appeared in several resize handlers and budget checks.
+func TotalContentBytes(msgs []ChatMessage) int {
+	total := 0
+	for _, m := range msgs {
+		total += len(ContentToString(m.Content))
+	}
+	return total
+}
+
 // DefaultAnalysisHandler checks if the contextWindow total byte size exceeds maxLength.
 func DefaultAnalysisHandler(fullContext []ChatMessage, contextWindow []ChatMessage, maxLength int) bool {
-	totalBytes := 0
-	for _, m := range contextWindow {
-		totalBytes += len(ContentToString(m.Content))
-	}
-	return totalBytes > maxLength
+	return TotalContentBytes(contextWindow) > maxLength
 }
 
 // SimpleCutResizeHandler trims messages from the front of the window until
@@ -42,10 +50,7 @@ func SimpleCutResizeHandler(fullContext []ChatMessage, contextWindow []ChatMessa
 	}
 
 	// Calculate total bytes in contextWindow
-	totalBytes := 0
-	for _, m := range contextWindow {
-		totalBytes += len(ContentToString(m.Content))
-	}
+	totalBytes := TotalContentBytes(contextWindow)
 
 	if totalBytes <= 0 {
 		return contextWindow, nil

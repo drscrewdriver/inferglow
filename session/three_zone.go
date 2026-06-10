@@ -156,6 +156,65 @@ func (s *ThreeZoneSession) SaveJSON(path string) error {
 	return os.WriteFile(path, b, 0644)
 }
 
+// LoadJSON reads a JSON file previously written by SaveJSON and restores
+// all three zones (ImmutablePrefix, AppendOnlyHistory, VolatileScratch)
+// plus the id, maxHistoryBytes, and immutableHash. This is the crash-
+// recovery counterpart to SaveJSON.
+//
+// The immutableToolsJSON field is not serialized by SaveJSON, so it is
+// not restored here; the immutableHash is restored directly from the
+// file instead of being recomputed, preserving cache-identity across a
+// restart. After LoadJSON the immutable prefix is considered set, so a
+// subsequent SetImmutablePrefix will fail (matching the once-only
+// contract of a fresh session).
+func (s *ThreeZoneSession) LoadJSON(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var data struct {
+		ID                string        `json:"id"`
+		ImmutablePrefix   []ChatMessage `json:"immutable_prefix"`
+		AppendOnlyHistory []ChatMessage `json:"append_only_history"`
+		VolatileScratch   []ChatMessage `json:"volatile_scratch"`
+		MaxHistoryBytes   int           `json:"max_history_bytes"`
+		ImmutableHash     string        `json:"immutable_hash"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.id = data.ID
+	s.immutablePrefix = copyMsgs(data.ImmutablePrefix)
+	s.appendOnlyHistory = copyMsgs(data.AppendOnlyHistory)
+	s.volatileScratch = copyMsgs(data.VolatileScratch)
+	s.maxHistoryBytes = data.MaxHistoryBytes
+	s.immutableHash = data.ImmutableHash
+	if s.memo == nil {
+		s.memo = make(map[string]any)
+	}
+	return nil
+}
+
+// copyMsgs returns a shallow copy of msgs (nil-safe). Used by LoadJSON to
+// avoid aliasing the freshly-deserialized slices with caller state.
+func copyMsgs(msgs []ChatMessage) []ChatMessage {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]ChatMessage, len(msgs))
+	copy(out, msgs)
+	return out
+}
+
+// SetMessageMasker implements MaskableStore. ThreeZoneSession does not
+// currently support PII masking — its AddToHistory path has no masker
+// hook — so this is a no-op that preserves the previous type-assertion
+// behavior (where ThreeZoneSession silently ignored the call). Callers
+// that need masking should use Session.
+func (s *ThreeZoneSession) SetMessageMasker(m MessageMasker) {}
+
 // AddToHistory appends a message to Zone 2 (append-only).
 // Triggers resize if total bytes exceed maxHistoryBytes.
 func (s *ThreeZoneSession) AddToHistory(msg ChatMessage) {
@@ -246,11 +305,7 @@ func (s *ThreeZoneSession) runResizeChain() {
 }
 
 func (s *ThreeZoneSession) totalHistoryBytes() int {
-	total := 0
-	for _, m := range s.appendOnlyHistory {
-		total += len(ContentToString(m.Content))
-	}
-	return total
+	return TotalContentBytes(s.appendOnlyHistory)
 }
 
 func (s *ThreeZoneSession) computeImmutableHash() string {

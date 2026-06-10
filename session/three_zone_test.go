@@ -21,6 +21,7 @@
 package session
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -510,5 +511,66 @@ func TestThreeZoneSession_StableMarshalProducesSortedJSON(t *testing.T) {
 	// "a" should appear before "z"
 	if !strings.Contains(s, `"a":2,"z":1`) {
 		t.Errorf("expected sorted keys, got %s", s)
+	}
+}
+
+// TestThreeZoneSession_LoadJSONRoundTrip verifies that SaveJSON followed by
+// LoadJSON restores all three zones (ImmutablePrefix, AppendOnlyHistory,
+// VolatileScratch) plus id, maxHistoryBytes, and immutableHash.
+func TestThreeZoneSession_LoadJSONRoundTrip(t *testing.T) {
+	orig := NewThreeZoneSession("rt-session", 4096)
+	if err := orig.SetImmutablePrefix("system prompt here", []any{
+		map[string]any{"name": "tool_a", "parameters": map[string]any{"type": "object"}},
+	}); err != nil {
+		t.Fatalf("SetImmutablePrefix: %v", err)
+	}
+	orig.AddToHistory(mkMsg("user", "hello"))
+	orig.AddToHistory(mkMsg("assistant", "hi there"))
+	orig.SetVolatileScratch([]ChatMessage{mkMsg("system", "scratch-note")})
+	wantHash := orig.ImmutableHash()
+
+	path := filepath.Join(t.TempDir(), "threezone.json")
+	if err := orig.SaveJSON(path); err != nil {
+		t.Fatalf("SaveJSON: %v", err)
+	}
+
+	// Fresh session with different id/budget — LoadJSON should overwrite both.
+	loaded := NewThreeZoneSession("placeholder", 1)
+	if err := loaded.LoadJSON(path); err != nil {
+		t.Fatalf("LoadJSON: %v", err)
+	}
+
+	// id + maxHistoryBytes restored.
+	if loaded.id != "rt-session" {
+		t.Errorf("id = %q, want %q", loaded.id, "rt-session")
+	}
+	if loaded.maxHistoryBytes != 4096 {
+		t.Errorf("maxHistoryBytes = %d, want 4096", loaded.maxHistoryBytes)
+	}
+	// immutableHash restored directly (not recomputed), preserving cache identity.
+	if loaded.ImmutableHash() != wantHash {
+		t.Errorf("immutableHash = %q, want %q", loaded.ImmutableHash(), wantHash)
+	}
+	// Zone 1 prefix must be restored so a subsequent SetImmutablePrefix fails.
+	if err := loaded.SetImmutablePrefix("x", nil); err == nil {
+		t.Error("SetImmutablePrefix should fail after LoadJSON (prefix already set)")
+	}
+
+	// BuildPrompt = Zone1 + Zone2 + Zone3, all restored.
+	prompt := loaded.BuildPrompt()
+	if len(prompt) != 4 {
+		t.Fatalf("expected 4 messages, got %d: %+v", len(prompt), prompt)
+	}
+	if ContentToString(prompt[0].Content) != "system prompt here" {
+		t.Errorf("prompt[0] = %v, want system prompt", prompt[0])
+	}
+	if ContentToString(prompt[1].Content) != "hello" {
+		t.Errorf("prompt[1] = %v, want hello", prompt[1])
+	}
+	if ContentToString(prompt[2].Content) != "hi there" {
+		t.Errorf("prompt[2] = %v, want hi there", prompt[2])
+	}
+	if ContentToString(prompt[3].Content) != "scratch-note" {
+		t.Errorf("prompt[3] = %v, want scratch-note", prompt[3])
 	}
 }

@@ -87,19 +87,73 @@ type ResizeHandler func(fullContext []ChatMessage, contextWindow []ChatMessage) 
 // apply. Returning an empty string means "do not trigger resize".
 type AnalysisHandler func(full []ChatMessage, window []ChatMessage, memo map[string]any) (string, error)
 
-// SessionBackend is the interface that both Session and ThreeZoneSession
-// implement so that SessionExtension can work with either backend.
-type SessionBackend interface {
+// MessageStore is the capability interface for appending messages to and
+// retrieving the current prompt from a session backend. Both Session and
+// ThreeZoneSession implement it.
+type MessageStore interface {
 	// AddMessage appends a message to the conversation history.
 	AddMessage(role string, content any, name string)
 	// AddMessageWithMeta appends a message carrying extra metadata
 	// (e.g. tool_calls, tool_call_id) to the history.
 	AddMessageWithMeta(role string, content any, name string, meta map[string]any)
-	// PreparePrompt returns the current context window as ChatMessage slice
-	// suitable for consumption by SessionExtension.PreparePrompt.
+	// PreparePrompt returns the current context window as a ChatMessage
+	// slice suitable for consumption by SessionExtension.PreparePrompt.
 	PreparePrompt() []ChatMessage
+}
+
+// SessionPersistor is the capability interface for persisting session
+// state to disk. Both Session and ThreeZoneSession implement SaveJSON.
+//
+// LoadJSON is intentionally not part of this interface because the two
+// backends have incompatible LoadJSON signatures: Session.LoadJSON
+// accepts a path-or-content string, while ThreeZoneSession.LoadJSON
+// accepts only a file path. Callers that need crash recovery should
+// depend on the concrete type or a backend-specific interface.
+type SessionPersistor interface {
 	// SaveJSON persists the session state to a JSON file at path.
 	SaveJSON(path string) error
+}
+
+// ZoneManager is the capability interface for ThreeZone-style context
+// management: Zone 1 (immutable prefix), Zone 2 (append-only history,
+// populated via MessageStore), and Zone 3 (volatile scratch).
+// ThreeZoneSession implements these natively; Session provides no-op
+// stubs so it satisfies SessionBackend. The no-op stubs preserve the
+// previous type-assertion behavior where non-supporting backends
+// silently ignored zone operations.
+type ZoneManager interface {
+	// SetImmutablePrefix sets Zone 1 (system prompt + tool definitions).
+	// Backends that do not support an immutable prefix return nil without
+	// side effect.
+	SetImmutablePrefix(systemPrompt string, tools []any) error
+	// ClearVolatileScratch clears Zone 3 (per-round scratchpad). No-op on
+	// backends without a scratchpad.
+	ClearVolatileScratch()
+	// BuildPrompt returns the full prompt assembled from all zones. On
+	// backends without zones this is equivalent to PreparePrompt.
+	BuildPrompt() []ChatMessage
+}
+
+// MaskableStore is the capability interface for installing a PII/security
+// masker consulted by AddMessage. Session implements this natively;
+// ThreeZoneSession provides a no-op stub so it satisfies SessionBackend,
+// preserving the previous type-assertion behavior where non-supporting
+// backends silently ignored the masker.
+type MaskableStore interface {
+	// SetMessageMasker installs (or clears, when m is nil) the masker.
+	SetMessageMasker(m MessageMasker)
+}
+
+// SessionBackend is the union of the four capability interfaces above.
+// It is the interface that both Session and ThreeZoneSession implement so
+// that SessionExtension can work with either backend without type
+// assertions. Backends that do not natively support a capability provide
+// a no-op stub (see the method docs on each split interface).
+type SessionBackend interface {
+	MessageStore
+	SessionPersistor
+	ZoneManager
+	MaskableStore
 }
 
 // Session holds the conversation state, including the full context history and the active context window.
@@ -267,9 +321,29 @@ func (s *Session) SetMessageMasker(m MessageMasker) {
 // AddMessageWithMeta appends a message with an explicit Meta map.
 // Used by the agent loop to store tool_calls and tool_call_id alongside
 // messages so PreparePrompt can forward them to the model.
+//
+// Like AddMessageChecked, this runs the configured security hook (prompt
+// injection detection) and PII masker before appending. This closes the
+// indirect-injection gap where tool results (role="tool") and MCP output
+// — which flow through AddToolResult → AddMessageWithMeta — previously
+// bypassed detection and masking. When the security hook rejects the
+// message it is silently dropped, consistent with AddMessage's behavior;
+// the signature has no error return for backward compatibility.
 func (s *Session) AddMessageWithMeta(role string, content any, name string, meta map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.securityHook != nil {
+		if err := s.securityHook.BeforeAddMessage(role, content, name); err != nil {
+			// Blocked by the security hook; drop silently to match AddMessage.
+			return
+		}
+	}
+	// Apply PII/security masking to string content after the block check.
+	if s.masker != nil {
+		if str, ok := content.(string); ok {
+			content = s.masker.MaskInput(str)
+		}
+	}
 	msg := ChatMessage{
 		Role:      role,
 		Content:   content,
@@ -358,11 +432,7 @@ func (s *Session) applyResizeLocked() {
 	// 触发条件：字节数 > MaxLength。注意：MaxLength 在此路径下按字节计。
 	// 新部署应优先使用 ThreeZoneSession（maxHistoryBytes 语义明确）。
 	if s.ResizeHandler != nil {
-		totalBytes := 0
-		for _, m := range s.ContextWindow {
-			totalBytes += len(ContentToString(m.Content))
-		}
-		if totalBytes > s.MaxLength {
+		if TotalContentBytes(s.ContextWindow) > s.MaxLength {
 			resized, err := s.ResizeHandler(s.FullContext, s.ContextWindow)
 			if err != nil {
 				log.Printf("session resize handler returned error: %v (falling back to original window)", err)
@@ -416,6 +486,25 @@ func (s *Session) PreparePrompt() []ChatMessage {
 		}
 	}
 	return prompt
+}
+
+// SetImmutablePrefix implements ZoneManager. A plain Session has no
+// immutable-prefix zone, so this is a no-op that returns nil to preserve
+// the previous type-assertion behavior (where Session silently ignored
+// the call). Callers that need real prefix caching should use
+// ThreeZoneSession.
+func (s *Session) SetImmutablePrefix(systemPrompt string, tools []any) error {
+	return nil
+}
+
+// ClearVolatileScratch implements ZoneManager. A plain Session has no
+// volatile-scratch zone, so this is a no-op.
+func (s *Session) ClearVolatileScratch() {}
+
+// BuildPrompt implements ZoneManager. For a plain Session the prompt is
+// just the context window, so this delegates to PreparePrompt.
+func (s *Session) BuildPrompt() []ChatMessage {
+	return s.PreparePrompt()
 }
 
 // GetFullContext returns the full history as a copy
