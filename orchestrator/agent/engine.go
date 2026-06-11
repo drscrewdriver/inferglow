@@ -67,7 +67,7 @@ const toolCallStaleThreshold = 3
 type Engine struct {
 	session   *SessionExtension
 	actionExt *ActionExtension
-	modelReq  model.ModelRequester
+	modelReq  model.StreamRequester
 	auditHook audit.AuditHook
 	loopGuard *LoopGuard
 
@@ -125,7 +125,7 @@ func newTurnLoopAndCancel() (*TurnLoop, *CancelManager) {
 // has a NoOpHook (zero-overhead) and no LoopGuard, matching the pre-audit
 // behavior exactly. A TurnLoop and CancelManager are initialized so the
 // engine is ready to accept cancel requests.
-func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester) *Engine {
+func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.StreamRequester) *Engine {
 	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
 		session:       sess,
@@ -195,7 +195,7 @@ func (e *Engine) synthesiseResponse(ctx context.Context, systemPrompt string) (s
 
 // NewEngineWithAudit creates an Engine that appends decision audit entries
 // via hook. The loopGuard is nil. A nil hook is replaced with NoOpHook.
-func NewEngineWithAudit(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester, hook audit.AuditHook) *Engine {
+func NewEngineWithAudit(sess *SessionExtension, actExt *ActionExtension, mr model.StreamRequester, hook audit.AuditHook) *Engine {
 	if hook == nil {
 		hook = &audit.NoOpHook{}
 	}
@@ -213,7 +213,7 @@ func NewEngineWithAudit(sess *SessionExtension, actExt *ActionExtension, mr mode
 
 // NewEngineWithLoopGuard creates an Engine that consults guard before each
 // LLM call. The audit hook defaults to NoOpHook.
-func NewEngineWithLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester, guard *LoopGuard) *Engine {
+func NewEngineWithLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr model.StreamRequester, guard *LoopGuard) *Engine {
 	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
 		session:       sess,
@@ -229,7 +229,7 @@ func NewEngineWithLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr 
 // NewEngineWithAuditAndLoopGuard creates an Engine with both an AuditHook
 // and a LoopGuard. Either may be nil to disable that feature; a nil hook is
 // replaced with NoOpHook.
-func NewEngineWithAuditAndLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr model.ModelRequester, hook audit.AuditHook, guard *LoopGuard) *Engine {
+func NewEngineWithAuditAndLoopGuard(sess *SessionExtension, actExt *ActionExtension, mr model.StreamRequester, hook audit.AuditHook, guard *LoopGuard) *Engine {
 	if hook == nil {
 		hook = &audit.NoOpHook{}
 	}

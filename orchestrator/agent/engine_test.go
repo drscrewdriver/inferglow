@@ -755,3 +755,72 @@ func TestFormatToolResult_Truncation(t *testing.T) {
 		t.Errorf("error result: got %q", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// P1-21: Engine depends only on model.StreamRequester (not BroadcastResponse)
+// ---------------------------------------------------------------------------
+
+// streamOnlyRequester implements model.StreamRequester and intentionally
+// omits BroadcastResponse. It proves the Engine's production path does not
+// depend on the wider ModelRequester interface.
+type streamOnlyRequester struct {
+	response string
+	calls    int
+}
+
+func (s *streamOnlyRequester) Name() string { return "stream-only" }
+
+func (s *streamOnlyRequester) GenerateRequestData(ctx context.Context, req *model.ModelRequest) (*model.RequestData, error) {
+	return &model.RequestData{Model: req.Model}, nil
+}
+
+func (s *streamOnlyRequester) RequestModel(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+	ch := make(chan *model.StreamChunk, 1)
+	ch <- &model.StreamChunk{Delta: s.response, IsDone: true}
+	close(ch)
+	s.calls++
+	return ch, nil
+}
+
+// Compile-time guarantee that streamOnlyRequester satisfies the narrower
+// StreamRequester interface used by the Engine.
+var _ model.StreamRequester = (*streamOnlyRequester)(nil)
+
+// NOTE: streamOnlyRequester deliberately does NOT implement model.ModelRequester
+// (it lacks BroadcastResponse). Uncommenting the line below would fail to
+// compile, which is exactly the point of the P1-21 interface split:
+//
+// var _ model.ModelRequester = (*streamOnlyRequester)(nil)
+
+// TestEngine_AcceptsStreamOnlyRequester verifies that the Engine can run a
+// full PLAN→EXECUTE turn with a requester that implements only
+// model.StreamRequester (no BroadcastResponse). This is the P1-21 guarantee:
+// the agent production path depends solely on StreamRequester.
+func TestEngine_AcceptsStreamOnlyRequester(t *testing.T) {
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	req := &streamOnlyRequester{
+		response: `{"next_action":"response","final_response":"stream-only ok"}`,
+	}
+
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  req,
+	}
+
+	decision, err := engine.executeLoop(context.Background(), "hi", 3, "")
+	if err != nil {
+		t.Fatalf("executeLoop returned error: %v", err)
+	}
+	if decision.NextAction != "response" {
+		t.Errorf("Expected NextAction %q, got %q", "response", decision.NextAction)
+	}
+	if decision.FinalResponse != "stream-only ok" {
+		t.Errorf("FinalResponse = %q, want %q", decision.FinalResponse, "stream-only ok")
+	}
+	if req.calls != 1 {
+		t.Errorf("expected exactly 1 RequestModel call, got %d", req.calls)
+	}
+}

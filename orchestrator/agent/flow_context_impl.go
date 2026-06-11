@@ -43,7 +43,7 @@ import (
 type flowContextImpl struct {
 	session   *SessionExtension
 	actionExt *ActionExtension
-	modelReq  model.ModelRequester
+	modelReq  model.StreamRequester
 	auditHook audit.AuditHook
 	values    sync.Map
 	// tracer 是可选的 OpenTelemetry tracer。nil 时 StartSpan 返回 no-op span。

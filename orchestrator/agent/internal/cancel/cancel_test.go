@@ -18,12 +18,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package agent
+package cancel
 
 import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/inferglow/orchestrator/agent/internal/turnloop"
 )
 
 // TestCancelMode_BitwiseOR verifies that CancelAfterChatModel |
@@ -103,7 +105,7 @@ func TestCancelHandle_Wait(t *testing.T) {
 // TestCancelManager_ImmediateCancel verifies that Cancel(CancelImmediate)
 // registers a pending request that fires at the immediate safe-point.
 func TestCancelManager_ImmediateCancel(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	tl.EnterPlanning() // allow Preempt to succeed
 	m := NewCancelManager(tl)
 
@@ -134,7 +136,7 @@ func TestCancelManager_ImmediateCancel(t *testing.T) {
 // request fires at the after-chat-model safe-point but not at the
 // after-tool-calls safe-point.
 func TestCancelManager_AfterChatModel(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	m.Cancel(CancelAfterChatModel)
@@ -155,7 +157,7 @@ func TestCancelManager_AfterChatModel(t *testing.T) {
 // request fires at the after-tool-calls safe-point but not at the
 // after-chat-model safe-point.
 func TestCancelManager_AfterToolCalls(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	m.Cancel(CancelAfterToolCalls)
@@ -174,7 +176,7 @@ func TestCancelManager_AfterToolCalls(t *testing.T) {
 // TestCancelManager_CompleteCancel verifies that CompleteCancel clears the
 // active request and unblocks the handle's Wait.
 func TestCancelManager_CompleteCancel(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	h := m.Cancel(CancelAfterChatModel)
@@ -207,7 +209,7 @@ func TestCancelManager_CompleteCancel(t *testing.T) {
 // very short timeout escalates to CancelImmediate once the deadline elapses,
 // and that CheckTimeoutEscalation returns true on escalation.
 func TestCancelManager_TimeoutEscalation(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	tl.EnterPlanning() // so Preempt succeeds during escalation
 	m := NewCancelManager(tl)
 
@@ -261,7 +263,7 @@ func TestCancelManager_TimeoutEscalation(t *testing.T) {
 // TestCancelManager_Recursive verifies that WithRecursive sets the recursive
 // flag on the active cancel request.
 func TestCancelManager_Recursive(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	m.Cancel(CancelImmediate, WithRecursive())
@@ -281,7 +283,7 @@ func TestCancelManager_Recursive(t *testing.T) {
 // TestCancelManager_RecursiveDefault verifies that the recursive flag defaults
 // to false when WithRecursive is not supplied.
 func TestCancelManager_RecursiveDefault(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	m.Cancel(CancelImmediate)
@@ -327,7 +329,7 @@ func TestCancelOptions(t *testing.T) {
 // TestCancelManager_NoTimeoutNoEscalation verifies that a safe-point cancel
 // without a timeout never escalates.
 func TestCancelManager_NoTimeoutNoEscalation(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	m.Cancel(CancelAfterChatModel)
@@ -347,7 +349,7 @@ func TestCancelManager_NoTimeoutNoEscalation(t *testing.T) {
 // TestCancelManager_Supersede verifies that a second Cancel call supersedes
 // the first, unblocking the first handle's Wait with a nil outcome.
 func TestCancelManager_Supersede(t *testing.T) {
-	tl := NewTurnLoop()
+	tl := turnloop.NewTurnLoop()
 	m := NewCancelManager(tl)
 
 	h1 := m.Cancel(CancelAfterChatModel)
