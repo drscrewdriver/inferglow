@@ -493,3 +493,67 @@ func TestNewSiliconFlowProviderFromConfig(t *testing.T) {
 		}
 	})
 }
+
+// === OpenRouter（聚合平台）===
+func TestNewOpenRouterProviderFromConfig(t *testing.T) {
+	t.Run("default_config", func(t *testing.T) {
+		cp := &StaticConfigProvider{Values: map[string]any{
+			"openrouter": map[string]any{
+				"api_key": "sk-or-test",
+			},
+		}}
+		p, err := NewOpenRouterProviderFromConfig(cp)
+		if err != nil {
+			t.Fatalf("NewOpenRouterProviderFromConfig failed: %v", err)
+		}
+		if p.BaseURL != "https://openrouter.ai/api/v1" {
+			t.Errorf("BaseURL = %q, want https://openrouter.ai/api/v1", p.BaseURL)
+		}
+		if p.Model != "openai/gpt-4o" {
+			t.Errorf("Model = %q, want openai/gpt-4o", p.Model)
+		}
+		if p.Name() != "openrouter" {
+			t.Errorf("Name() = %q, want openrouter", p.Name())
+		}
+		if p.APIKey != "sk-or-test" {
+			t.Errorf("APIKey = %q, want sk-or-test", p.APIKey)
+		}
+		if p.ProviderName != "openrouter" {
+			t.Errorf("ProviderName = %q, want openrouter", p.ProviderName)
+		}
+	})
+
+	t.Run("override_config", func(t *testing.T) {
+		cp := &StaticConfigProvider{Values: map[string]any{
+			"openrouter": map[string]any{
+				"api_key":  "sk-or-test",
+				"base_url": "https://custom.example.com/v1",
+				"model":    "anthropic/claude-3.5-sonnet",
+			},
+		}}
+		p, err := NewOpenRouterProviderFromConfig(cp)
+		if err != nil {
+			t.Fatalf("NewOpenRouterProviderFromConfig failed: %v", err)
+		}
+		if p.BaseURL != "https://custom.example.com/v1" {
+			t.Errorf("BaseURL = %q, want https://custom.example.com/v1", p.BaseURL)
+		}
+		if p.Model != "anthropic/claude-3.5-sonnet" {
+			t.Errorf("Model = %q, want anthropic/claude-3.5-sonnet", p.Model)
+		}
+	})
+
+	t.Run("missing_api_key", func(t *testing.T) {
+		cp := &StaticConfigProvider{Values: map[string]any{}}
+		_, err := NewOpenRouterProviderFromConfig(cp)
+		if err == nil {
+			t.Fatal("expected error for missing api_key")
+		}
+		if !errors.Is(err, ErrMissingRequiredConfig) {
+			t.Errorf("expected ErrMissingRequiredConfig, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "openrouter") {
+			t.Errorf("error should contain prefix 'openrouter', got %v", err)
+		}
+	})
+}

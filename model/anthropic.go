@@ -204,6 +204,14 @@ func anthropicMessages(msgs []ChatMessage) []map[string]any {
 			})
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
 			blocks := make([]map[string]any, 0, 1+len(m.ToolCalls))
+			// G1-02: convert reasoning_content to thinking block for
+			// Anthropic-compatible endpoints (Kimi/DeepSeek/MiMo Anthropic).
+			if m.ReasoningContent != "" {
+				blocks = append(blocks, map[string]any{
+					"type":    "thinking",
+					"thinking": m.ReasoningContent,
+				})
+			}
 			if m.Content != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
@@ -218,6 +226,19 @@ func anthropicMessages(msgs []ChatMessage) []map[string]any {
 					"name":  tc.Name,
 					"input": input,
 				})
+			}
+			result = append(result, map[string]any{
+				"role":    "assistant",
+				"content": blocks,
+			})
+		case m.Role == "assistant" && m.ReasoningContent != "":
+			// G1-02: assistant message with reasoning but no tool calls.
+			// Convert to thinking block + text block for Anthropic endpoints.
+			blocks := []map[string]any{
+				{"type": "thinking", "thinking": m.ReasoningContent},
+			}
+			if m.Content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
 			result = append(result, map[string]any{
 				"role":    "assistant",

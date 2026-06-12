@@ -209,6 +209,7 @@ func TestToStreamChunkEmptyChoices(t *testing.T) {
 				Content          *string    `json:"content,omitempty"`
 				Reasoning        *string    `json:"reasoning,omitempty"`
 				ReasoningContent *string    `json:"reasoning_content,omitempty"`
+				ReasoningDetails *string    `json:"reasoning_details,omitempty"`
 				ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
@@ -232,6 +233,7 @@ func TestToolCallEmptyArguments(t *testing.T) {
 				Content          *string    `json:"content,omitempty"`
 				Reasoning        *string    `json:"reasoning,omitempty"`
 				ReasoningContent *string    `json:"reasoning_content,omitempty"`
+				ReasoningDetails *string    `json:"reasoning_details,omitempty"`
 				ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
@@ -242,6 +244,7 @@ func TestToolCallEmptyArguments(t *testing.T) {
 					Content          *string    `json:"content,omitempty"`
 					Reasoning        *string    `json:"reasoning,omitempty"`
 					ReasoningContent *string    `json:"reasoning_content,omitempty"`
+					ReasoningDetails *string    `json:"reasoning_details,omitempty"`
 					ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 				}{
 					ToolCalls: []toolCall{

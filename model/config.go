@@ -336,6 +336,15 @@ var DEFAULT_SETTINGS = map[string]map[string]any{
 		"temperature": 0.7,
 		"max_tokens":  4096,
 	},
+	// === OpenRouter（聚合平台）===
+	// 一个 Key 可调用多个模型（OpenAI/Anthropic/开源模型等）
+	// OpenRouter 使用 reasoning_details 字段返回推理信息（G1-02 扩展）。
+	"openrouter": {
+		"model":       "openai/gpt-4o",
+		"base_url":    "https://openrouter.ai/api/v1",
+		"temperature": 0.7,
+		"max_tokens":  4096,
+	},
 }
 
 // LoadProviderConfig 从 ConfigProvider 加载 Provider 配置

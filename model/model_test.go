@@ -215,3 +215,47 @@ func TestAllTypesJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestChatMessage_ReasoningContent_Serialization verifies that the
+// ReasoningContent field (G1-02) round-trips through JSON and that
+// omitempty suppresses the field when empty.
+func TestChatMessage_ReasoningContent_Serialization(t *testing.T) {
+	// 1. With reasoning_content: field must appear in JSON.
+	msg := ChatMessage{
+		Role:               "assistant",
+		Content:            "最终回答",
+		ReasoningContent: "让我逐步分析这个问题...",
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if rc, ok := raw["reasoning_content"].(string); !ok || rc != "让我逐步分析这个问题..." {
+		t.Errorf("reasoning_content missing or wrong: got %v", raw["reasoning_content"])
+	}
+
+	// 2. Round-trip: deserialize back to ChatMessage.
+	var decoded ChatMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("round-trip unmarshal failed: %v", err)
+	}
+	if decoded.ReasoningContent != msg.ReasoningContent {
+		t.Errorf("round-trip mismatch: got %q, want %q", decoded.ReasoningContent, msg.ReasoningContent)
+	}
+
+	// 3. Without reasoning_content: field must be omitted (omitempty).
+	msgNoReasoning := ChatMessage{
+		Role:    "assistant",
+		Content: "回答",
+	}
+	data2, _ := json.Marshal(msgNoReasoning)
+	var raw2 map[string]any
+	json.Unmarshal(data2, &raw2)
+	if _, exists := raw2["reasoning_content"]; exists {
+		t.Error("reasoning_content should be omitted when empty")
+	}
+}

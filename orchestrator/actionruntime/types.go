@@ -39,6 +39,12 @@ type Decision struct {
 	NextAction    string       `json:"next_action"` // "execute" or "response"
 	ActionCalls   []ActionCall `json:"action_calls,omitempty"`
 	FinalResponse string       `json:"final_response,omitempty"`
+	// Reasoning carries the model's reasoning content for the current round
+	// (G1-02). It is populated by the engine from StreamChunk.Reasoning and
+	// forwarded to the session so the next round's ChatHistory includes
+	// reasoning_content in the assistant message — required by DeepSeek, MiMo
+	// and other providers that mandate reasoning passback in multi-turn calls.
+	Reasoning string `json:"-"`
 }
 
 // ToolDefinitionBuilder converts an action.Action to a model.ToolDefinition.

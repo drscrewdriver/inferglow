@@ -316,6 +316,19 @@ type openAIToolState struct {
 	Args strings.Builder
 }
 
+// fixEmptyReasoningContent returns a copy of msgs where assistant messages
+// with empty ReasoningContent have it replaced with " " (single space).
+// This works around a DeepSeek V4 behavior where empty string
+// reasoning_content in multi-turn requests triggers a 400 error.
+// Following Hermes practice: send " " instead of "".
+// NOTE: This is intentionally a no-op. The actual empty→space fix is applied
+// at the session layer (PreparePrompt) where Meta context is available to
+// distinguish "reasoning was empty" from "no reasoning field". This function
+// is retained as a hook for provider-specific fixes if needed.
+func fixEmptyReasoningContent(msgs []ChatMessage) []ChatMessage {
+	return msgs
+}
+
 // RequestModel 发送 HTTP POST 请求，支持 SSE 流式
 func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *RequestData) (<-chan *StreamChunk, error) {
 	if data == nil {
@@ -339,9 +352,13 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 	url := ResolveURL(baseURL, "/chat/completions", p.FullURL)
 
 	// 构建请求体
+	// G1-02: fix empty reasoning_content for providers that reject it (DeepSeek V4).
+	// When an assistant message has reasoning_content set to "" (empty string),
+	// some providers return 400. Replace with " " (space) following Hermes practice.
+	msgs := fixEmptyReasoningContent(data.Messages)
 	reqBody := map[string]any{
 		"model":    data.Model,
-		"messages": data.Messages,
+		"messages": msgs,
 		"stream":   true,
 	}
 	if data.Temperature > 0 {
@@ -839,6 +856,7 @@ type openAIChunk struct {
 			Content          *string    `json:"content,omitempty"`
 			Reasoning        *string    `json:"reasoning,omitempty"`
 			ReasoningContent *string    `json:"reasoning_content,omitempty"`
+			ReasoningDetails *string    `json:"reasoning_details,omitempty"` // OpenRouter
 			ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`

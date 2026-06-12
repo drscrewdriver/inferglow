@@ -39,6 +39,15 @@ type ChatMessage struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"` // for role="tool" messages
+	// ReasoningContent 携带模型的推理内容（G1-02）。
+	// DeepSeek / MiMo / 讯飞星火 / 商汤等 Provider 在多轮对话中要求
+	// 回传前一轮 assistant 消息的 reasoning_content 字段。
+	// omitempty 确保不需要该字段的 Provider 不受影响。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// ReasoningDetails 携带结构化推理详情（G1-02 扩展）。
+	// OpenRouter 等 Provider 使用 reasoning_details 字段返回推理信息。
+	// 该字段为 JSON 原始字符串，序列化时直接嵌入请求体。
+	ReasoningDetails string `json:"reasoning_details,omitempty"`
 }
 
 // ToolDefinition 定义一个 LLM 可调用的工具

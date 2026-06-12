@@ -81,6 +81,9 @@ func newStaticBenchConfig() *staticBenchConfig {
 			"siliconflow.api_key":          "sk-bench",
 			"siliconflow.base_url":         "https://api.siliconflow.cn/v1",
 			"siliconflow.model":            "Qwen/Qwen2.5-72B-Instruct",
+			"openrouter.api_key":           "sk-bench",
+			"openrouter.base_url":          "https://openrouter.ai/api/v1",
+			"openrouter.model":             "openai/gpt-4o",
 			"stepfun.api_key":              "sk-bench",
 			"stepfun.base_url":             "https://api.stepfun.com/v1",
 			"stepfun.model":                "step-3.7-flash",
@@ -108,7 +111,7 @@ func BenchmarkLoadProviderConfig(b *testing.B) {
 	cp := newStaticBenchConfig()
 	providers := []string{
 		"openai", "deepseek", "qwen", "glm", "kimi",
-		"mimo", "tencent", "volcengine", "zeroone", "minimax", "siliconflow",
+		"mimo", "tencent", "volcengine", "zeroone", "minimax", "siliconflow", "openrouter",
 	}
 	for _, name := range providers {
 		b.Run(name, func(b *testing.B) {
@@ -141,6 +144,7 @@ func BenchmarkProviderFactoryFromConfig(b *testing.B) {
 		{"zeroone", NewZeroOneProviderFromConfig},
 		{"minimax", NewMiniMaxProviderFromConfig},
 		{"siliconflow", NewSiliconFlowProviderFromConfig},
+		{"openrouter", NewOpenRouterProviderFromConfig},
 	}
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
@@ -225,6 +229,7 @@ func TestBenchConfigSanity(t *testing.T) {
 		{"zeroone", NewZeroOneProviderFromConfig},
 		{"minimax", NewMiniMaxProviderFromConfig},
 		{"siliconflow", NewSiliconFlowProviderFromConfig},
+		{"openrouter", NewOpenRouterProviderFromConfig},
 	}
 	for _, f := range factories {
 		p, err := f.fn(cp)

@@ -398,6 +398,29 @@ func NewSiliconFlowProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvi
 	}, nil
 }
 
+// === OpenRouter（聚合平台）===
+
+// NewOpenRouterProviderFromConfig 构造 OpenRouter Provider。
+// 默认 base_url: https://openrouter.ai/api/v1
+// 聚合平台：一个 Key 可调用多个模型（OpenAI/Anthropic/开源模型等）。
+// OpenRouter 使用 reasoning_details 字段返回推理信息（G1-02 扩展已支持解析）。
+// 标准 OpenAI 兼容协议，切换模型只需覆盖 .model 配置项。
+func NewOpenRouterProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	cfg, err := LoadProviderConfig(cp, "openrouter")
+	if err != nil {
+		return nil, fmt.Errorf("load openrouter provider config: %w", err)
+	}
+	return &OpenAICompatibleProvider{
+		BaseURL:      cfg.BaseURL,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
+		ProviderName: "openrouter",
+	}, nil
+}
+
 // === OpenAI Responses API ===
 
 // NewOpenAIResponsesProviderFromConfig 构造 OpenAIResponsesProvider。
