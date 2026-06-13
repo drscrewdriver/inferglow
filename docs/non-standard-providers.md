@@ -239,6 +239,7 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 | 01.AI | ✅ | - | - | `reasoning` | 需实测 |
 | MiniMax | ✅ | - | - | `reasoning` | 需实测 |
 | SiliconFlow | ✅ | - | - | `reasoning` | 需实测 |
+| **OpenRouter** | ✅ | - | - | **`reasoning_details`** | 否 |
 | **阶跃星辰** | ✅ | **step_plan 路径** | **✅** | `reasoning` | 否 |
 | **百度千帆** | ✅ | **`/v2` 路径** | - | `reasoning` | 否 |
 | **讯飞星火** | ✅ | **`/agent/v1/` 路径** | **✅** | **`reasoning_content`** | 需实测 |
@@ -248,7 +249,7 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 
 ## G1-01 扩展：新增 Provider 配置清单（2026-07-22 更新）
 
-> **G1-01 已全部完成**：20 家 Provider 100% 实现（12 已有 + 8 新增 = 20 家，19 Factory 函数，20 配置项）
+> **G1-01 已全部完成**：21 家 Provider 100% 实现（12 已有 + 9 新增 = 21 家，20 Factory 函数，21 配置项）
 
 ### 已完成全部 Provider 配置清单
 
@@ -274,12 +275,13 @@ HTTP 认证使用 `AK:SK` 拼接格式（如 `AK123:SK456`），本质还是 Bea
 | G1-01 | **01.AI** | `zeroone` | `api.01.ai/v1` | 标准 OpenAI | ✅ |
 | G1-01 | **MiniMax** | `minimax` | `api.minimax.chat/v1` | 标准 OpenAI | ✅ |
 | G1-01 | **SiliconFlow** | `siliconflow` | `api.siliconflow.cn/v1` | 聚合平台 | ✅ |
+| G1-02 | **OpenRouter** | `openrouter` | `openrouter.ai/api/v1` | 聚合平台 + `reasoning_details` | ✅ |
 
 ### 实现进度
 
 ```
-████████████████████  100%  (20/20 家)
-✅ 20 家全部实现: openai/anthropic/ollama/deepseek/qwen/glm/kimi/stepfun/stepfun_anthropic/baidu/spark/sensenova/sensenova_anthropic/mimo/mimo_anthropic/tencent/volcengine/zeroone/minimax/siliconflow
+████████████████████  100%  (21/21 家)
+✅ 21 家全部实现: openai/anthropic/ollama/deepseek/qwen/glm/kimi/stepfun/stepfun_anthropic/baidu/spark/sensenova/sensenova_anthropic/mimo/mimo_anthropic/tencent/volcengine/zeroone/minimax/siliconflow/openrouter
 ```
 
 ---

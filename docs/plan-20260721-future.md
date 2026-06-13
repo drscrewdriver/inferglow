@@ -294,7 +294,7 @@ class ModelProvider:
 
 | 维度 | InferGlow (Go) | Agently (Python) |
 |------|---------------|------------------|
-| 供应商数 | **19 个 Factory 函数，覆盖 20 家 Provider** | ~8 家独立 Provider 实现 |
+| 供应商数 | **20 个 Factory 函数，覆盖 21 家 Provider** | ~8 家独立 Provider 实现 |
 | 统一接口 | `ModelRequester` 接口（完善） | `ModelProvider` 接口（完善） |
 | 协议适配 | `OpenAICompatibleProvider` + `AnthropicCompatibleProvider` + `RoleMapping` | 类似 |
 | 配置系统 | `ConfigProvider` + `CompositeConfigProvider` | 类似 |
@@ -306,7 +306,7 @@ class ModelProvider:
 ### InferGlow Provider 架构现状（2026-07-22 更新）
 
 ```
-OpenAICompatibleProvider  ← 16 家 (openai/deepseek/qwen/glm/kimi/stepfun/baidu/spark/sensenova/mimo/tencent/volcengine/zeroone/minimax/siliconflow)
+OpenAICompatibleProvider  ← 17 家 (openai/deepseek/qwen/glm/kimi/stepfun/baidu/spark/sensenova/mimo/tencent/volcengine/zeroone/minimax/siliconflow/openrouter)
     ├── 统一 OpenAI 协议
     ├── RoleMapping (developer→system 自动映射) 对 deepseek/qwen/glm/kimi
     └── ReservedFields 白名单 (防 Options 覆盖)
@@ -319,7 +319,7 @@ OllamaProvider  ← 1 家 (ollama)
     ├── /api/chat JSON-lines
     └── options 子对象嵌套
 
-总计: 20 家 Provider 配置项, 19 个 Factory 函数
+总计: 21 家 Provider 配置项, 20 个 Factory 函数
 ```
 
 ### 扩展建议
@@ -918,19 +918,25 @@ func NewAgentWithBlueprint(ctx context.Context, blueprint []ToolBlueprint, role 
 
 ### G1-01：补齐国内 Provider 配置层
 
-**状态：✅ 已完成（20/20 家 Provider 100% 实现）**
+**状态：✅ 已完成（21/21 家 Provider 100% 实现）**
 
-- `config.go`：**20 个配置项** ✅
-- `provider_factory.go`：**19 个 Factory 函数** ✅
-- 覆盖：openai/anthropic/ollama/deepseek/qwen/glm/kimi/stepfun/stepfun_anthropic/baidu/spark/sensenova/sensenova_anthropic/mimo/mimo_anthropic/tencent/volcengine/zeroone/minimax/siliconflow
+- `config.go`：**21 个配置项** ✅
+- `provider_factory.go`：**20 个 Factory 函数** ✅
+- 覆盖：openai/anthropic/ollama/deepseek/qwen/glm/kimi/stepfun/stepfun_anthropic/baidu/spark/sensenova/sensenova_anthropic/mimo/mimo_anthropic/tencent/volcengine/zeroone/minimax/siliconflow/openrouter
 
 ### G1-02：MiMo `reasoning_content` 字段适配
 
-**状态：❌ 未实现**
+**状态：✅ 已实现（2026-07-27 更新）**
 
-- `openAIChunk.Delta` 结构体中**没有 `ReasoningContent *string` 字段**，仅有 `Reasoning *string`
-- `processOpenAILine` 只读取 `c.Delta.Reasoning`，不读取 `reasoning_content`
-- 影响 Provider：MiMo、讯飞星火（spark）、商汤（sensenova）均使用 `reasoning_content` 字段
+- ✅ `openAIChunk.Delta` 已包含 `ReasoningContent *string` 和 `ReasoningDetails *string` 字段
+- ✅ `processOpenAILine` 同时解析 `reasoning` 和 `reasoning_content`，后者优先级更高
+- ✅ `ChatMessage` 包含 `ReasoningContent` 和 `ReasoningDetails` 字段（`omitempty`）
+- ✅ Session 层存储 reasoning_content 到 Meta，PreparePrompt 提取并回传
+- ✅ Engine 层 stream loop 累积 reasoning 并传入 Decision 和 Session
+- ✅ Anthropic 端点自动将 reasoning_content 转换为 thinking block（Kimi/DeepSeek/MiMo 兼容）
+- ✅ 空值替代：空 reasoning_content 替换为 " "（空格）避免 DeepSeek V4 400 错误
+- ✅ OpenRouter `reasoning_details` 字段解析已支持
+- 覆盖 Provider：MiMo、讯飞星火（spark）、商汤（sensenova）、DeepSeek、OpenRouter
 
 ### G1-03：深度思考参数传递（thinking / reasoning_effort）
 
@@ -965,7 +971,7 @@ func NewAgentWithBlueprint(ctx context.Context, blueprint []ToolBlueprint, role 
 | 任务 | 优先级 | 状态 | 完成度 |
 |------|:------:|------|:------:|
 | G1-01（Provider 配置层） | P1 | ✅ 已完成 | **100%** |
-| G1-02（reasoning_content） | P1 | ❌ 未实现 | **0%** |
+| G1-02（reasoning_content） | P1 | ✅ 已实现 | **100%** |
 | G1-03（思考参数） | P1 | ❌ 未实现 | **0%** |
 | G1-04（thinking tag） | P2 | ❌ 未实现 | **0%** |
 | G1-05（推理预算） | P2 | ❌ 未实现 | **0%** |

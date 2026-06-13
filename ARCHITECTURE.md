@@ -564,3 +564,65 @@ replace github.com/inferglow/sandbox => ../inferglow/sandbox
 2. **Phase 2 增强编排**：多步工具调用、并发执行
 3. **Phase 3 安全门控**：PolicyApproval、沙箱审批
 4. **Phase 4 锦上添花**：MCP、SessionMemory、Blueprint
+
+---
+
+## 八、V2 优化波次（6-Wave Optimization）
+
+> 实施日期：2026-07-28 ~ 2026-07-29
+> 目标：在不改变核心架构的前提下，通过 6 个波次的增量优化提升 InferGlow 的成熟度。
+
+### Wave 1：RateLimitHook 接入 executeLoop
+
+| 文件 | 说明 |
+|------|------|
+| `orchestrator/agent/engine.go` | Engine 新增 `rateLimitHook` 字段，在 executeLoop 的 LLM 调用前触发限流检查 |
+| `orchestrator/agent/engine_ratelimit_test.go` | 限流钩子测试 |
+
+### Wave 2：RunAgentParallel 真并行化
+
+| 文件 | 说明 |
+|------|------|
+| `orchestrator/agent/flow_context_impl.go` | `RunAgentParallel` 从串行改为真并行，`cloneEngineForParallel` 创建独立 Engine（独立 TurnLoop/CancelManager），`runAgentWithEngine` 复用逻辑 |
+| `orchestrator/agent/flow_context_impl_parallel_test.go` | 并行时序测试 + 错误传播测试 |
+
+### Wave 3：Agent Middleware 链
+
+| 文件 | 说明 |
+|------|------|
+| `orchestrator/agent/middleware.go` | `type Middleware func(next AgentHandler) AgentHandler`，支持 Logging/Auth/Recovery 等中间件 |
+| `orchestrator/agent/middleware_test.go` | 日志中间件、Auth 阻断、链式顺序测试 |
+
+### Wave 4：Agent 生命周期 Callbacks
+
+| 文件 | 说明 |
+|------|------|
+| `orchestrator/agent/callbacks.go` | `AgentCallbacks` 6 个生命周期钩子（OnRunStart/End, OnLLMCallStart/End, OnToolCallStart/End） |
+| `orchestrator/agent/callbacks_tracer.go` | `CallbacksTracer` 桥接 AgentCallbacks → OTel span（SpanAgentRun/SpanLLMCall/SpanToolCall） |
+| `orchestrator/agent/callbacks_test.go` | 生命周期顺序、nil 安全、部分回调测试 |
+
+### Wave 5：Memory 接口 + SummaryMemory + TokenBufferMemory
+
+| 文件 | 说明 |
+|------|------|
+| `session/memory.go` | `Memory` 接口（Load/Save/Clear）+ `Summarizer` 接口（避免 session→model 依赖） |
+| `session/memory_summary.go` | `SummaryMemory`：token 阈值触发自动摘要旧消息 |
+| `session/memory_token_buffer.go` | `TokenBufferMemory`：token 预算裁剪历史，支持精确/快速双模式估算 |
+| `session/memory_test.go` | 接口合规测试 |
+| `session/memory_summary_test.go` | 自动摘要、阈值边界、resize handler 集成测试 |
+| `session/memory_token_buffer_test.go` | token 预算裁剪、追加+裁剪、resize handler 测试 |
+
+### Wave 6：Prompt 组件扩展 + executeLoop 局部清理
+
+| 文件 | 说明 |
+|------|------|
+| `components/prompt/few_shot.go` | `FewShotTemplate` 实现 ChatTemplate 接口，system + 示例对 + 用户输入 |
+| `components/prompt/system_template.go` | `SystemTemplate` 条件段 + Go text/template 变量替换 |
+| `components/prompt/few_shot_test.go` | Format、MissingInput、NoExamples、NonStringInput 测试 |
+| `components/prompt/system_template_test.go` | 基本替换、条件段、isTruthy、多条件段组合测试 |
+
+### Bug 修复
+
+| 文件 | 修复 |
+|------|------|
+| `orchestrator/agent/agent.go` | Agent struct 新增 `callbacks *AgentCallbacks` 和 `middlewares []Middleware` 字段，确保 `WithCallbacks`/`WithMiddleware` 传给 `New()` 时不被静默丢弃，`Run()` 中传播到 engine |
