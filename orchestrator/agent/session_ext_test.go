@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/inferglow/action"
+	"github.com/inferglow/model"
 	"github.com/inferglow/session"
 )
 
@@ -126,5 +127,91 @@ func TestSessionExtension_NonFileReadNotDedup(t *testing.T) {
 	// Both should have the original content.
 	if prompt[0].Content != content || prompt[1].Content != content {
 		t.Error("non-file_read results should not be deduplicated")
+	}
+}
+
+// TestSessionExtension_ReasoningContent_ToolCallsRoundTrip verifies that
+// reasoning content stored via AddAssistantToolCalls is extracted back
+// into ChatMessage.ReasoningContent by PreparePrompt (G1-02).
+func TestSessionExtension_ReasoningContent_ToolCallsRoundTrip(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	ext.AddUserMessage("分析这个问题")
+
+	toolCalls := []model.ToolCall{
+		{ID: "tc1", Name: "file_read", Arguments: map[string]any{"path": "/main.go"}},
+	}
+	ext.AddAssistantToolCalls(toolCalls, "让我先看看代码结构...")
+
+	prompt := ext.PreparePrompt()
+	if len(prompt) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(prompt))
+	}
+
+	// The assistant message with tool calls should carry reasoning_content.
+	assistant := prompt[1]
+	if assistant.Role != "assistant" {
+		t.Errorf("Expected role 'assistant', got %q", assistant.Role)
+	}
+	if assistant.ReasoningContent != "让我先看看代码结构..." {
+		t.Errorf("ReasoningContent = %q, want %q", assistant.ReasoningContent, "让我先看看代码结构...")
+	}
+	if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Name != "file_read" {
+		t.Errorf("ToolCalls mismatch: %+v", assistant.ToolCalls)
+	}
+}
+
+// TestSessionExtension_ReasoningContent_EmptyOmitted verifies that when
+// no reasoning is passed, the field stays empty (not stored in Meta).
+func TestSessionExtension_ReasoningContent_EmptyOmitted(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	toolCalls := []model.ToolCall{
+		{ID: "tc1", Name: "bash_executor", Arguments: map[string]any{"cmd": "ls"}},
+	}
+	ext.AddAssistantToolCalls(toolCalls, "") // no reasoning
+
+	prompt := ext.PreparePrompt()
+	if prompt[0].ReasoningContent != "" {
+		t.Errorf("ReasoningContent should be empty, got %q", prompt[0].ReasoningContent)
+	}
+}
+
+// TestSessionExtension_AddAssistantMessageWithReasoning verifies the
+// dedicated helper stores reasoning and PreparePrompt extracts it.
+func TestSessionExtension_AddAssistantMessageWithReasoning(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	ext.AddUserMessage("解释量子计算")
+	ext.AddAssistantMessageWithReasoning("量子计算利用量子比特...", "让我从基础概念开始分析...")
+
+	prompt := ext.PreparePrompt()
+	if len(prompt) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(prompt))
+	}
+	if prompt[1].Content != "量子计算利用量子比特..." {
+		t.Errorf("Content = %q, want %q", prompt[1].Content, "量子计算利用量子比特...")
+	}
+	if prompt[1].ReasoningContent != "让我从基础概念开始分析..." {
+		t.Errorf("ReasoningContent = %q, want %q", prompt[1].ReasoningContent, "让我从基础概念开始分析...")
+	}
+}
+
+// TestSessionExtension_AddAssistantMessageWithReasoning_Fallback verifies
+// that empty reasoning falls back to plain AddAssistantMessage (no Meta).
+func TestSessionExtension_AddAssistantMessageWithReasoning_Fallback(t *testing.T) {
+	ext := NewSessionExtension(session.NewSession("test", 100000))
+
+	ext.AddAssistantMessageWithReasoning("普通回答", "")
+
+	prompt := ext.PreparePrompt()
+	if len(prompt) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(prompt))
+	}
+	if prompt[0].Content != "普通回答" {
+		t.Errorf("Content = %q, want %q", prompt[0].Content, "普通回答")
+	}
+	if prompt[0].ReasoningContent != "" {
+		t.Errorf("ReasoningContent should be empty, got %q", prompt[0].ReasoningContent)
 	}
 }

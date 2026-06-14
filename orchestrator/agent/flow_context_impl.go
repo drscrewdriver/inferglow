@@ -266,20 +266,77 @@ func (fc *flowContextImpl) RunAgent(ctx context.Context, userMessage string, sys
 }
 
 // RunAgentParallel 触发多个子 Agent 循环，全部完成后返回各自结果。
-// 当前实现为顺序降级执行：每个子任务依次调用 RunAgent。
-// Phase 2 升级：改为 goroutine + sync.WaitGroup + 独立 Session，实现真并行。
-// 保留此方法签名，使调用方代码无需在升级时修改。
+// 每个子任务在独立 goroutine 中并行执行，使用 sync.WaitGroup 等待全部完成。
+// 结果切片保持与输入相同的顺序（索引赋值）。每个子任务使用独立的 Engine
+// 副本（共享 session/actionExt/modelReq，但拥有独立的 TurnLoop/CancelManager），
+// 避免并发 TurnLoop 状态冲突。
 func (fc *flowContextImpl) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
 	results := make([]string, len(agents))
+	errs := make([]error, len(agents))
+	var wg sync.WaitGroup
+	wg.Add(len(agents))
+
 	for i, sub := range agents {
-		r, err := fc.RunAgent(ctx, sub.UserMessage, sub.SystemPrompt, &flow.AgentRunOptions{
-			MaxRounds:        sub.MaxRounds,
-			SessionIsolation: true, // 并行场景自动隔离
-		})
+		go func(idx int, task flow.AgentSubTask) {
+			defer wg.Done()
+			// Create a child engine with its own TurnLoop/CancelManager
+			// so parallel sub-agents do not share turn state.
+			childEngine := cloneEngineForParallel(fc.engine)
+			r, err := runAgentWithEngine(childEngine, ctx, task.UserMessage, task.SystemPrompt, &flow.AgentRunOptions{
+				MaxRounds:        task.MaxRounds,
+				SessionIsolation: true,
+			})
+			if err != nil {
+				errs[idx] = fmt.Errorf("parallel agent %q (index %d): %w", task.Label, idx, err)
+				return
+			}
+			results[idx] = r
+		}(i, sub)
+	}
+	wg.Wait()
+
+	// Return the first error encountered, if any.
+	for _, err := range errs {
 		if err != nil {
-			return nil, fmt.Errorf("parallel agent %q (index %d): %w", sub.Label, i, err)
+			return nil, err
 		}
-		results[i] = r
 	}
 	return results, nil
+}
+
+// cloneEngineForParallel creates a shallow copy of the engine with a fresh
+// TurnLoop and CancelManager, so parallel sub-agents do not contend on
+// the same turn state. The session, actionExt, modelReq and other fields
+// are shared (read-only or externally synchronized).
+func cloneEngineForParallel(src *Engine) *Engine {
+	if src == nil {
+		return nil
+	}
+	tl, cm := newTurnLoopAndCancel()
+	return &Engine{
+		session:       src.session,
+		actionExt:     src.actionExt,
+		modelReq:      src.modelReq,
+		auditHook:     src.auditHook,
+		loopGuard:     src.loopGuard,
+		streamTimeout: src.streamTimeout,
+		turnLoop:      tl,
+		cancelManager: cm,
+		outputSchema:  src.outputSchema,
+		tracer:        src.tracer,
+		maxToolCallRounds: src.maxToolCallRounds,
+	}
+}
+
+// runAgentWithEngine runs a single agent loop using the given engine.
+// Used by RunAgentParallel to avoid sharing the flowContextImpl's engine.
+func runAgentWithEngine(engine *Engine, ctx context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
+	if engine == nil {
+		return "", flow.ErrAgentNotConfigured
+	}
+	maxRounds := 10
+	if opts != nil && opts.MaxRounds > 0 {
+		maxRounds = opts.MaxRounds
+	}
+	return engine.RunLoop(ctx, userMessage, maxRounds, systemPrompt)
 }

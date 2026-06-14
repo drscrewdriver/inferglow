@@ -84,6 +84,14 @@ type Engine struct {
 	// Populated lazily by buildToolDefinitions.
 	toolDefsHash string
 
+	// cachedTools stores the last built tool definitions. When the action
+	// registry has not changed (same toolDefsHash), buildToolDefinitions
+	// returns the cached slice instead of rebuilding. nil means no cache.
+	cachedTools []model.ToolDefinition
+	// cachedToolsHash is the hash that was used to populate cachedTools.
+	// When it matches the newly computed hash, the cache is valid.
+	cachedToolsHash string
+
 	// turnLoop tracks the PLAN → EXECUTE phase and supports preemption of
 	// an in-flight turn. Always initialized by the constructors; nil when
 	// an Engine is constructed via a struct literal without fields (e.g.
@@ -112,6 +120,16 @@ type Engine struct {
 	// maxToolCallRounds caps the number of tool-execution rounds per
 	// executeLoop run. Zero means use DefaultMaxToolCallRounds.
 	maxToolCallRounds int
+
+	// rateLimitHook is called before each RequestModel invocation to
+	// enforce rate limiting. nil disables rate limit checks (default).
+	// Propagated from Agent.Run via runConfig.rateLimitHook.
+	rateLimitHook RateLimitHook
+
+	// callbacks provides lifecycle hooks for observability. nil disables
+	// all callback invocations (zero overhead). Propagated from Agent.Run
+	// via runConfig.callbacks.
+	callbacks *AgentCallbacks
 }
 
 // newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
@@ -254,7 +272,19 @@ func (e *Engine) CancelManager() *CancelManager {
 
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
 // or maxRounds is reached.
-func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (*actionruntime.Decision, error) {
+func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (dec *actionruntime.Decision, err error) {
+	// Fire OnRunStart callback.
+	fireOnRunStart(e.callbacks, ctx, userMessage)
+
+	// Fire OnRunEnd callback on exit.
+	defer func() {
+		resp := ""
+		if dec != nil {
+			resp = dec.FinalResponse
+		}
+		fireOnRunEnd(e.callbacks, ctx, resp, err)
+	}()
+
 	// Add user message to session
 	e.session.AddUserMessage(userMessage)
 
@@ -414,6 +444,17 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			req.System += formatSchemaInstruction(req.Output)
 		}
 
+		// Fire OnLLMCallStart callback.
+		fireOnLLMCallStart(e.callbacks, ctx, round)
+
+		// RateLimitHook: check rate limits before calling RequestModel.
+		// nil hook means no rate limiting (zero overhead).
+		if e.rateLimitHook != nil {
+			if rlErr := e.rateLimitHook.Acquire(ctx, "default", 0); rlErr != nil {
+				return nil, fmt.Errorf("rate limit exceeded: %w", rlErr)
+			}
+		}
+
 		// Call LLM
 		data, err := e.modelReq.GenerateRequestData(ctx, req)
 		if err != nil {
@@ -437,9 +478,11 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			return nil, err
 		}
 
-		// Collect response content and native tool calls
+		// Collect response content, reasoning, and native tool calls
 		var content strings.Builder
+		var reasoning strings.Builder // G1-02: accumulate reasoning for passback
 		var nativeToolCalls []model.ToolCall
+		var lastUsage *model.UsageInfo // track provider-reported token usage
 	streamLoop:
 		for {
 			select {
@@ -448,9 +491,17 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					break streamLoop
 				}
 				content.WriteString(chunk.Delta)
+				// G1-02: accumulate reasoning content for DeepSeek/MiMo passback.
+				if chunk.Reasoning != "" {
+					reasoning.WriteString(chunk.Reasoning)
+				}
 				// Collect native tool calls from the stream.
 				if len(chunk.Tools) > 0 {
 					nativeToolCalls = append(nativeToolCalls, chunk.Tools...)
+				}
+				// Track the latest UsageInfo from the stream.
+				if chunk.Usage != nil {
+					lastUsage = chunk.Usage
 				}
 			case <-timeoutCtx.Done():
 				cancelTimeout()
@@ -513,14 +564,23 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			content.WriteString(validatedResp.Content)
 		}
 
-		// Approximate token accumulation
-		totalTokens += len(content.String())
+		// Approximate token accumulation: prefer provider-reported UsageInfo
+		// when available (more accurate), fall back to len-based estimate.
+		if lastUsage != nil && lastUsage.CompletionTokens > 0 {
+			totalTokens += lastUsage.CompletionTokens
+		} else {
+			totalTokens += len(content.String())
+		}
+
+		// Fire OnLLMCallEnd callback.
+		fireOnLLMCallEnd(e.callbacks, ctx, round, len(content.String()))
 
 		// Build decision: prefer native tool calls over custom JSON schema.
 		var decision *actionruntime.Decision
 		if len(nativeToolCalls) > 0 {
 			// Native function calling: model returned tool_calls.
-			e.session.AddAssistantToolCalls(nativeToolCalls)
+			// G1-02: pass reasoning for DeepSeek/MiMo multi-turn passback.
+			e.session.AddAssistantToolCalls(nativeToolCalls, reasoning.String())
 
 			actionCalls := make([]actionruntime.ActionCall, 0, len(nativeToolCalls))
 			for _, tc := range nativeToolCalls {
@@ -532,6 +592,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			decision = &actionruntime.Decision{
 				NextAction:  "execute",
 				ActionCalls: actionCalls,
+				Reasoning:   reasoning.String(),
 			}
 		} else {
 			// No native tool calls — parse the text content as a decision.
@@ -541,7 +602,11 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				decision = &actionruntime.Decision{
 					NextAction:    "response",
 					FinalResponse: content.String(),
+					Reasoning:     reasoning.String(),
 				}
+			} else {
+				// ParseDecision succeeded — still attach reasoning (G1-02).
+				decision.Reasoning = reasoning.String()
 			}
 		}
 
@@ -595,7 +660,22 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// per-action audit entries flow through the same hook as decisions.
 		// With a NoOpHook or nil hook this is zero overhead.
 		dispatcher := actionruntime.NewActionDispatcherWithAudit(e.actionExt.GetRegistry(), e.auditHook)
+
+		// Fire OnToolCallStart callbacks for each action.
+		for _, ac := range decision.ActionCalls {
+			fireOnToolCallStart(e.callbacks, ctx, ac.Name)
+		}
+
 		results := dispatcher.Execute(ctx, decision.ActionCalls)
+
+		// Fire OnToolCallEnd callbacks for each action.
+		for i, ac := range decision.ActionCalls {
+			var toolErr error
+			if i < len(results) && results[i] != nil && !results[i].OK {
+				toolErr = fmt.Errorf("%s", results[i].Error)
+			}
+			fireOnToolCallEnd(e.callbacks, ctx, ac.Name, toolErr)
+		}
 
 		// Add results to session using native tool message format when
 		// native tool calls were used, or legacy system-message format
@@ -727,6 +807,10 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 // so the byte representation is deterministic across calls (critical for
 // prefix cache hits). The SHA-256 of the stable bytes is cached on the
 // Engine as toolDefsHash for cache invalidation detection.
+//
+// When the computed hash matches the previously cached hash, the cached
+// tool definitions are returned directly, avoiding redundant allocation
+// and sorting on every loop iteration.
 func (e *Engine) buildToolDefinitions() []model.ToolDefinition {
 	actions := e.actionExt.ListActions()
 	tools := make([]model.ToolDefinition, 0, len(actions))
@@ -752,7 +836,15 @@ func (e *Engine) buildToolDefinitions() []model.ToolDefinition {
 	// Compute stable hash for cache invalidation detection. The hash is the
 	// SHA-256 of the byte-stable JSON serialization of the tools slice.
 	if stableBytes, err := model.MarshalStable(tools); err == nil {
-		e.toolDefsHash = fmt.Sprintf("%x", sha256.Sum256(stableBytes))
+		newHash := fmt.Sprintf("%x", sha256.Sum256(stableBytes))
+		e.toolDefsHash = newHash
+		// Cache invalidation: if the hash matches the cached version,
+		// return the cached tools to avoid redundant allocation.
+		if newHash == e.cachedToolsHash && e.cachedTools != nil {
+			return e.cachedTools
+		}
+		e.cachedTools = tools
+		e.cachedToolsHash = newHash
 	}
 	return tools
 }

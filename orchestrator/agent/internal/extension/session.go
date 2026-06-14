@@ -99,6 +99,22 @@ func (e *SessionExtension) AddAssistantMessage(content string) {
 	e.persist()
 }
 
+// AddAssistantMessageWithReasoning adds an assistant message to the session
+// history, attaching reasoning content in the Meta map (G1-02). When the
+// next round builds the prompt via PreparePrompt, the reasoning_content is
+// extracted into model.ChatMessage.ReasoningContent so it is serialized
+// into the provider request body — required by DeepSeek, MiMo, etc.
+func (e *SessionExtension) AddAssistantMessageWithReasoning(content, reasoning string) {
+	if reasoning == "" {
+		e.AddAssistantMessage(content)
+		return
+	}
+	e.s.AddMessageWithMeta("assistant", content, "", map[string]any{
+		"reasoning_content": reasoning,
+	})
+	e.persist()
+}
+
 // SetMessageMasker installs (or clears, when m is nil) a PII/security
 // masker on the underlying session. The masker is consulted by
 // Session.AddMessageChecked to redact string content before it is
@@ -134,10 +150,16 @@ func (e *SessionExtension) AddActionResult(actionName string, result *action.Act
 // AddAssistantToolCalls records an assistant message that contains native
 // tool calls. The tool calls are stored in the session message's Meta map
 // under the key "tool_calls" so PreparePrompt can forward them to the model.
-func (e *SessionExtension) AddAssistantToolCalls(toolCalls []model.ToolCall) {
-	e.s.AddMessageWithMeta("assistant", "", "", map[string]any{
+// The reasoning parameter stores the model's reasoning content (G1-02) so
+// it can be passed back in the next round's request body.
+func (e *SessionExtension) AddAssistantToolCalls(toolCalls []model.ToolCall, reasoning string) {
+	meta := map[string]any{
 		"tool_calls": toolCalls,
-	})
+	}
+	if reasoning != "" {
+		meta["reasoning_content"] = reasoning
+	}
+	e.s.AddMessageWithMeta("assistant", "", "", meta)
 	e.persist()
 }
 
@@ -201,6 +223,18 @@ func (e *SessionExtension) PreparePrompt() []model.ChatMessage {
 		if tcid, ok := msg.Meta["tool_call_id"]; ok {
 			if id, ok := tcid.(string); ok {
 				prompt[i].ToolCallID = id
+			}
+		}
+		// Extract reasoning_content from Meta (G1-02: DeepSeek/MiMo passback).
+		// When the stored reasoning_content is empty (e.g. model returned no
+		// reasoning but the field was recorded), substitute " " (space) to
+		// avoid DeepSeek V4 400 errors. Following Hermes practice.
+		if rc, ok := msg.Meta["reasoning_content"]; ok {
+			if s, ok := rc.(string); ok {
+				if s == "" {
+					s = " "
+				}
+				prompt[i].ReasoningContent = s
 			}
 		}
 	}

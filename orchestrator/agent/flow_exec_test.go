@@ -312,7 +312,8 @@ func TestExecuteFlow_RunAgentParallelInStep(t *testing.T) {
 	if callCount.Load() != 2 {
 		t.Errorf("expected 2 model calls (one per subtask), got %d", callCount.Load())
 	}
-	if resp != "result-1,result-2" {
-		t.Errorf("expected %q, got %q", "result-1,result-2", resp)
+	// Parallel execution does not guarantee order, so accept either permutation.
+	if resp != "result-1,result-2" && resp != "result-2,result-1" {
+		t.Errorf("expected %q or %q, got %q", "result-1,result-2", "result-2,result-1", resp)
 	}
 }

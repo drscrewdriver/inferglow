@@ -111,6 +111,18 @@ type Agent struct {
 	// of the LLM response. Set via WithOutputSchema on New; overridden by a
 	// per-call WithOutputSchema on Run. nil disables L4 validation (default).
 	outputSchema *model.OutputSchema
+	// rateLimitHook is the persisted default rate limit hook. Set via
+	// WithRateLimitHook on New; overridden by a per-call WithRateLimitHook
+	// on Run. nil disables rate limiting (default).
+	rateLimitHook RateLimitHook
+	// callbacks is the persisted default lifecycle callbacks. Set via
+	// WithCallbacks on New; overridden by a per-call WithCallbacks on Run.
+	// nil disables callbacks (default).
+	callbacks *AgentCallbacks
+	// middlewares is the persisted ordered list of middleware wrappers.
+	// Set via WithMiddleware on New; overridden by a per-call WithMiddleware
+	// on Run. Empty means the core handler is called directly.
+	middlewares []Middleware
 }
 
 // RunOption configures Agent.Run behavior.
@@ -147,6 +159,11 @@ type runConfig struct {
 	// of the LLM response. Populated from the Agent default and optionally
 	// overridden by a per-call WithOutputSchema. nil disables L4 validation.
 	outputSchema *model.OutputSchema
+	// middlewares is the ordered list of middleware wrappers. Empty means
+	// the core handler is called directly (zero overhead).
+	middlewares []Middleware
+	// callbacks provides lifecycle hooks for observability. nil disables.
+	callbacks *AgentCallbacks
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -255,6 +272,9 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 		tracer:        c.tracer,
 		flow:          c.flow,
 		outputSchema:  c.outputSchema,
+		rateLimitHook: c.rateLimitHook,
+		callbacks:     c.callbacks,
+		middlewares:   c.middlewares,
 	}
 }
 
@@ -278,6 +298,9 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	c.features = a.features
 	c.tracer = a.tracer
 	c.outputSchema = a.outputSchema
+	c.rateLimitHook = a.rateLimitHook
+	c.callbacks = a.callbacks
+	c.middlewares = a.middlewares
 	c.featuresSet = true
 	for _, opt := range opts {
 		opt(c)
@@ -303,6 +326,13 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	// only affects Engine-level methods that don't receive a runConfig.
 	a.engine.tracer = c.tracer
 
+	// Propagate the rate limit hook to the engine so executeLoop can
+	// enforce rate limits before each RequestModel call. nil disables.
+	a.engine.rateLimitHook = c.rateLimitHook
+
+	// Propagate callbacks to the engine for lifecycle observability.
+	a.engine.callbacks = c.callbacks
+
 	// Propagate the PII masker to the session so that AddUserMessage
 	// (called inside executeLoop) redacts input via MaskInput. Only set
 	// when a masker is configured and PIIMasking is enabled; this
@@ -317,61 +347,78 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	if c.flow != nil {
 		effectiveFlow = c.flow
 	}
-	if effectiveFlow != nil {
-		// A1: executeFlow 现在返回 (*flow.Execution, string, error)。
-		// 非 daemon 调用方（Agent.Run）传 nil opts 和零值 RunMeta 以保持向后兼容。
-		// 当 flow 暂停时返回 ("", nil) —— daemon 会通过 ResumeFlow 续跑。
-		exec, resp, err := a.engine.executeFlow(ctx, effectiveFlow, userMessage, c.systemPrompt, c, nil, RunMeta{})
+
+	// Build the core handler: this is the function that middlewares wrap.
+	// When middlewares are configured, the core handler is wrapped by the
+	// chain before invocation. When no middlewares are present, the core
+	// handler is called directly (zero overhead).
+	coreHandler := func(ctx context.Context, userMsg string) (string, error) {
+		if effectiveFlow != nil {
+			// A1: executeFlow 现在返回 (*flow.Execution, string, error)。
+			// 非 daemon 调用方（Agent.Run）传 nil opts 和零值 RunMeta 以保持向后兼容。
+			// 当 flow 暂停时返回 ("", nil) —— daemon 会通过 ResumeFlow 续跑。
+			exec, resp, err := a.engine.executeFlow(ctx, effectiveFlow, userMsg, c.systemPrompt, c, nil, RunMeta{})
+			if err != nil {
+				return "", err
+			}
+			if exec != nil && exec.State.Status == flow.StatusPaused {
+				return "", nil
+			}
+			return resp, nil
+		}
+
+		decision, err := a.engine.executeLoop(ctx, userMsg, c.maxRounds, c.systemPrompt)
 		if err != nil {
 			return "", err
 		}
-		if exec != nil && exec.State.Status == flow.StatusPaused {
-			return "", nil
+
+		if decision.NextAction == "response" {
+			// Output-side security check: scan the LLM's final response for
+			// prompt-injection content before returning it to the caller.
+			// A non-nil error blocks the response (the message is not added
+			// to the session either, so the injected content never persists).
+			// The check runs on the unmasked response so the detector sees
+			// the real text. Skipped when features.PromptInjection is false.
+			if c.features.PromptInjection && c.outputHook != nil {
+				if err := c.outputHook.CheckOutput(decision.FinalResponse); err != nil {
+					return "", err
+				}
+			}
+			response := decision.FinalResponse
+			// PII output masking: redact sensitive data from the final
+			// response before it is stored in the session and returned to
+			// the caller. MaskOutput returns the text unchanged when the
+			// masker's ApplyOn does not include MaskOnOutput. Skipped when
+			// features.PIIMasking is false.
+			if c.features.PIIMasking && c.piiMasker != nil {
+				response = c.piiMasker.MaskOutput(response)
+			}
+			// G1-02: pass reasoning through to the session so the next
+			// multi-turn request includes reasoning_content for DeepSeek/MiMo.
+			a.session.AddAssistantMessageWithReasoning(response, decision.Reasoning)
+			return response, nil
 		}
-		return resp, nil
-	}
 
-	decision, err := a.engine.executeLoop(ctx, userMessage, c.maxRounds, c.systemPrompt)
-	if err != nil {
-		return "", err
-	}
-
-	if decision.NextAction == "response" {
-		// Output-side security check: scan the LLM's final response for
-		// prompt-injection content before returning it to the caller.
-		// A non-nil error blocks the response (the message is not added
-		// to the session either, so the injected content never persists).
-		// The check runs on the unmasked response so the detector sees
-		// the real text. Skipped when features.PromptInjection is false.
-		if c.features.PromptInjection && c.outputHook != nil {
-			if err := c.outputHook.CheckOutput(decision.FinalResponse); err != nil {
-				return "", err
+		// LLM decided to execute but has no final response — attempt synthesis
+		// to produce a summary from the conversation so far.
+		if decision.FinalResponse == "" && decision.NextAction == "execute" {
+			synthResp, synthErr := a.engine.synthesiseResponse(ctx, c.systemPrompt)
+			if synthErr != nil {
+				return "", fmt.Errorf("agent: synthesis call failed: %w", synthErr)
+			}
+			if synthResp != "" {
+				a.session.AddAssistantMessage(synthResp)
+				return synthResp, nil
 			}
 		}
-		response := decision.FinalResponse
-		// PII output masking: redact sensitive data from the final
-		// response before it is stored in the session and returned to
-		// the caller. MaskOutput returns the text unchanged when the
-		// masker's ApplyOn does not include MaskOnOutput. Skipped when
-		// features.PIIMasking is false.
-		if c.features.PIIMasking && c.piiMasker != nil {
-			response = c.piiMasker.MaskOutput(response)
-		}
-		a.session.AddAssistantMessage(response)
-		return response, nil
+		return "", ErrNoFinalResponse
 	}
 
-	// LLM decided to execute but has no final response — attempt synthesis
-	// to produce a summary from the conversation so far.
-	if decision.FinalResponse == "" && decision.NextAction == "execute" {
-		synthResp, synthErr := a.engine.synthesiseResponse(ctx, c.systemPrompt)
-		if synthErr != nil {
-			return "", fmt.Errorf("agent: synthesis call failed: %w", synthErr)
-		}
-		if synthResp != "" {
-			a.session.AddAssistantMessage(synthResp)
-			return synthResp, nil
-		}
+	// Apply middleware chain when middlewares are configured.
+	var handler AgentHandler = coreHandler
+	if len(c.middlewares) > 0 {
+		handler = chainMiddleware(c.middlewares)(coreHandler)
 	}
-	return "", ErrNoFinalResponse
+
+	return handler(ctx, userMessage)
 }
