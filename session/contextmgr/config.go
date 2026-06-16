@@ -50,6 +50,21 @@ type Config struct {
 
 	// HotFacts configuration.
 	HotFacts HotFactsConfig `json:"hot_facts"`
+
+	// SweetSpotTokens is the sweet-spot threshold (token count).
+	// When total prompt tokens are below this value, per-step decay
+	// compression is suppressed (passthrough mode) to maximise prefix
+	// cache hit rate. 0 or negative = always compress (current behaviour).
+	// Recommended: 256000 for 1M context window models.
+	SweetSpotTokens int `json:"sweet_spot_tokens"`
+
+	// WarmupRatio triggers async pre-compression when total tokens
+	// exceed WarmupRatio × SweetSpotTokens. Default: 0.8.
+	WarmupRatio float64 `json:"warmup_ratio"`
+
+	// ToleranceDecayRate is the per-step decay rate for sweet-spot
+	// tolerance after a high-reference burst. Default: 0.98.
+	ToleranceDecayRate float64 `json:"tolerance_decay_rate"`
 }
 
 // ThresholdConfig holds compression level thresholds.
@@ -155,5 +170,8 @@ func DefaultConfig() Config {
 			MinRefCount: 3,
 			MinStrength: 1.3,
 		},
+		SweetSpotTokens:    0, // disabled by default
+		WarmupRatio:        0.8,
+		ToleranceDecayRate: 0.98,
 	}
 }

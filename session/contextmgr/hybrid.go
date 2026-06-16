@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // HybridManager implements ModeHybrid with full L0-L4 compression.
@@ -40,15 +41,53 @@ type HybridManager struct {
 	headBufferVer string
 	taskGroupID   int32
 	idleCount     int32
+
+	// --- Phase 0: sweet-spot passthrough ---
+	sweetSpotTokens   int     // effective value (may be adjusted by tolerance)
+	sweetSpotOriginal int     // original config value (immutable after init)
+	sweetSpotTolerance float64 // current multiplier (1.0 = original)
+	toleranceMu       sync.Mutex
+
+	// sliding window for citation tracking
+	recentRefCounts []int
+	recentRefIdx    int
+
+	// --- Phase 0: warmup pre-compression ---
+	warmupPending atomic.Bool
+
+	// --- Phase 0: Zone 0.5 constitutional entries ---
+	constitutionalEntries []string
+	constitutionalMu      sync.RWMutex
+
+	// --- Phase 0: head buffer archive ---
+	archivedHeads []ArchivedHead
+}
+
+// ArchivedHead is a previous head buffer kept for audit/rollback.
+type ArchivedHead struct {
+	Content    []RenderedBlock
+	Version    string
+	ArchivedAt time.Time
 }
 
 // NewHybridManager creates a hybrid context manager.
 func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
-	return &HybridManager{
-		cfg:           cfg,
-		store:         store,
-		headBufferVer: "h_v1",
-	}, nil
+	h := &HybridManager{
+		cfg:                cfg,
+		store:              store,
+		headBufferVer:      "h_v1",
+		sweetSpotTokens:    cfg.SweetSpotTokens,
+		sweetSpotOriginal:  cfg.SweetSpotTokens,
+		sweetSpotTolerance: 1.0,
+		recentRefCounts:    make([]int, 10), // sliding window of 10
+	}
+	if cfg.WarmupRatio <= 0 {
+		h.cfg.WarmupRatio = 0.8
+	}
+	if cfg.ToleranceDecayRate <= 0 {
+		h.cfg.ToleranceDecayRate = 0.98
+	}
+	return h, nil
 }
 
 func (h *HybridManager) Mode() Mode { return ModeHybrid }
@@ -87,11 +126,28 @@ func (h *HybridManager) Ingest(step StepRecord) error {
 	atomic.StoreInt32(&h.idleCount, 0)
 
 	// Per-step decay check (layer 1 of 5)
-	return h.perStepDecay(sid)
+	if err := h.perStepDecay(sid); err != nil {
+		return err
+	}
+
+	// Warmup pre-compression: async pre-compress old steps when approaching sweet spot
+	h.maybeWarmup()
+
+	// Decay tolerance back toward 1.0
+	h.decayTolerance()
+
+	return nil
 }
 
 // perStepDecay checks if the new step triggers compression for older steps.
+// When sweet-spot is enabled and total tokens are below the threshold,
+// decay is suppressed to maximise prefix cache hit rate.
 func (h *HybridManager) perStepDecay(currentStep int) error {
+	// Sweet-spot passthrough: skip decay if below threshold
+	if h.sweetSpotTokens > 0 && h.estimateTotalTokens() < h.sweetSpotTokens {
+		return nil
+	}
+
 	ids, err := h.store.AllActiveStepIDs()
 	if err != nil {
 		return err
@@ -158,6 +214,22 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 	defer h.mu.RUnlock()
 
 	var blocks []RenderedBlock
+
+	// Zone 0.5: constitutional entries (dynamic, before head buffer)
+	h.constitutionalMu.RLock()
+	if len(h.constitutionalEntries) > 0 {
+		content := "<constitutional>\n"
+		for _, e := range h.constitutionalEntries {
+			content += "- " + e + "\n"
+		}
+		content += "</constitutional>"
+		blocks = append(blocks, RenderedBlock{
+			StepID:  -3, // constitutional pseudo-step
+			Level:   0,
+			Content: content,
+		})
+	}
+	h.constitutionalMu.RUnlock()
 
 	// Zone 1: head_buffer (never compressed)
 	blocks = append(blocks, h.headBuffer...)
@@ -538,6 +610,74 @@ func (h *HybridManager) Stats() ContextStats {
 	}
 }
 
+// estimateTotalTokens returns the approximate total token count across
+// all active steps. Uses the sum of TokenCount from the store.
+func (h *HybridManager) estimateTotalTokens() int {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return 0
+	}
+	total := 0
+	for _, id := range ids {
+		step, err := h.store.GetStep(id)
+		if err != nil {
+			continue
+		}
+		total += step.TokenCount
+	}
+	return total
+}
+
+// maybeWarmup triggers async pre-compression when total tokens
+// approach the sweet-spot threshold.
+func (h *HybridManager) maybeWarmup() {
+	if h.sweetSpotTokens <= 0 {
+		return
+	}
+	if h.warmupPending.Load() {
+		return
+	}
+	ratio := float64(h.estimateTotalTokens()) / float64(h.sweetSpotTokens)
+	if ratio < h.cfg.WarmupRatio {
+		return
+	}
+	h.warmupPending.Store(true)
+	go h.warmupCompress()
+}
+
+// warmupCompress pre-compresses old steps (outside the tail zone) to L1.
+func (h *HybridManager) warmupCompress() {
+	defer h.warmupPending.Store(false)
+
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil || len(ids) <= h.cfg.TailKeepSteps {
+		return
+	}
+	tailStart := len(ids) - h.cfg.TailKeepSteps
+	for _, id := range ids[:tailStart] {
+		ref, err := h.store.GetRef(id)
+		if err != nil || ref.Level >= 1 {
+			continue
+		}
+		ref.Level = 1
+		_ = h.store.UpsertRef(*ref)
+	}
+}
+
+// decayTolerance gradually reduces sweet-spot tolerance back to 1.0.
+func (h *HybridManager) decayTolerance() {
+	h.toleranceMu.Lock()
+	defer h.toleranceMu.Unlock()
+
+	if h.sweetSpotTolerance > 1.05 {
+		h.sweetSpotTolerance *= h.cfg.ToleranceDecayRate
+		h.sweetSpotTokens = int(float64(h.sweetSpotOriginal) * h.sweetSpotTolerance)
+	} else if h.sweetSpotTolerance > 1.0 {
+		h.sweetSpotTolerance = 1.0
+		h.sweetSpotTokens = h.sweetSpotOriginal
+	}
+}
+
 // Close releases resources.
 func (h *HybridManager) Close() error {
 	return nil
@@ -545,7 +685,7 @@ func (h *HybridManager) Close() error {
 
 // --- Citation processing (§4.7.3) ---
 
-var refCiteRe = regexp.MustCompile(`\u00A7(\d+)`)
+var refCiteRe = regexp.MustCompile(`§(\d+)`)
 
 // ProcessCitations parses §N references from LLM output and updates refs.
 func (h *HybridManager) ProcessCitations(output string) {
