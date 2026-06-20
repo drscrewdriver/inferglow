@@ -29,46 +29,23 @@ import (
 	"sync/atomic"
 )
 
-// JSON-RPC 2.0 protocol constants and error codes.
+// Protocol constants used by this client.
 const (
-	jsonRPCVersion  = "2.0"
-	protocolVersion = "2024-11-05"
-	clientName      = "inferglow"
-	clientVersion   = "0.1.0"
-	errCodeInternal = -32603
+	jsonRPCVersion  = JSONRPCVersion
+	protocolVersion = ProtocolVersion
+	clientName      = ClientName
+	clientVersion   = ClientVersion
+	errcodeInternal  = ErrCodeInternal
 )
 
-// jsonRPCRequest is the wire shape of a JSON-RPC 2.0 request or
-// notification. Requests carry an ID; notifications omit it (the
-// encoder leaves ID at the zero value and the omitempty tag drops it).
-type jsonRPCRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id,omitempty"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
+// jsonRPCRequest is an alias for the exported JSONRPCRequest type.
+type jsonRPCRequest = JSONRPCRequest
 
-// jsonRPCResponse is the wire shape of a JSON-RPC 2.0 response. Either
-// Result or Error is populated; never both.
-type jsonRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *jsonRPCError   `json:"error,omitempty"`
-}
+// jsonRPCResponse is an alias for the exported JSONRPCResponse type.
+type jsonRPCResponse = JSONRPCResponse
 
-type jsonRPCError struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
-}
-
-func (e *jsonRPCError) Error() string {
-	if e == nil {
-		return ""
-	}
-	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
-}
+// jsonRPCError is an alias for the exported JSONRPCError type.
+type jsonRPCError = JSONRPCError
 
 // Client is a minimal MCP / JSON-RPC 2.0 client bound to a single
 // Transport. It multiplexes outbound requests onto the transport's
@@ -190,7 +167,7 @@ func (c *Client) failAll(err error) {
 		select {
 		case ch <- &jsonRPCResponse{
 			ID:    id,
-			Error: &jsonRPCError{Code: errCodeInternal, Message: err.Error()},
+			Error: &jsonRPCError{Code: errcodeInternal, Message: err.Error()},
 		}:
 		default:
 		}

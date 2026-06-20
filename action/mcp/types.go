@@ -71,8 +71,9 @@ type ServerInfo struct {
 // server. Only the "stdio" transport is supported by this package;
 // HTTP/SSE is intentionally out of scope (P1).
 type MCPServerConfig struct { //nolint:revive
-	Transport string   `json:"transport"` // "stdio" (only supported value)
+	Transport string   `json:"transport"` // "stdio" | "sse" | "streamable-http"
 	Command   string   `json:"command"`
 	Args      []string `json:"args"`
 	Env       []string `json:"env"`
+	Endpoint  string   `json:"endpoint,omitempty"` // URL for sse/streamable-http transports
 }

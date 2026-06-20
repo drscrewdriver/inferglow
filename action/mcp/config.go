@@ -44,6 +44,15 @@ func NewTransportFromConfig(cfg MCPServerConfig) (Transport, error) {
 			Args:    cfg.Args,
 			Env:     cfg.Env,
 		}, nil
+	case "sse":
+		return &HTTPTransport{
+			baseURL: cfg.Endpoint,
+			sendURL: cfg.Endpoint,
+		}, nil
+	case "streamable-http":
+		return &StreamableHTTPTransport{
+			Endpoint: cfg.Endpoint,
+		}, nil
 	default:
 		return nil, ErrUnsupportedTransport
 	}
