@@ -23,7 +23,7 @@ package rag
 import "context"
 
 // EmbeddingModel generates vector embeddings for a batch of texts.
-// The interface signature is compatible with session/contextmgr/retrieval.Embedder.
+// The interface signature is compatible with context/retrieval.Embedder.
 type EmbeddingModel interface {
 	// Embed returns embedding vectors for the given texts.
 	// The returned slice must have the same length as the input texts.

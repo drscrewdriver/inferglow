@@ -61,6 +61,14 @@ func NewTracer(name string, opts ...trace.TracerOption) *Tracer {
 	return &Tracer{tr: gootel.GetTracerProvider().Tracer(name, opts...)}
 }
 
+// Start implements the agent.SpanStarter interface by delegating to the
+// underlying trace.Tracer. It satisfies the narrow interface used by the
+// orchestration layer after S1 decoupling, so that *Tracer can be injected
+// without the agent package importing observability/otel directly.
+func (t *Tracer) Start(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return t.tr.Start(ctx, spanName, opts...)
+}
+
 // StartSpan starts a semantic span for kind. If name is empty the span name
 // is derived from kind via spanName; otherwise name is used as the span name.
 // The supplied SpanOption values (typically attribute helpers such as
