@@ -28,7 +28,7 @@ import (
 
 	"github.com/inferglow/flow"
 	"github.com/inferglow/model"
-	"github.com/inferglow/observability/otel"
+	"github.com/inferglow/orchestrator/middleware"
 	"github.com/inferglow/session"
 )
 
@@ -102,7 +102,7 @@ type Agent struct {
 	// WithTracer on Run 做 per-call 覆盖。executeFlow 会用该 tracer 创建
 	// SpanFlowExecute / SpanPause / SpanResume 等语义 span，并把它注入
 	// flowContextImpl 让 step 可以自建 SpanKindStep / SpanKindTool span。
-	tracer *otel.Tracer
+	tracer SpanStarter
 	// flow 是可选的 flow 编排定义。nil 时使用 executeLoop（oneshot 模式）；
 	// 非 nil 时使用 executeFlow（flow 编排模式）。
 	// 通过 WithFlow RunOption 设置。
@@ -123,6 +123,10 @@ type Agent struct {
 	// Set via WithMiddleware on New; overridden by a per-call WithMiddleware
 	// on Run. Empty means the core handler is called directly.
 	middlewares []Middleware
+	// unifiedMiddlewares is the persisted list of new-style unified middlewares.
+	// Set via WithUnifiedMiddleware on New; overridden by a per-call
+	// WithUnifiedMiddleware on Run.
+	unifiedMiddlewares []middleware.Middleware
 }
 
 // RunOption configures Agent.Run behavior.
@@ -152,7 +156,7 @@ type runConfig struct {
 	// tracer 是可选的 OpenTelemetry tracer。nil 禁用 span 埋点。
 	// 由 executeFlow 用来创建 SpanFlowExecute / SpanPause / SpanResume
 	// 并注入 flowContextImpl 供 step 自建 span。
-	tracer *otel.Tracer
+	tracer SpanStarter
 	// flow 可选的 flow 编排定义（per-call 覆盖）。
 	flow *flow.Flow
 	// outputSchema is the optional L4 output schema for post-validation
@@ -162,6 +166,9 @@ type runConfig struct {
 	// middlewares is the ordered list of middleware wrappers. Empty means
 	// the core handler is called directly (zero overhead).
 	middlewares []Middleware
+	// unifiedMiddlewares is the list of new-style unified middlewares.
+	// They are adapted to legacy middlewares and prepended to the chain.
+	unifiedMiddlewares []middleware.Middleware
 	// callbacks provides lifecycle hooks for observability. nil disables.
 	callbacks *AgentCallbacks
 }
@@ -205,7 +212,7 @@ func WithFlow(f *flow.Flow) RunOption {
 // 在入口创建 SpanResume span；flowContextImpl 也会持有该 tracer，让 step
 // 可以通过 FlowContext.StartSpan 自建 SpanKindStep / SpanKindTool span。
 // 传 nil 可显式禁用既有 tracer。
-func WithTracer(t *otel.Tracer) RunOption {
+func WithTracer(t SpanStarter) RunOption {
 	return func(c *runConfig) {
 		c.tracer = t
 	}
@@ -275,6 +282,7 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 		rateLimitHook: c.rateLimitHook,
 		callbacks:     c.callbacks,
 		middlewares:   c.middlewares,
+		unifiedMiddlewares: c.unifiedMiddlewares,
 	}
 }
 
@@ -301,6 +309,7 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	c.rateLimitHook = a.rateLimitHook
 	c.callbacks = a.callbacks
 	c.middlewares = a.middlewares
+	c.unifiedMiddlewares = a.unifiedMiddlewares
 	c.featuresSet = true
 	for _, opt := range opts {
 		opt(c)
@@ -415,9 +424,15 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	}
 
 	// Apply middleware chain when middlewares are configured.
+	// Unified middlewares are adapted and prepended (outermost) to legacy ones.
 	var handler AgentHandler = coreHandler
-	if len(c.middlewares) > 0 {
-		handler = chainMiddleware(c.middlewares)(coreHandler)
+	allMiddlewares := make([]Middleware, 0, len(c.unifiedMiddlewares)+len(c.middlewares))
+	for _, umw := range c.unifiedMiddlewares {
+		allMiddlewares = append(allMiddlewares, adaptUnifiedToLegacy(umw))
+	}
+	allMiddlewares = append(allMiddlewares, c.middlewares...)
+	if len(allMiddlewares) > 0 {
+		handler = chainMiddleware(allMiddlewares)(coreHandler)
 	}
 
 	return handler(ctx, userMessage)

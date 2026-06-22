@@ -27,7 +27,6 @@ import (
 	"fmt"
 
 	"github.com/inferglow/flow"
-	"github.com/inferglow/observability/otel"
 )
 
 // RunMeta 携带一次 daemon 级别 flow 执行的元数据。当 RunID 非空时，
@@ -51,11 +50,11 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 	// A4: 在 executeFlow 入口创建 SpanFlowExecute span。defer span.End()
 	// 保证所有返回路径（暂停/失败/完成）都关闭 span。未配置 tracer 时
 	// flow.NoopSpan() 提供零开销 no-op 实现，无需 nil 检查。
-	var tracer *otel.Tracer
+	var tracer SpanStarter
 	if c != nil {
 		tracer = c.tracer
 	}
-	_, execSpan := startFlowSpan(ctx, tracer, otel.SpanFlowExecute, "")
+	_, execSpan := startFlowSpan(ctx, tracer, SpanFlowExecute, "")
 	defer execSpan.End()
 
 	// A5: 当 meta.RunID 非空时，追加 WithStateModifier 把 RunID/OwnerID/LeaseTTL
@@ -117,7 +116,7 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 		// A4: 在调用 f.Pause 前创建 SpanPause span，记录暂停事件。
 		// 用独立 ctx 而非 execSpan 的 ctx，避免成为其 child（语义上
 		// pause 是 execute 的兄弟事件而非子操作）。
-		_, pauseSpan := startFlowSpan(ctx, tracer, otel.SpanPause, "")
+		_, pauseSpan := startFlowSpan(ctx, tracer, SpanPause, "")
 		f.Pause(exec, "pause-signal")
 		pauseSpan.End()
 		return exec, "", nil
@@ -163,11 +162,11 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 // startFlowSpan 是 executeFlow / ResumeFlow 共用的 span 启动 helper。
 // tracer 为 nil 时返回原始 ctx 和 flow.NoopSpan()，避免在每个调用点重复
 // nil 检查。返回的 flow.Span 由调用方 defer End()。
-func startFlowSpan(ctx context.Context, tracer *otel.Tracer, kind otel.SpanKind, name string) (context.Context, flow.Span) {
+func startFlowSpan(ctx context.Context, tracer SpanStarter, kind SemanticSpanKind, name string) (context.Context, flow.Span) {
 	if tracer == nil {
 		return ctx, flow.NoopSpan()
 	}
-	newCtx, otelSpan := tracer.StartSpan(ctx, kind, name)
+	newCtx, otelSpan := tracer.Start(ctx, semanticSpanName(kind, name))
 	return newCtx, &otelSpanAdapter{otel: otelSpan}
 }
 

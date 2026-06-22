@@ -25,7 +25,6 @@ import (
 	"fmt"
 
 	"github.com/inferglow/flow"
-	"github.com/inferglow/observability/otel"
 )
 
 // ResumeFlow loads a checkpoint snapshot identified by snapshotID from store
@@ -45,7 +44,7 @@ import (
 // Flow.ResumeFromSnapshot, matching the crash-recovery contract.
 func (e *Engine) ResumeFlow(ctx context.Context, f *flow.Flow, store flow.CheckpointStore, snapshotID string, resumeInput any) (*flow.Execution, error) {
 	// A4: SpanResume span。Engine.tracer 为 nil 时返回 no-op，零开销。
-	_, resumeSpan := startFlowSpan(ctx, e.tracer, otel.SpanResume, "")
+	_, resumeSpan := startFlowSpan(ctx, e.tracer, SpanResume, "")
 	defer resumeSpan.End()
 
 	_ = ctx

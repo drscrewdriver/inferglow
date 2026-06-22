@@ -35,7 +35,6 @@ import (
 	"github.com/inferglow/action"
 	"github.com/inferglow/audit"
 	"github.com/inferglow/model"
-	"github.com/inferglow/observability/otel"
 	"github.com/inferglow/orchestrator/actionruntime"
 )
 
@@ -115,7 +114,7 @@ type Engine struct {
 	// 创建语义 span（如 SpanResume）。Agent.Run 在执行 executeFlow 前会把
 	// runConfig.tracer 写入该字段，使后续 ResumeFlow 调用也能产出 span。
 	// nil 时所有 Engine 层 span 退化为 no-op。
-	tracer *otel.Tracer
+	tracer SpanStarter
 
 	// maxToolCallRounds caps the number of tool-execution rounds per
 	// executeLoop run. Zero means use DefaultMaxToolCallRounds.

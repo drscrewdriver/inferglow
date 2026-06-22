@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/inferglow/observability/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -46,7 +45,7 @@ import (
 //	ct := NewCallbacksTracer(tracer, "session-1")
 //	agent := New(sess, actExt, modelReq, WithCallbacks(ct.Callbacks()))
 type CallbacksTracer struct {
-	tracer    *otel.Tracer
+	tracer    SpanStarter
 	sessionID string
 
 	mu      sync.Mutex
@@ -57,7 +56,7 @@ type CallbacksTracer struct {
 
 // NewCallbacksTracer creates a CallbacksTracer backed by the given tracer.
 // sessionID is recorded as a span attribute for correlation.
-func NewCallbacksTracer(tracer *otel.Tracer, sessionID string) *CallbacksTracer {
+func NewCallbacksTracer(tracer SpanStarter, sessionID string) *CallbacksTracer {
 	return &CallbacksTracer{
 		tracer:    tracer,
 		sessionID: sessionID,
@@ -72,7 +71,7 @@ func (ct *CallbacksTracer) Callbacks() *AgentCallbacks {
 		OnRunStart: func(ctx context.Context, userMessage string) {
 			ct.mu.Lock()
 			defer ct.mu.Unlock()
-			_, span := ct.tracer.StartSpan(ctx, otel.SpanAgentRun, "inferglow.agent.run",
+			_, span := ct.tracer.Start(ctx, semanticSpanName(SpanAgentRun, "inferglow.agent.run"),
 				trace.WithAttributes(
 					attribute.String("inferglow.session_id", ct.sessionID),
 					attribute.String("inferglow.user_message_preview", truncateStr(userMessage, 100)),
@@ -97,7 +96,7 @@ func (ct *CallbacksTracer) Callbacks() *AgentCallbacks {
 		OnLLMCallStart: func(ctx context.Context, round int) {
 			ct.mu.Lock()
 			defer ct.mu.Unlock()
-			_, span := ct.tracer.StartSpan(ctx, otel.SpanLLMCall, fmt.Sprintf("inferglow.llm.call.%d", round),
+			_, span := ct.tracer.Start(ctx, semanticSpanName(SpanLLMCall, fmt.Sprintf("inferglow.llm.call.%d", round)),
 				trace.WithAttributes(
 					attribute.Int("inferglow.llm.round", round),
 				),
@@ -118,7 +117,7 @@ func (ct *CallbacksTracer) Callbacks() *AgentCallbacks {
 		OnToolCallStart: func(ctx context.Context, toolName string) {
 			ct.mu.Lock()
 			defer ct.mu.Unlock()
-			_, span := ct.tracer.StartSpan(ctx, otel.SpanToolCall, fmt.Sprintf("inferglow.tool.%s", toolName),
+			_, span := ct.tracer.Start(ctx, semanticSpanName(SpanToolCall, fmt.Sprintf("inferglow.tool.%s", toolName)),
 				trace.WithAttributes(
 					attribute.String("tool.name", toolName),
 				),

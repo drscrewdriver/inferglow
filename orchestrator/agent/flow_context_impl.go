@@ -29,7 +29,6 @@ import (
 	"github.com/inferglow/audit"
 	"github.com/inferglow/flow"
 	"github.com/inferglow/model"
-	"github.com/inferglow/observability/otel"
 	"github.com/inferglow/orchestrator/actionruntime"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -48,7 +47,7 @@ type flowContextImpl struct {
 	values    sync.Map
 	// tracer 是可选的 OpenTelemetry tracer。nil 时 StartSpan 返回 no-op span。
 	// 由 executeFlow 从 runConfig.tracer 注入（runConfig 又来自 Agent.tracer）。
-	tracer *otel.Tracer
+	tracer SpanStarter
 	// piiMasker 是可选的 PII 脱敏器。nil 时 MaskInput 直接返回原值。
 	// 用于在 step 内对动态构造的输入做脱敏（如调外部 Action 前去除 PII）。
 	piiMasker PIIMasker
@@ -77,17 +76,17 @@ func (a *otelSpanAdapter) End() {
 // flow 包不依赖 observability，故该映射必须在 orchestrator 层完成。
 // 映射规则：内部 step -> SpanAgentRun（一个稳定语义名），step -> SpanFlowExecute，
 // tool -> SpanToolCall。这些只是 span 名约定；调用方仍可通过 name 覆盖具体名。
-func flowToOtelKind(kind flow.SpanKind) otel.SpanKind {
+func flowToOtelKind(kind flow.SpanKind) SemanticSpanKind {
 	switch kind {
 	case flow.SpanKindInternal:
 		// 内部 span 复用 SpanFlowExecute 的语义名空间。
-		return otel.SpanFlowExecute
+		return SpanFlowExecute
 	case flow.SpanKindStep:
-		return otel.SpanFlowExecute
+		return SpanFlowExecute
 	case flow.SpanKindTool:
-		return otel.SpanToolCall
+		return SpanToolCall
 	default:
-		return otel.SpanFlowExecute
+		return SpanFlowExecute
 	}
 }
 
@@ -207,7 +206,7 @@ func (fc *flowContextImpl) StartSpan(ctx context.Context, kind flow.SpanKind, na
 	if fc.tracer == nil {
 		return ctx, flow.NoopSpan()
 	}
-	newCtx, otelSpan := fc.tracer.StartSpan(ctx, flowToOtelKind(kind), name)
+	newCtx, otelSpan := fc.tracer.Start(ctx, semanticSpanName(flowToOtelKind(kind), name))
 	return newCtx, &otelSpanAdapter{otel: otelSpan}
 }
 
