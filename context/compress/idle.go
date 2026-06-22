@@ -24,7 +24,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/inferglow/session/contextmgr"
+	"github.com/inferglow/context"
 )
 
 // IdleConsolidator implements layer 2 of the five-layer defense (§6.1).

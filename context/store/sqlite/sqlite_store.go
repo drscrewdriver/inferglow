@@ -31,7 +31,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/inferglow/session/contextmgr"
+	"github.com/inferglow/context"
 )
 
 // Store implements store.StepStore using SQLite.

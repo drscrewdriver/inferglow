@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/inferglow/session/contextmgr"
+	"github.com/inferglow/context"
 )
 
 // Registry is the interface for tool registration.

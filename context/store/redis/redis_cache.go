@@ -35,7 +35,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/inferglow/session/contextmgr"
+	"github.com/inferglow/context"
 )
 
 // Client is the Redis client interface (abstraction over go-redis).

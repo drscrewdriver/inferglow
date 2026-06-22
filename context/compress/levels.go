@@ -20,7 +20,7 @@
 
 package compress
 
-import "github.com/inferglow/session/contextmgr"
+import "github.com/inferglow/context"
 
 // LevelThresholds returns the threshold table for 128K baseline window (§6.3).
 //

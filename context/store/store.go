@@ -21,7 +21,7 @@
 // Package store defines the StepStore interface for contextmgr persistence.
 package store
 
-import "github.com/inferglow/session/contextmgr"
+import "github.com/inferglow/context"
 
 // StepStore is the persistence interface for all compression-level data.
 // Implementations exist for JSONL (default), SQLite, PostgreSQL, and Redis cache.

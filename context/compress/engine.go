@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/inferglow/session/contextmgr"
+	"github.com/inferglow/context"
 )
 
 // CompressModelClient is the interface for compression model calls.
