@@ -86,6 +86,14 @@ type Request struct {
 
 	// Policy is the optional access policy to evaluate.
 	Policy *AccessPolicy `json:"policy,omitempty"`
+
+	// Timeout is the maximum duration to wait for approval resolution.
+	// Zero means use the system default (AutoApproveTimeout).
+	Timeout time.Duration `json:"timeout,omitempty"`
+
+	// Escalation specifies the action when timeout is reached.
+	// Common values: "auto_deny", "escalate_to_admin", "notify_only".
+	Escalation string `json:"escalation,omitempty"`
 }
 
 // Decision is the outcome of an approval resolution.
