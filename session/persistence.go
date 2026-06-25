@@ -54,6 +54,8 @@ type SessionData struct { //nolint:revive
 	DefaultResizeName string `json:"default_resize_name,omitempty" yaml:"default_resize_name,omitempty"`
 	// AnalysisHandlerCount 保存 AnalysisHandler 数量（仅作信息记录，函数无法序列化）。
 	AnalysisHandlerCount int `json:"analysis_handler_count,omitempty" yaml:"analysis_handler_count,omitempty"`
+	// PromptVersion 记录 prompt template 版本（F4）。
+	PromptVersion string `json:"prompt_version,omitempty" yaml:"prompt_version,omitempty"`
 }
 
 // ToJSON returns a JSON representation of the session.
@@ -147,6 +149,7 @@ func (s *Session) LoadFromData(data SessionData) error {
 	}
 	s.MaxLength = data.MaxLength
 	s.AutoResize = data.AutoResize
+	s.PromptVersion = data.PromptVersion
 
 	// 恢复内置 resize handler
 	if len(s.resizeHandlers) == 0 {
@@ -186,5 +189,6 @@ func (s *Session) toSessionDataLocked() SessionData {
 		ResizeHandlerNames:   handlerNames,
 		DefaultResizeName:    s.defaultResizeName,
 		AnalysisHandlerCount: len(s.analysisHandlers),
+		PromptVersion:        s.PromptVersion,
 	}
 }

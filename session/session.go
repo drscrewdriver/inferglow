@@ -183,6 +183,10 @@ type Session struct {
 	// 保持向后兼容。与 securityHook 互不干扰：hook 先判断是否拦截，
 	// masker 再对通过检查的内容做脱敏。
 	masker MessageMasker
+
+	// PromptVersion 记录当前使用的 prompt template 版本。
+	// 用于回放测试（F3）时将 golden session 与 prompt 版本关联。
+	PromptVersion string
 }
 
 // NewSession creates a Session with the given id and maximum context length.

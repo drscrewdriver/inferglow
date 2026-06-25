@@ -161,3 +161,33 @@ func TestRoundTripConsistency(t *testing.T) {
 		t.Errorf("AutoResize mismatch: got %v, want %v", s2.AutoResize, s.AutoResize)
 	}
 }
+
+func TestPromptVersionRoundTrip(t *testing.T) {
+	s := NewSession("pv-test", 1000)
+	s.PromptVersion = "v1.2.3"
+	s.AddMessage("user", "hello", "")
+
+	jsonStr, err := s.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+
+	s2 := NewSession("", 0)
+	if err := s2.LoadJSON(jsonStr); err != nil {
+		t.Fatalf("LoadJSON failed: %v", err)
+	}
+	if s2.PromptVersion != "v1.2.3" {
+		t.Errorf("PromptVersion = %q, want %q", s2.PromptVersion, "v1.2.3")
+	}
+
+	// Empty PromptVersion should round-trip as empty (backward compat).
+	s3 := NewSession("pv-empty", 1000)
+	jsonStr3, _ := s3.ToJSON()
+	s4 := NewSession("", 0)
+	if err := s4.LoadJSON(jsonStr3); err != nil {
+		t.Fatalf("LoadJSON failed: %v", err)
+	}
+	if s4.PromptVersion != "" {
+		t.Errorf("PromptVersion = %q, want empty", s4.PromptVersion)
+	}
+}
