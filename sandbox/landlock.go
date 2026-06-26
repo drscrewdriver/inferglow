@@ -25,7 +25,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +98,19 @@ const (
 	LandlockAccessFSAllRead = LandlockAccessFSExecute | LandlockAccessFSReadFile | LandlockAccessFSReadDir
 )
 
+// LandlockBaseDirs 默认基础路径集合（Start() 时自动注入）。
+// 用户显式配置不会被覆盖——自动注入在用户配置之后追加。
+// 不存在的路径在注入时静默跳过。
+var LandlockBaseDirs = struct {
+	ReadDirs  []string
+	ReadFiles []string
+}{
+	ReadDirs: []string{
+		"/usr", "/lib", "/lib64", "/lib32", "/etc", "/dev",
+	},
+	ReadFiles: []string{},
+}
+
 // landlockRulesetAttr 对应 struct landlock_ruleset_attr。
 type landlockRulesetAttr struct {
 	HandledAccessFS uint64
@@ -144,10 +159,17 @@ func landlockCreateRulesetProbe() int {
 
 // landlockAddPathRule 向 ruleset_fd 添加一条 path_beneath 规则。
 func landlockAddPathRule(rulesetFD int, path string, allowed LandlockAccessFS) error {
+	// 解析 symlink 防止通过 ../ 或软链接绕过白名单。
+	// /proc 等虚拟文件系统可能解析失败，此时降级到原始路径。
+	resolved, evalErr := filepath.EvalSymlinks(path)
+	if evalErr != nil {
+		resolved = path
+	}
+
 	// 打开路径获取 parent_fd（O_PATH | O_CLOEXEC）。
-	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(resolved, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("landlock: open %q: %w", path, err)
+		return fmt.Errorf("landlock: open %q: %w", resolved, err)
 	}
 	defer unix.Close(fd)
 
@@ -205,6 +227,10 @@ type LandlockConfig struct {
 	HandledAccessFS LandlockAccessFS
 	// ABIVersion 期望使用的 ABI 版本（0 = 自动协商最高可用）。
 	ABIVersion int
+	// DisableAutoTempDir 禁用自动创建可写临时目录。
+	// 默认为 false（即自动创建）。设为 true 时不创建。
+	// 目录在 Start() 时创建，Stop() 时自动清理。
+	DisableAutoTempDir bool
 }
 
 // parseLandlockConfig 从 cfg map[string]any 解析 LandlockConfig。
@@ -226,6 +252,9 @@ func parseLandlockConfig(cfg map[string]any) LandlockConfig {
 	out.AllowedWriteFiles = parseStringSlice(cfg["write_files"])
 	if v, ok := cfg["abi_version"].(int); ok {
 		out.ABIVersion = v
+	}
+	if v, ok := cfg["disable_auto_temp_dir"].(bool); ok {
+		out.DisableAutoTempDir = v
 	}
 	return out
 }
@@ -402,6 +431,8 @@ type LandlockHandle struct {
 	status    HandleStatus
 	rulesetFD int
 	consumed  bool // 是否已应用过 landlock_restrict_self
+	tmpDir      string // 自动创建的临时目录路径
+	tmpDirClean func() // 清理函数，Stop() 时调用
 }
 
 // Start 准备 ruleset 并添加规则，但不应用 restrict_self。
@@ -412,6 +443,51 @@ func (h *LandlockHandle) Start(ctx context.Context) error {
 	if h.status == StatusRunning {
 		return nil
 	}
+
+	// ★ 6.2.2 自动注入基础路径（在用户配置之后追加，不覆盖）。
+	seenRead := make(map[string]struct{}, len(h.config.AllowedReadDirs)+len(LandlockBaseDirs.ReadDirs))
+	for _, d := range h.config.AllowedReadDirs {
+		seenRead[d] = struct{}{}
+	}
+	for _, dir := range LandlockBaseDirs.ReadDirs {
+		if _, err := os.Stat(dir); err == nil {
+			if _, ok := seenRead[dir]; !ok {
+				seenRead[dir] = struct{}{}
+				h.config.AllowedReadDirs = append(h.config.AllowedReadDirs, dir)
+			}
+		}
+	}
+	seenReadFiles := make(map[string]struct{}, len(h.config.AllowedReadFiles)+len(LandlockBaseDirs.ReadFiles))
+	for _, f := range h.config.AllowedReadFiles {
+		seenReadFiles[f] = struct{}{}
+	}
+	for _, f := range LandlockBaseDirs.ReadFiles {
+		if _, err := os.Stat(f); err == nil {
+			if _, ok := seenReadFiles[f]; !ok {
+				seenReadFiles[f] = struct{}{}
+				h.config.AllowedReadFiles = append(h.config.AllowedReadFiles, f)
+			}
+		}
+	}
+	// 自动注入 cwd 为只读路径。
+	if cwd, err := os.Getwd(); err == nil {
+		if _, ok := seenRead[cwd]; !ok {
+			h.config.AllowedReadDirs = append(h.config.AllowedReadDirs, cwd)
+		}
+	}
+
+	// ★ 6.2.4 自动创建可写临时目录。
+	if !h.config.DisableAutoTempDir {
+		tmpDir, err := os.MkdirTemp("", "landlock-*")
+		if err != nil {
+			h.status = StatusError
+			return fmt.Errorf("landlock: create temp dir: %w", err)
+		}
+		h.tmpDir = tmpDir
+		h.tmpDirClean = func() { os.RemoveAll(tmpDir) }
+		h.config.AllowedWriteDirs = append(h.config.AllowedWriteDirs, tmpDir)
+	}
+
 	// 计算要 handled 的访问位。
 	handled := h.config.HandledAccessFS
 	if handled == 0 {
@@ -503,6 +579,10 @@ func (h *LandlockHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionR
 
 	// 首次 Execute：应用 landlock_restrict_self。
 	if !consumed {
+		// ★ 6.2.1 Landlock 前置条件：必须先设置 no_new_privs，否则内核返回 EPERM。
+		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+			return nil, fmt.Errorf("landlock: set no_new_privs: %w", err)
+		}
 		if err := landlockRestrictSelf(rulesetFD); err != nil {
 			return nil, fmt.Errorf("landlock: restrict_self: %w", err)
 		}
@@ -566,6 +646,12 @@ func (h *LandlockHandle) Stop(ctx context.Context) error {
 	defer h.mu.Unlock()
 	if h.status != StatusRunning {
 		return nil
+	}
+	// ★ 6.2.4 自动清理临时目录。
+	if h.tmpDirClean != nil {
+		h.tmpDirClean()
+		h.tmpDirClean = nil
+		h.tmpDir = ""
 	}
 	if h.rulesetFD > 0 {
 		_ = unix.Close(h.rulesetFD)

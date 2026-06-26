@@ -358,6 +358,17 @@ func (h *BubblewrapHandle) Start(ctx context.Context) error {
 }
 
 // buildArgv 根据 config 构造 bwrap 命令的 argv 前缀（不含 user command）。
+//
+// 注意：此方法只自动挂载 /proc、/dev（以及配置的 tmpfs）。
+// /usr、/bin、/lib、/lib64 等基础路径需要用户在 config.BindRO 中显式配置，例如：
+//
+//	config.BindRO = []MountEntry{
+//		{Source: "/usr", Destination: "/usr"},
+//		{Source: "/bin", Destination: "/bin"},
+//		{Source: "/lib", Destination: "/lib"},
+//	}
+//
+// 测试验证参见 TestBubblewrapIntegrationEcho 和 TestBubblewrapIntegrationReadOnly。
 func (h *BubblewrapHandle) buildArgv(userArgv []string) []string {
 	args := []string{}
 	if h.config.UnshareAll {

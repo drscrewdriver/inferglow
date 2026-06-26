@@ -30,7 +30,9 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // RestrictedTokenHandle implements Handle for restricted token process isolation.
@@ -44,9 +46,12 @@ type RestrictedTokenHandle struct {
 	sandboxDir       string
 	networkIsolation bool
 	processStarted   bool
+	restrictedToken  syscall.Token
 }
 
-// Start initializes the restricted token environment and launches the process.
+// Start initializes the restricted token environment by creating a restricted
+// access token from the current process token with high-privilege privileges
+// removed. The token is stored for use in Execute via CreateProcessAsUser.
 func (h *RestrictedTokenHandle) Start(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -55,12 +60,35 @@ func (h *RestrictedTokenHandle) Start(ctx context.Context) error {
 		return nil // Already started
 	}
 
+	// Create the restricted token from the current process token.
+	restrictedToken, err := createRestrictedTokenFromCurrent()
+	if err != nil {
+		return fmt.Errorf("create restricted token: %w", err)
+	}
+	h.restrictedToken = restrictedToken
+
+	// Create sandbox directory if configured.
+	if h.sandboxDir != "" {
+		if err := os.MkdirAll(h.sandboxDir, 0755); err != nil {
+			restrictedToken.Close()
+			return fmt.Errorf("create sandbox directory: %w", err)
+		}
+	}
+
 	h.status = StatusRunning
 	h.processStarted = true
 	return nil
 }
 
+// restrictedToken is the token created by Start for use in Execute.
+// It is a syscall.Token (uintptr underneath) to avoid import cycles.
+type restrictedTokenHandle struct {
+	token syscall.Token
+}
+
 // Execute runs a command inside the restricted token sandbox.
+// When a restricted token is available, it uses CreateProcessAsUser to
+// launch the process under the restricted identity.
 func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionResult, error) {
 	if cmd == nil || len(cmd.Argv) == 0 {
 		return nil, fmt.Errorf("command is nil or empty")
@@ -69,6 +97,7 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 	h.mu.Lock()
 	running := h.status == StatusRunning
 	policy := h.policy
+	token := h.restrictedToken
 	h.mu.Unlock()
 
 	if !running {
@@ -117,6 +146,19 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 		return nil, err
 	}
 
+	// When a restricted token is available, use CreateProcessAsUser.
+	if token != 0 {
+		return h.executeWithToken(execCtx, token, argv, cmd)
+	}
+
+	// Fallback: execute without token restriction (should not happen after Start).
+	return h.executeDirect(execCtx, argv, cmd)
+}
+
+// executeWithToken runs a command using CreateProcessAsUser with the restricted token.
+func (h *RestrictedTokenHandle) executeWithToken(ctx context.Context, token syscall.Token, argv []string, cmd *Command) (*ExecutionResult, error) {
+	loadKernel32Procs()
+
 	var name string
 	var args []string
 	if len(argv) > 1 && argv[0] == "cmd" {
@@ -129,7 +171,108 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 		}
 	}
 
-	cmdExec := exec.CommandContext(execCtx, name, args...)
+	// Resolve the executable path.
+	exePath, err := exec.LookPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("lookpath %q: %w", name, err)
+	}
+
+	// Build the command line string.
+	cmdLine := exePath
+	for _, a := range args {
+		cmdLine += " " + syscall.EscapeArg(a)
+	}
+	cmdLinePtr, _ := syscall.UTF16PtrFromString(cmdLine)
+
+	// Set up working directory.
+	workDir := cmd.Workdir
+	if workDir == "" {
+		workDir = h.sandboxDir
+	}
+	var workDirPtr *uint16
+	if workDir != "" {
+		workDirPtr, _ = syscall.UTF16PtrFromString(workDir)
+	}
+
+	// Set up environment block.
+	var envPtr *uint16
+	if len(cmd.Env) > 0 {
+		envStr := strings.Join(cmd.Env, "\x00") + "\x00\x00"
+		envPtr, _ = syscall.UTF16PtrFromString(envStr)
+	}
+
+	// PROCESS_INFORMATION and STARTUPINFO structures.
+	var si syscall.StartupInfo
+	var pi syscall.ProcessInformation
+	si.Cb = uint32(unsafe.Sizeof(si))
+
+	// CreateProcessAsUserW call.
+	r1, _, callErr := procCreateProcessAsUser.Call(
+		uintptr(token),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(exePath))),
+		uintptr(unsafe.Pointer(cmdLinePtr)),
+		0, // lpProcessAttributes
+		0, // lpThreadAttributes
+		0, // bInheritHandles
+		0, // dwCreationFlags
+		uintptr(unsafe.Pointer(envPtr)),
+		uintptr(unsafe.Pointer(workDirPtr)),
+		uintptr(unsafe.Pointer(&si)),
+		uintptr(unsafe.Pointer(&pi)),
+	)
+	if r1 == 0 {
+		return nil, fmt.Errorf("CreateProcessAsUser: %w", callErr)
+	}
+
+	// Wait for the process to complete.
+	procHandle := pi.Process
+	defer syscall.CloseHandle(procHandle)
+	defer syscall.CloseHandle(pi.Thread)
+
+	// Use a goroutine to wait for process completion with context support.
+	done := make(chan error, 1)
+	go func() {
+		_, waitErr := syscall.WaitForSingleObject(procHandle, syscall.INFINITE)
+		done <- waitErr
+	}()
+
+	select {
+	case <-ctx.Done():
+		syscall.TerminateProcess(procHandle, 1)
+		return nil, ctx.Err()
+	case waitErr := <-done:
+		if waitErr != nil {
+			return nil, fmt.Errorf("WaitForSingleObject: %w", waitErr)
+		}
+	}
+
+	// Get exit code.
+	var exitCode uint32
+	syscall.GetExitCodeProcess(procHandle, &exitCode)
+
+	// Read stdout/stderr is not directly possible with CreateProcessAsUser
+	// without pipe setup. For now, return exit code only.
+	return &ExecutionResult{
+		ExitCode: int(exitCode),
+		Duration: 0, // Duration tracked by caller.
+	}, nil
+}
+
+// executeDirect runs a command using exec.CommandContext (fallback path).
+func (h *RestrictedTokenHandle) executeDirect(ctx context.Context, argv []string, cmd *Command) (*ExecutionResult, error) {
+	var name string
+	var args []string
+	if len(argv) > 1 && argv[0] == "cmd" {
+		name = argv[0]
+		args = argv[1:]
+	} else {
+		name = argv[0]
+		if len(argv) > 1 {
+			args = argv[1:]
+		}
+	}
+
+	cmdExec := exec.CommandContext(ctx, name, args...)
 	cmdExec.Stdin = cmd.Stdin
 	if cmd.Workdir != "" {
 		cmdExec.Dir = cmd.Workdir
@@ -159,10 +302,9 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 	}
 
 	if runErr != nil {
-		if execCtx.Err() != nil {
-			return result, fmt.Errorf("%w: %v", execCtx.Err(), runErr)
+		if ctx.Err() != nil {
+			return result, fmt.Errorf("%w: %v", ctx.Err(), runErr)
 		}
-		// Non-zero exit code is not an error from Execute's perspective
 		return result, nil
 	}
 
@@ -179,6 +321,12 @@ func (h *RestrictedTokenHandle) Stop(ctx context.Context) error {
 		h.proc = nil
 	}
 
+	// Close the restricted token if it was created.
+	if h.restrictedToken != 0 {
+		h.restrictedToken.Close()
+		h.restrictedToken = 0
+	}
+
 	h.status = StatusStopped
 	h.processStarted = false
 	return nil
@@ -193,8 +341,7 @@ func (h *RestrictedTokenHandle) Status() HandleStatus {
 
 // CreateRestrictedToken creates a restricted access token by removing
 // high-privilege privileges from the current process token.
-// The real implementation would use DuplicateTokenEx, CreateRestrictedToken,
-// and RemoveAccessAllowedAuditable from advapi32.dll.
-func CreateRestrictedToken() error {
-	return fmt.Errorf("restricted token creation requires real Windows API implementation")
+// Uses advapi32.dll: OpenProcessToken → DuplicateTokenEx → CreateRestrictedToken.
+func CreateRestrictedToken() (syscall.Token, error) {
+	return createRestrictedTokenFromCurrent()
 }

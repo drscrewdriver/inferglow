@@ -367,3 +367,118 @@ func TestLandlockHandleConcurrentStatus(t *testing.T) {
 	}
 	<-done
 }
+
+// ============================================================================
+// Phase 6 修复验证测试
+// ============================================================================
+
+func TestLandlockBaseDirsNotEmpty(t *testing.T) {
+	if len(LandlockBaseDirs.ReadDirs) == 0 {
+		t.Error("LandlockBaseDirs.ReadDirs should not be empty")
+	}
+	// ReadFiles 可以为空——/dev 和 /etc 已通过 ReadDirs 目录级覆盖。
+}
+
+func TestLandlockConfigDisableAutoTempDirDefault(t *testing.T) {
+	cfg := parseLandlockConfig(nil)
+	if cfg.DisableAutoTempDir {
+		t.Error("DisableAutoTempDir should default to false")
+	}
+}
+
+func TestLandlockConfigParseDisableAutoTempDir(t *testing.T) {
+	cfg := parseLandlockConfig(map[string]any{
+		"disable_auto_temp_dir": true,
+	})
+	if !cfg.DisableAutoTempDir {
+		t.Error("DisableAutoTempDir should be true after parsing")
+	}
+}
+
+func TestLandlockHandleStartInjectsBaseDirs(t *testing.T) {
+	p := NewLandlockProvider()
+	avail, _ := p.InspectAvailability()
+	if !avail.Available {
+		t.Skip("landlock not available")
+	}
+	policy := DefaultPolicy()
+	h, err := p.CreateHandle(map[string]any{}, &policy)
+	if err != nil {
+		t.Fatalf("CreateHandle: %v", err)
+	}
+	if err := h.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer h.Stop(context.Background())
+	lh := h.(*LandlockHandle)
+	// 基础路径应已被注入（去重后至少包含存在的路径）。
+	if len(lh.config.AllowedReadDirs) < len(LandlockBaseDirs.ReadDirs) {
+		t.Errorf("expected at least %d base read dirs, got %d",
+			len(LandlockBaseDirs.ReadDirs), len(lh.config.AllowedReadDirs))
+	}
+}
+
+func TestLandlockHandleStartAutoTempDir(t *testing.T) {
+	p := NewLandlockProvider()
+	avail, _ := p.InspectAvailability()
+	if !avail.Available {
+		t.Skip("landlock not available")
+	}
+	policy := DefaultPolicy()
+	h, err := p.CreateHandle(map[string]any{}, &policy)
+	if err != nil {
+		t.Fatalf("CreateHandle: %v", err)
+	}
+	if err := h.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	lh := h.(*LandlockHandle)
+	// 默认应自动创建 temp dir。
+	if lh.tmpDir == "" {
+		t.Fatal("tmpDir should be set after Start")
+	}
+	// 验证目录存在。
+	if _, err := os.Stat(lh.tmpDir); err != nil {
+		t.Fatalf("tmpDir should exist: %v", err)
+	}
+	// 验证加入了 AllowedWriteDirs。
+	found := false
+	for _, d := range lh.config.AllowedWriteDirs {
+		if d == lh.tmpDir {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("tmpDir should be in AllowedWriteDirs")
+	}
+	// Stop 后应清理。
+	tmpDir := lh.tmpDir
+	_ = h.Stop(context.Background())
+	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
+		t.Error("tmpDir should be removed after Stop")
+	}
+}
+
+func TestLandlockHandleStartDisableTempDir(t *testing.T) {
+	p := NewLandlockProvider()
+	avail, _ := p.InspectAvailability()
+	if !avail.Available {
+		t.Skip("landlock not available")
+	}
+	policy := DefaultPolicy()
+	h, err := p.CreateHandle(map[string]any{
+		"disable_auto_temp_dir": true,
+	}, &policy)
+	if err != nil {
+		t.Fatalf("CreateHandle: %v", err)
+	}
+	if err := h.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer h.Stop(context.Background())
+	lh := h.(*LandlockHandle)
+	if lh.tmpDir != "" {
+		t.Error("tmpDir should be empty when DisableAutoTempDir is true")
+	}
+}

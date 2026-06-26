@@ -53,10 +53,12 @@ type WindowsSandboxHandle struct {
 	networkIsolation bool
 	sharedFolders    []SharedFolder
 	startTime        time.Time
+	configPath       string // path to the temporary .wsb config file
 }
 
 // Start initializes the Windows Sandbox environment and launches the session.
-// In production, this would invoke Microsoft.WindowsSandbox.exe to create a VM.
+// It generates a WSConfig.xml, writes it to a temporary .wsb file, and
+// launches Microsoft.WindowsSandbox.exe.
 func (h *WindowsSandboxHandle) Start(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -65,20 +67,75 @@ func (h *WindowsSandboxHandle) Start(ctx context.Context) error {
 		return fmt.Errorf("windows sandbox already running")
 	}
 
+	// Create sandbox directory if needed.
+	if h.sandboxDir != "" {
+		if err := os.MkdirAll(h.sandboxDir, 0755); err != nil {
+			return fmt.Errorf("create sandbox directory: %w", err)
+		}
+	}
+
+	// Generate WSConfig.xml.
+	config, err := h.generateWSConfig()
+	if err != nil {
+		return fmt.Errorf("generate WSConfig.xml: %w", err)
+	}
+
+	// Write config to a temporary .wsb file.
+	wsbFile, err := os.CreateTemp("", "inferglow-*.wsb")
+	if err != nil {
+		return fmt.Errorf("create temp .wsb file: %w", err)
+	}
+	h.configPath = wsbFile.Name()
+	if _, err := wsbFile.WriteString(config); err != nil {
+		wsbFile.Close()
+		os.Remove(h.configPath)
+		return fmt.Errorf("write WSConfig.xml: %w", err)
+	}
+	wsbFile.Close()
+
+	// Launch WindowsSandbox.exe with the config file.
+	sandboxExe, err := exec.LookPath("WindowsSandbox.exe")
+	if err != nil {
+		// Try the full path as fallback.
+		sandboxExe = "Microsoft.WindowsSandbox.exe"
+	}
+	h.proc = exec.CommandContext(ctx, sandboxExe, h.configPath)
+	if err := h.proc.Start(); err != nil {
+		os.Remove(h.configPath)
+		return fmt.Errorf("launch Windows Sandbox: %w", err)
+	}
+
 	h.status = StatusRunning
 	h.startTime = time.Now()
 
-	// In production, this would:
-	// 1. Generate a WSConfig.xml with shared folders and network settings
-	// 2. Launch Microsoft.WindowsSandbox.exe with the config
-	// 3. Wait for the sandbox to be ready
-	//
-	// For stub implementation, we just set the status
+	// Wait for the sandbox to become ready by polling for the ready file.
+	if h.sandboxDir != "" {
+		go h.pollReadyFile(ctx)
+	}
+
 	return nil
 }
 
+// pollReadyFile polls for the sandbox ready indicator file.
+// The Windows Sandbox LogonCommand writes a log.txt to the shared folder
+// when the sandbox is ready.
+func (h *WindowsSandboxHandle) pollReadyFile(ctx context.Context) {
+	readyPath := h.sandboxDir + "\\log.txt"
+	for i := 0; i < 60; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+			if _, err := os.Stat(readyPath); err == nil {
+				return // Sandbox is ready.
+			}
+		}
+	}
+}
+
 // Execute runs a command inside the Windows Sandbox.
-// In production, this would copy the binary to the sandbox and execute it.
+// It writes the command to a shared file, waits for the sandbox to execute it,
+// and reads the result from the shared folder.
 func (h *WindowsSandboxHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionResult, error) {
 	if cmd == nil || len(cmd.Argv) == 0 {
 		return nil, fmt.Errorf("command is nil or empty")
@@ -90,6 +147,7 @@ func (h *WindowsSandboxHandle) Execute(ctx context.Context, cmd *Command) (*Exec
 		return nil, fmt.Errorf("%w: call Start first", ErrHandleNotRunning)
 	}
 	policy := h.policy
+	sandboxDir := h.sandboxDir
 	h.mu.Unlock()
 
 	// Check AllowedCommands whitelist
@@ -127,7 +185,22 @@ func (h *WindowsSandboxHandle) Execute(ctx context.Context, cmd *Command) (*Exec
 		defer cancel()
 	}
 
-	// Build argv (handle Windows builtins like echo, dir, etc.)
+	// Build the command string.
+	cmdStr := strings.Join(cmd.Argv, " ")
+
+	// Write command to shared folder for the sandbox to pick up.
+	if sandboxDir != "" {
+		cmdFile := sandboxDir + "\\command.txt"
+		if err := os.WriteFile(cmdFile, []byte(cmdStr), 0644); err != nil {
+			return nil, fmt.Errorf("write command file: %w", err)
+		}
+
+		// Poll for result file.
+		resultFile := sandboxDir + "\\result.txt"
+		return h.pollForResult(execCtx, resultFile)
+	}
+
+	// Fallback: execute directly if no shared folder is configured.
 	argv, err := buildArgv(cmd.Argv)
 	if err != nil {
 		return nil, err
@@ -150,8 +223,6 @@ func (h *WindowsSandboxHandle) Execute(ctx context.Context, cmd *Command) (*Exec
 	cmdExec.Stdin = cmd.Stdin
 	if cmd.Workdir != "" {
 		cmdExec.Dir = cmd.Workdir
-	} else if h.sandboxDir != "" {
-		cmdExec.Dir = h.sandboxDir
 	}
 	if cmd.Env != nil {
 		cmdExec.Env = cmd.Env
@@ -184,14 +255,50 @@ func (h *WindowsSandboxHandle) Execute(ctx context.Context, cmd *Command) (*Exec
 	return result, nil
 }
 
+// pollForResult polls for the result file written by the sandbox.
+func (h *WindowsSandboxHandle) pollForResult(ctx context.Context, resultFile string) (*ExecutionResult, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			data, err := os.ReadFile(resultFile)
+			if err != nil {
+				continue // Not ready yet.
+			}
+			// Clean up the result file.
+			os.Remove(resultFile)
+			return &ExecutionResult{
+				Stdout:   string(data),
+				Duration: time.Since(h.startTime),
+			}, nil
+		}
+	}
+}
+
 // Stop terminates the Windows Sandbox session and cleans up resources.
-// In production, this would destroy the VM and all associated resources.
+// It kills the sandbox process, removes the temporary .wsb config file,
+// and cleans up any shared folder artifacts.
 func (h *WindowsSandboxHandle) Stop(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.proc != nil && h.proc.Process != nil {
 		_ = h.proc.Process.Kill()
+		_ = h.proc.Process.Release()
+	}
+
+	// Clean up the temporary .wsb config file.
+	if h.configPath != "" {
+		os.Remove(h.configPath)
+		h.configPath = ""
+	}
+
+	// Clean up shared folder artifacts.
+	if h.sandboxDir != "" {
+		os.Remove(h.sandboxDir + "\\command.txt")
+		os.Remove(h.sandboxDir + "\\result.txt")
+		os.Remove(h.sandboxDir + "\\log.txt")
 	}
 
 	h.status = StatusStopped
@@ -267,29 +374,4 @@ func sanitizeXML(s string) string {
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	return s
-}
-
-// setupSandboxEnvironment prepares the Windows Sandbox environment.
-// In production, this would:
-// 1. Generate WSConfig.xml
-// 2. Set up temporary workspace
-// 3. Launch Microsoft.WindowsSandbox.exe
-func (h *WindowsSandboxHandle) setupSandboxEnvironment() error {
-	// Create sandbox directory if needed
-	if h.sandboxDir != "" {
-		if err := os.MkdirAll(h.sandboxDir, 0755); err != nil {
-			return fmt.Errorf("create sandbox directory: %w", err)
-		}
-	}
-
-	// Generate WSConfig.xml (production: write to temp file)
-	config, err := h.generateWSConfig()
-	if err != nil {
-		return fmt.Errorf("generate WSConfig.xml: %w", err)
-	}
-
-	// Log config (production: write to file)
-	_ = config
-
-	return nil
 }
