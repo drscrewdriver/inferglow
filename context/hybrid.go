@@ -678,6 +678,33 @@ func (h *HybridManager) decayTolerance() {
 	}
 }
 
+// UpdateCacheBudget adjusts the sweet-spot threshold based on actual
+// cached_tokens reported by the LLM provider. When cachedTokens > 0,
+// the sweet spot is raised to protect the cached prefix from decay.
+// The increase is capped at 1.5× the original sweet-spot value to
+// prevent window pressure. This is an additive-only method; the
+// ContextManager interface is not changed.
+func (h *HybridManager) UpdateCacheBudget(cachedTokens int) {
+	if cachedTokens <= 0 {
+		return
+	}
+	h.toleranceMu.Lock()
+	defer h.toleranceMu.Unlock()
+
+	effective := cachedTokens + h.estimateTotalTokens()
+	cap := int(float64(h.sweetSpotOriginal) * 1.5)
+	if effective > cap {
+		effective = cap
+	}
+	if effective > h.sweetSpotTokens {
+		h.sweetSpotTokens = effective
+		// Also raise tolerance so decayTolerance starts from the new level.
+		if h.sweetSpotOriginal > 0 {
+			h.sweetSpotTolerance = float64(effective) / float64(h.sweetSpotOriginal)
+		}
+	}
+}
+
 // Close releases resources.
 func (h *HybridManager) Close() error {
 	return nil
