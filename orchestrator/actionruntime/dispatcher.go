@@ -126,3 +126,99 @@ func (d *ActionDispatcher) Execute(ctx context.Context, calls []ActionCall) []*a
 	wg.Wait()
 	return results
 }
+
+// ExecuteInterruptible runs all ActionCalls concurrently but observes
+// preemptCh for cancellation. When preemptCh is closed, the context is
+// cancelled, already-completed results are collected, and the method
+// returns (results, true). If all calls complete without preemption,
+// returns (results, false).
+//
+// The caller should pass a context that tools respect (ctx.Done()).
+func (d *ActionDispatcher) ExecuteInterruptible(
+	ctx context.Context,
+	calls []ActionCall,
+	preemptCh <-chan struct{},
+) ([]*action.ActionResult, bool) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make([]*action.ActionResult, len(calls))
+	var wg sync.WaitGroup
+	var preempted bool
+	done := make(chan struct{})
+
+	wg.Add(len(calls))
+	for i, call := range calls {
+		go func(idx int, c ActionCall) {
+			defer wg.Done()
+			start := time.Now()
+
+			defer func() {
+				if r := recover(); r != nil {
+					results[idx] = &action.ActionResult{
+						OK:     false,
+						Status: "panic",
+						Error:  fmt.Sprintf("panic: %v", r),
+					}
+					if d.auditHook != nil {
+						entry := &audit.AuditEntry{
+							Timestamp: start,
+							Source:    "action",
+							Action:    "execute",
+							Input:     c,
+							Output:    results[idx],
+							Duration:  time.Since(start),
+							Metadata:  map[string]string{"action_name": c.Name},
+							Error:     fmt.Sprintf("panic: %v", r),
+						}
+						_, _ = d.auditHook.Append(entry)
+					}
+				}
+			}()
+
+			result, err := d.registry.Execute(ctx, c.Name, c.Params)
+			duration := time.Since(start)
+			if err != nil {
+				results[idx] = &action.ActionResult{
+					OK:     false,
+					Status: "error",
+					Error:  err.Error(),
+				}
+			} else {
+				results[idx] = result
+			}
+			if d.auditHook != nil {
+				entry := &audit.AuditEntry{
+					Timestamp: start,
+					Source:    "action",
+					Action:    "execute",
+					Input:     c,
+					Output:    results[idx],
+					Duration:  duration,
+					Metadata:  map[string]string{"action_name": c.Name},
+				}
+				if err != nil {
+					entry.Error = err.Error()
+				}
+				_, _ = d.auditHook.Append(entry)
+			}
+		}(i, call)
+	}
+
+	// Wait for either all calls to complete or preemption.
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// All calls completed normally.
+	case <-preemptCh:
+		preempted = true
+		cancel() // Cancel remaining tools.
+		wg.Wait() // Collect completed results.
+	}
+
+	return results, preempted
+}
