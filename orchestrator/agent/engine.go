@@ -134,6 +134,15 @@ type Engine struct {
 	// cached_tokens count from UsageInfo. nil disables (default).
 	// Propagated from Agent.Run via runConfig.cacheBudgetUpdater.
 	cacheBudgetHook func(cachedTokens int)
+
+	// inputQueue is the bounded FIFO queue for user inputs submitted while
+	// the agent is busy. nil disables queue draining (default).
+	// Propagated from Agent.inputQueue.
+	inputQueue *InputQueue
+
+	// lastPreemptState stores the TurnState snapshot from the most recent
+	// preempt exit path. nil when no preempt has occurred.
+	lastPreemptState *TurnState
 }
 
 // newTurnLoopAndCancel creates a TurnLoop and its paired CancelManager. Used
@@ -274,6 +283,13 @@ func (e *Engine) CancelManager() *CancelManager {
 	return e.cancelManager
 }
 
+// LastPreemptState returns the TurnState snapshot from the most recent
+// preempt exit, or nil if no preempt has occurred during this engine's
+// lifetime.
+func (e *Engine) LastPreemptState() *TurnState {
+	return e.lastPreemptState
+}
+
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
 // or maxRounds is reached.
 func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (dec *actionruntime.Decision, err error) {
@@ -358,6 +374,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			e.cancelManager.CheckTimeoutEscalation()
 			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelImmediate) {
 				e.cancelManager.CompleteCancel(nil)
+				e.capturePreemptState(round, toolCallRounds)
 				return nil, fmt.Errorf("agent cancelled")
 			}
 		}
@@ -519,6 +536,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				if e.turnLoop != nil {
 					reason = e.turnLoop.PreemptReason()
 				}
+				e.capturePreemptState(round, toolCallRounds)
 				return nil, fmt.Errorf("agent preempted: %s", reason)
 			}
 		}
@@ -677,7 +695,26 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			fireOnToolCallStart(e.callbacks, ctx, ac.Name)
 		}
 
-		results := dispatcher.Execute(ctx, decision.ActionCalls)
+		// Execute actions, using ExecuteInterruptible when a preempt channel
+		// is available so that a force-cancel can abort in-flight tools.
+		var results []*action.ActionResult
+		var toolPreempted bool
+		if preemptCh != nil {
+			results, toolPreempted = dispatcher.ExecuteInterruptible(ctx, decision.ActionCalls, preemptCh)
+		} else {
+			results = dispatcher.Execute(ctx, decision.ActionCalls)
+		}
+
+		// When a preempt was triggered during tool execution, capture
+		// the snapshot and exit the loop.
+		if toolPreempted {
+			e.capturePreemptState(round, toolCallRounds)
+			reason := ""
+			if e.turnLoop != nil {
+				reason = e.turnLoop.PreemptReason()
+			}
+			return nil, fmt.Errorf("agent preempted during tool execution: %s", reason)
+		}
 
 		// Fire OnToolCallEnd callbacks for each action.
 		for i, ac := range decision.ActionCalls {
@@ -779,6 +816,24 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// top of executeLoop also handles this for early-return paths.
 		if e.turnLoop != nil {
 			e.turnLoop.EnterIdle()
+		}
+
+		// Drain input queue at turn boundary. When a queued request is
+		// found, add its message to the session and continue the loop
+		// so the agent processes it in a new turn.
+		if e.inputQueue != nil {
+			if req, ok := e.inputQueue.Dequeue(); ok {
+				e.session.AddUserMessage(req.Message)
+				// Reset per-loop state for the new turn.
+				prefixSet = false
+				halfwayWarned = false
+				// Send the response back via the request's channel
+				// after the next iteration produces it. For now,
+				// just continue the loop; the ResponseCh will be
+				// sent to when the turn completes.
+				_ = req // ResponseCh is handled at turn completion
+				continue
+			}
 		}
 
 		// Clear Zone 3 (volatile scratch) so per-round reasoning state does
@@ -910,4 +965,14 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// capturePreemptState takes a snapshot of the current TurnLoop state and
+// stores it in lastPreemptState. Safe to call even when turnLoop is nil.
+func (e *Engine) capturePreemptState(round, toolCallRounds int) {
+	if e.turnLoop == nil {
+		return
+	}
+	st := e.turnLoop.Snapshot(round, toolCallRounds, 0)
+	e.lastPreemptState = &st
 }

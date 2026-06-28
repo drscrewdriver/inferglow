@@ -137,6 +137,9 @@ type Agent struct {
 	// cacheBudgetUpdater receives cached_tokens feedback from LLM responses
 	// and adjusts context management sweet-spot thresholds. nil disables.
 	cacheBudgetUpdater CacheBudgetUpdater
+	// inputQueue is the bounded FIFO queue for user inputs submitted while
+	// the agent is busy. nil disables queue mode (default).
+	inputQueue *InputQueue
 }
 
 // RunOption configures Agent.Run behavior.
@@ -375,6 +378,10 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 		a.engine.cacheBudgetHook = nil
 	}
 
+	// Propagate the input queue to the engine so executeLoop can drain it
+	// at turn boundaries.
+	a.engine.inputQueue = a.inputQueue
+
 	// Propagate the PII masker to the session so that AddUserMessage
 	// (called inside executeLoop) redacts input via MaskInput. Only set
 	// when a masker is configured and PIIMasking is enabled; this
@@ -469,4 +476,53 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	}
 
 	return handler(ctx, userMessage)
+}
+
+// SetInputQueue installs an InputQueue on the Agent for queue-mode input.
+// When set, SubmitInput can enqueue messages while the agent is busy.
+func (a *Agent) SetInputQueue(q *InputQueue) {
+	a.inputQueue = q
+}
+
+// SubmitInput submits user input to the agent. If the agent is idle, it runs
+// immediately via Run. If busy, the request is enqueued according to mode:
+//   - PreemptQueue: enqueue without cancellation
+//   - PreemptSafePoint: enqueue and issue a safe-point cancel
+//   - PreemptForce: enqueue and issue an immediate cancel
+//
+// The returned channel receives the result once the agent processes the input.
+// The caller blocks on the channel; for async usage, wrap in a goroutine.
+func (a *Agent) SubmitInput(ctx context.Context, msg string, mode PreemptMode) (<-chan InputResponse, error) {
+	ch := make(chan InputResponse, 1)
+
+	// If the agent is idle, run directly in a goroutine.
+	if a.engine.turnLoop != nil && a.engine.turnLoop.Phase() == TurnPhaseIdle {
+		go func() {
+			resp, err := a.Run(ctx, msg)
+			ch <- InputResponse{Response: resp, Error: err}
+		}()
+		return ch, nil
+	}
+
+	// Agent is busy — enqueue.
+	if a.inputQueue == nil {
+		return nil, errors.New("agent: input queue not configured; call SetInputQueue first")
+	}
+
+	req := InputRequest{
+		Message:    msg,
+		Mode:       mode,
+		ResponseCh: ch,
+		Ctx:        ctx,
+	}
+	if err := a.inputQueue.Enqueue(req); err != nil {
+		return nil, err
+	}
+
+	// For non-queue modes, issue the cancel now.
+	if mode != PreemptQueue && a.engine.cancelManager != nil {
+		a.engine.cancelManager.CancelWithMode(mode, "user input: "+mode.String())
+	}
+
+	return ch, nil
 }

@@ -27,12 +27,42 @@ package cancel
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/inferglow/orchestrator/agent/internal/turnloop"
 )
+
+// PreemptMode specifies how user input should interrupt a running agent.
+type PreemptMode int
+
+const (
+	// PreemptQueue waits for the current turn to complete, then processes
+	// the new input in the next turn. No cancel is issued.
+	PreemptQueue PreemptMode = iota
+	// PreemptSafePoint interrupts at the next planning-phase boundary,
+	// preserving the current state.
+	PreemptSafePoint
+	// PreemptForce terminates the current execution immediately and
+	// starts a new turn.
+	PreemptForce
+)
+
+// String returns a human-readable representation of the preempt mode.
+func (m PreemptMode) String() string {
+	switch m {
+	case PreemptQueue:
+		return "queue"
+	case PreemptSafePoint:
+		return "safe_point"
+	case PreemptForce:
+		return "force"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(m))
+	}
+}
 
 // CancelMode specifies when an agent should be canceled. Modes can be
 // combined with bitwise OR so that whichever safe-point is reached first
@@ -103,11 +133,13 @@ func (h *CancelHandle) Wait() error {
 // cancelRequest is the internal representation of a cancel request, created by
 // CancelManager.Cancel and consumed by the executeLoop at safe-points.
 type cancelRequest struct {
-	mode      CancelMode
-	recursive bool
-	timeout   time.Duration
-	done      chan struct{}
-	err       error
+	mode        CancelMode
+	preemptMode PreemptMode
+	recursive   bool
+	timeout     time.Duration
+	reason      string
+	done        chan struct{}
+	err         error
 }
 
 // CancelManager coordinates cancel requests with the executeLoop. The
@@ -137,6 +169,7 @@ type CancelOption func(*cancelConfig)
 type cancelConfig struct {
 	recursive bool
 	timeout   time.Duration
+	reason    string
 }
 
 // WithRecursive opts into propagating the cancel to child agents.
@@ -151,6 +184,14 @@ func WithRecursive() CancelOption {
 func WithCancelTimeout(d time.Duration) CancelOption {
 	return func(c *cancelConfig) {
 		c.timeout = d
+	}
+}
+
+// WithReason attaches a human-readable reason string to a cancel request.
+// The reason is stored on the cancelRequest and can be used for diagnostics.
+func WithReason(reason string) CancelOption {
+	return func(c *cancelConfig) {
+		c.reason = reason
 	}
 }
 
@@ -169,10 +210,12 @@ func (m *CancelManager) Cancel(mode CancelMode, opts ...CancelOption) *CancelHan
 	}
 
 	req := &cancelRequest{
-		mode:      mode,
-		recursive: cfg.recursive,
-		timeout:   cfg.timeout,
-		done:      make(chan struct{}),
+		mode:        mode,
+		preemptMode: 0, // set by CancelWithMode when applicable
+		recursive:   cfg.recursive,
+		timeout:     cfg.timeout,
+		reason:      cfg.reason,
+		done:        make(chan struct{}),
 	}
 	h := &CancelHandle{done: req.done, req: req}
 
@@ -261,6 +304,27 @@ func (m *CancelManager) HasPendingCancel() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.activeReq != nil
+}
+
+// CancelWithMode maps a PreemptMode to the appropriate CancelMode and
+// issues the cancel. PreemptQueue is a no-op here — the caller (InputQueue)
+// handles enqueueing without cancelling.
+func (m *CancelManager) CancelWithMode(mode PreemptMode, reason string) {
+	switch mode {
+	case PreemptQueue:
+		// No cancel; the InputQueue drains at the turn boundary.
+		return
+	case PreemptSafePoint:
+		h := m.Cancel(CancelAfterChatModel|CancelAfterToolCalls, WithReason(reason))
+		if h.req != nil {
+			h.req.preemptMode = PreemptSafePoint
+		}
+	case PreemptForce:
+		h := m.Cancel(CancelImmediate, WithReason(reason))
+		if h.req != nil {
+			h.req.preemptMode = PreemptForce
+		}
+	}
 }
 
 // CheckTimeoutEscalation upgrades the active cancel to CancelImmediate if a

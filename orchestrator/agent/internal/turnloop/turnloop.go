@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // TurnPhase represents the current state of an agent's turn loop.
@@ -185,5 +186,33 @@ func (l *TurnLoop) Reset() {
 	if l.preemptCh != nil {
 		close(l.preemptCh)
 		l.preemptCh = nil
+	}
+}
+
+// TurnState is a point-in-time snapshot of the TurnLoop metadata. It is
+// used for diagnostics and post-preempt analysis. Shallow copy only — no
+// session history is included.
+type TurnState struct {
+	Phase          TurnPhase
+	Round          int
+	ToolCallRounds int
+	MessageCount   int
+	PreemptReason  string
+	Timestamp      time.Time
+}
+
+// Snapshot returns a thread-safe snapshot of the current TurnLoop state.
+// The caller-supplied counters (round, toolCallRounds, messageCount) are
+// captured as-is; pass zero values if not available.
+func (l *TurnLoop) Snapshot(round, toolCallRounds, messageCount int) TurnState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return TurnState{
+		Phase:          l.phase,
+		Round:          round,
+		ToolCallRounds: toolCallRounds,
+		MessageCount:   messageCount,
+		PreemptReason:  l.preemptReason,
+		Timestamp:      time.Now(),
 	}
 }

@@ -53,3 +53,6 @@ type TurnLoop = turnloop.TurnLoop
 
 // NewTurnLoop creates a TurnLoop starting in the TurnPhaseIdle phase.
 var NewTurnLoop = turnloop.NewTurnLoop
+
+// TurnState is a point-in-time snapshot of the TurnLoop metadata.
+type TurnState = turnloop.TurnState

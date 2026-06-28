@@ -409,3 +409,76 @@ func TestCancelManager_NilTurnLoop(t *testing.T) {
 		t.Fatalf("expected no pending cancel after CompleteCancel")
 	}
 }
+
+// TestPreemptMode_String verifies the String method for each PreemptMode.
+func TestPreemptMode_String(t *testing.T) {
+	cases := []struct {
+		mode PreemptMode
+		want string
+	}{
+		{PreemptQueue, "queue"},
+		{PreemptSafePoint, "safe_point"},
+		{PreemptForce, "force"},
+	}
+	for _, c := range cases {
+		if got := c.mode.String(); got != c.want {
+			t.Errorf("PreemptMode(%d).String() = %q, want %q", int(c.mode), got, c.want)
+		}
+	}
+}
+
+// TestCancelWithMode_Queue verifies that CancelWithMode(PreemptQueue) is a
+// no-op — no cancel request is created.
+func TestCancelWithMode_Queue(t *testing.T) {
+	tl := turnloop.NewTurnLoop()
+	m := NewCancelManager(tl)
+
+	m.CancelWithMode(PreemptQueue, "test")
+
+	if m.HasPendingCancel() {
+		t.Errorf("PreemptQueue should not create a cancel request")
+	}
+}
+
+// TestCancelWithMode_SafePoint verifies that CancelWithMode(PreemptSafePoint)
+// creates a cancel with CancelAfterChatModel|CancelAfterToolCalls.
+func TestCancelWithMode_SafePoint(t *testing.T) {
+	tl := turnloop.NewTurnLoop()
+	m := NewCancelManager(tl)
+
+	m.CancelWithMode(PreemptSafePoint, "safe test")
+
+	if !m.HasPendingCancel() {
+		t.Fatalf("PreemptSafePoint should create a cancel request")
+	}
+	if !m.CheckCancel(CancelAfterChatModel) {
+		t.Errorf("expected CheckCancel(CancelAfterChatModel) true")
+	}
+	if !m.CheckCancel(CancelAfterToolCalls) {
+		t.Errorf("expected CheckCancel(CancelAfterToolCalls) true")
+	}
+	m.CompleteCancel(nil)
+}
+
+// TestCancelWithMode_Force verifies that CancelWithMode(PreemptForce) creates
+// a CancelImmediate and preempts the TurnLoop.
+func TestCancelWithMode_Force(t *testing.T) {
+	tl := turnloop.NewTurnLoop()
+	m := NewCancelManager(tl)
+
+	// Enter planning so preempt is valid.
+	_ = tl.EnterPlanning()
+
+	m.CancelWithMode(PreemptForce, "force test")
+
+	if !m.HasPendingCancel() {
+		t.Fatalf("PreemptForce should create a cancel request")
+	}
+	if !m.CheckCancel(CancelImmediate) {
+		t.Errorf("expected CheckCancel(CancelImmediate) true")
+	}
+	if !tl.IsPreempted() {
+		t.Errorf("expected TurnLoop to be preempted")
+	}
+	m.CompleteCancel(nil)
+}

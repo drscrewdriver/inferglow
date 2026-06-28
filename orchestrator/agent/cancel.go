@@ -69,3 +69,18 @@ var WithRecursive = cancel.WithRecursive
 // WithCancelTimeout sets a grace period before a safe-point cancel escalates
 // to CancelImmediate.
 var WithCancelTimeout = cancel.WithCancelTimeout
+
+// WithReason attaches a human-readable reason to a cancel request.
+var WithReason = cancel.WithReason
+
+// PreemptMode specifies how user input should interrupt a running agent.
+type PreemptMode = cancel.PreemptMode
+
+const (
+	// PreemptQueue waits for the current turn to complete.
+	PreemptQueue = cancel.PreemptQueue
+	// PreemptSafePoint interrupts at the next planning-phase boundary.
+	PreemptSafePoint = cancel.PreemptSafePoint
+	// PreemptForce terminates immediately.
+	PreemptForce = cancel.PreemptForce
+)
