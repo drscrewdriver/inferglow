@@ -1,7 +1,7 @@
 # InferGlow 系统分析文档
 
 > 本文档系列对 InferGlow 项目（`github.com/inferglow/*`）进行完整的系统分析，覆盖模块职责、核心类型、函数调用逻辑、模块间调用关系与关键调用链。
-> 所有内容基于实际源码（截至 2026-07-22）梳理，不依赖外部推测。
+> 所有内容基于实际源码（截至 2026-07-30）梳理，不依赖外部推测。
 
 ## 文档索引
 
@@ -24,21 +24,44 @@
 
 ## 模块速查表
 
+22 个独立 Go module，按依赖深度分为三层。
+
+### 基础层 — 13 个模块，零内部依赖
+
 | 模块 | 路径 | 职责 | 依赖 |
 |------|------|------|------|
-| `model` | `github.com/inferglow/model` | LLM Provider 统一抽象 | 无（仅 stdlib + yaml） |
-| `schema` | `github.com/inferglow/schema` | 契约优先 Schema 引擎 | `model` |
-| `flow` | `github.com/inferglow/flow` | 步骤编排引擎 | `schema` |
-| `action` | `github.com/inferglow/action` | Action Runtime（含 MCP） | `sandbox`（仅 SandboxExecutor） |
-| `session` | `github.com/inferglow/session` | 对话记忆管理 | 无 |
-| `sandbox` | `github.com/inferglow/sandbox` | 沙箱执行框架（7 种后端） | 无 |
-| `audit` | `github.com/inferglow/audit` | 链表式审计链 | 无 |
-| `security` | `github.com/inferglow/security` | PII / 注入 / 限流 / RBAC | 无 |
-| `observability` | `github.com/inferglow/observability` | OpenTelemetry 集成 | 无 |
-| `workspace` | `github.com/inferglow/workspace` | 工作区文件操作（血缘追踪为独立可选组件） | 无 |
-| `orchestrator` | `github.com/inferglow/orchestrator` | Agent 编排层（上层胶水） | `action` `audit` `model` `security` `session` `sandbox` |
-| `components` | `github.com/inferglow/components` | Prompt/Tool 通用接口 | 无 |
-| `builtins` | `github.com/inferglow/builtins` | 内置 Action/Policy/Tool | 无 |
+| `model` | `github.com/inferglow/model` | LLM Provider 统一抽象 (~8000 LOC) | 无 |
+| `schema` | `github.com/inferglow/schema` | 契约优先 Schema 引擎 (~2800 LOC) | 无 |
+| `session` | `github.com/inferglow/session` | 对话记忆管理 (~1800 LOC) | 无 |
+| `sandbox` | `github.com/inferglow/sandbox` | 沙箱执行框架 · 8 种后端 (~6300 LOC) | 无 |
+| `context` | `github.com/inferglow/context` | 上下文管理引擎 · 三区压缩+缓存预算 (~6300 LOC) | 无 |
+| `audit` | `github.com/inferglow/audit` | 链表式审计链 (~1100 LOC) | 无 |
+| `approval` | `github.com/inferglow/approval` | HITL 审批 (~700 LOC) | 无 |
+| `rag` | `github.com/inferglow/rag` | RAG 管道 · 6 种加载器 (~1500 LOC) | 无 |
+| `rerank` | `github.com/inferglow/rerank` | 重排序 · Cohere/LLM/Fallback (~500 LOC) | 无 |
+| `observability` | `github.com/inferglow/observability` | OpenTelemetry 集成 (~700 LOC) | 无 |
+| `workspace` | `github.com/inferglow/workspace` | 工作区文件操作 (~1200 LOC) | 无 |
+| `resource` | `github.com/inferglow/resource` | 资源管理 (~750 LOC) | 无 |
+| `server` | `github.com/inferglow/server` | REST API 服务 (~700 LOC) | 无 |
+
+### 中间层 — 5 个模块，依赖基础层
+
+| 模块 | 路径 | 职责 | 依赖 |
+|------|------|------|------|
+| `components` | `github.com/inferglow/components` | Prompt/Tool 通用接口 (~400 LOC) | `model` |
+| `flow` | `github.com/inferglow/flow` | DAG 编排引擎 (~6100 LOC) | `schema` |
+| `action` | `github.com/inferglow/action` | Action Runtime (~2900 LOC) | `approval`, `sandbox` |
+| `mcpserver` | `github.com/inferglow/mcpserver` | MCP 协议服务 · 三传输 (~850 LOC) | `action` |
+| `builtins` | `github.com/inferglow/builtins` | 内置 Action/Policy/Tool (~2200 LOC) | `action` |
+
+### 编排层 — 4 个模块，聚合中间层+基础层
+
+| 模块 | 路径 | 职责 | 依赖 |
+|------|------|------|------|
+| `orchestrator` | `github.com/inferglow/orchestrator` | Agent 编排层 · 用户入口 (~7700 LOC) | `action` `audit` `flow` `model` `observability` `session` |
+| `security` | `github.com/inferglow/security` | PII / 注入 / 限流 / RBAC (~2000 LOC) | `session` `orchestrator`（接口注入） |
+| `eval` | `github.com/inferglow/eval` | 离线评估框架 (~750 LOC) | `model` `session` `action` `orchestrator` |
+| `examples` | `github.com/inferglow/examples` | 示例代码 (~2800 LOC) | 多模块 |
 
 ## 术语约定
 

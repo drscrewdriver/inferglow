@@ -2,7 +2,7 @@
 
 ## 一、分层架构
 
-InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 8 个独立子模块组成（model / schema / flow / action / session / sandbox / resource / approval），编排层（orchestrator）把它们粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
+InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 22 个独立 Go module 组成，按依赖深度分为三层：基础层（13 个零依赖模块）、中间层（5 个依赖基础层的模块）、编排层（4 个聚合模块）。编排层（orchestrator）把基础模块粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 ┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
 │   schema        │      │   sandbox        │      │   audit          │
 │   契约校验引擎   │      │   沙箱执行框架    │      │   链表式审计链    │
-│   泛型推导        │      │   7 种后端        │      │   SHA-256 哈希链  │
+│   泛型推导        │      │   8 种后端        │      │   SHA-256 哈希链  │
 └─────────────────┘      └──────────────────┘      └──────────────────┘
 
 ┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
@@ -79,6 +79,18 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 │  执行资源生命    │      │  策略审批框架     │
 │  周期管理        │      │  可插拔 Handler  │
 └─────────────────┘      └──────────────────┘
+
+┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│   context       │      │   eval           │      │   mcpserver      │
+│  上下文管理引擎   │      │  离线评估框架     │      │  MCP 三传输服务    │
+│  三区+缓存预算   │      │  ScriptedProvider│      │  stdio/SSE/HTTP  │
+└─────────────────┘      └──────────────────┘      └──────────────────┘
+
+┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│   server        │      │   rag            │      │   rerank         │
+│  REST API 服务   │      │  RAG 管道        │      │  重排序服务       │
+│  Agent HTTP 托管 │      │  6种加载+3种分割  │      │  Cohere/LLM/降级  │
+└─────────────────┘      └──────────────────┘      └──────────────────┘
 ```
 
 ## 二、模块依赖关系图
@@ -134,24 +146,27 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 
 | 模块 | 直接依赖（inferglow 内部） |
 |------|---------------------------|
-| `orchestrator` | `action` `audit` `flow` `model` `observability` `session`（子包 recordstore/taskcontext/taskdag/skill/blocks 在模块内部） |
-| `orchestrator/agent` | `flow` 的 Step-based API（Flow, Step, Execution）+ FlowContext.RunAgent/RunAgentParallel（Step 内嵌 Agent 多轮循环） |
-| `orchestrator/taskdag` | `flow` 的 Step-based API（FlowBuilder → Flow） |
-| `orchestrator/blocks` | `flow` 的 Signal-driven API（Operator, OpResultSink, OpMatchRoute） |
-| `schema` | `model` |
+| `orchestrator` | `action` `audit` `flow` `model` `observability` `session`（`security` 已解耦为接口注入；`sandbox` 通过 `with_sandbox` build tag 可选；子包 recordstore/taskcontext/taskdag/skill/blocks 在模块内部） |
+| `context` | 无（完全独立，通过接口与 session 交互） |
+| `security` | `session` `orchestrator`（仅 `sessionhook`/`agenthook` 子包实现接口契约） |
+| `eval` | `model` `session` `action` `orchestrator` |
+| `server` | 无（完全独立，仅引用自身子包） |
+| `mcpserver` | `action` |
+| `builtins` | `action` |
+| `schema` | 无 |
 | `flow` | `schema` |
-| `action` | `sandbox`（仅 `executor_sandbox.go` 一个文件） |
+| `action` | `approval` `sandbox`（`sandbox` 通过 build tag 可选） |
 | `model` | 无 |
 | `session` | 无 |
 | `sandbox` | 无 |
 | `audit` | 无 |
-| `security` | 无 |
 | `observability` | 无 |
 | `workspace` | 无 |
-| `resource` | 无（独立 Go module，无 inferglow 内部依赖） |
-| `approval` | 无（独立 Go module，无 inferglow 内部依赖） |
-| `components` | 无 |
-| `builtins` | 无 |
+| `resource` | 无 |
+| `approval` | 无 |
+| `rag` | 无 |
+| `rerank` | 无 |
+| `components` | `model` |
 
 > **注**：`resource` 和 `approval` 是独立 Go module（各有自己的 `go.mod`），不依赖任何 inferglow 内部模块。它们通过 `orchestrator/agent` 的 `AgentExtensions` 可选注入，零注入 = 零变化 = 向后兼容。
 
@@ -290,19 +305,25 @@ inferglow/
 ├── action/go.mod               module github.com/inferglow/action
 ├── session/go.mod              module github.com/inferglow/session
 ├── sandbox/go.mod              module github.com/inferglow/sandbox
+├── context/go.mod              module github.com/inferglow/context    (V6: 从 session/ 拆出)
 ├── audit/go.mod                module github.com/inferglow/audit
 ├── security/go.mod             module github.com/inferglow/security
 ├── observability/go.mod        module github.com/inferglow/observability
 ├── workspace/go.mod            module github.com/inferglow/workspace
-├── resource/go.mod             module github.com/inferglow/resource    (新增: 执行资源管理)
-├── approval/go.mod             module github.com/inferglow/approval    (新增: 策略审批框架)
+├── resource/go.mod             module github.com/inferglow/resource
+├── approval/go.mod             module github.com/inferglow/approval
+├── rag/go.mod                  module github.com/inferglow/rag
+├── rerank/go.mod               module github.com/inferglow/rerank
 ├── orchestrator/go.mod         module github.com/inferglow/orchestrator
+├── server/go.mod               module github.com/inferglow/server     (V6: REST API)
+├── mcpserver/go.mod            module github.com/inferglow/mcpserver  (V6: MCP 三传输)
+├── eval/go.mod                 module github.com/inferglow/eval       (V6: 离线评估)
 ├── components/go.mod           module github.com/inferglow/components
 ├── builtins/go.mod             module github.com/inferglow/builtins
 └── examples/go.mod             module github.com/inferglow/examples
 ```
 
-> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），子模块各自独立。`orchestrator/go.mod` 通过 6 条 `replace` 指令把基础模块指向本地 `../` 路径。`resource/` 和 `approval/` 是独立 Go module，无 inferglow 内部依赖。
+> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），22 个子模块各自独立。`orchestrator/go.mod` 通过 `replace` 指令把基础模块指向本地 `../` 路径。`context/` 是 V6 从 `session/contextmgr` 拆出的独立模块。`eval/`、`server/`、`mcpserver/` 是 V6 第三梯队新增。
 
 ## 六、与旧版 ARCHITECTURE.md 的差异
 

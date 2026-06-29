@@ -8,39 +8,62 @@ Go 生态缺乏一个对标 Agently 设计理念的框架：**契约优先、可
 
 ## 架构概览
 
+InferGlow 采用 **22 个独立 Go module** 的细粒度架构，按依赖深度自然形成三层结构。
+
 ```mermaid
 graph TD
-    ORCH(["orchestrator 编排层<br/>Agent · PLAN-EXECUTE · ActionDispatcher"])
+    subgraph foundation["基础层 — 12 个模块，零内部依赖"]
+        MODEL["model<br/>~8000 LOC"]
+        SCHEMA["schema<br/>~2800 LOC"]
+        SESS["session<br/>~1800 LOC"]
+        SANDBOX["sandbox<br/>~6300 LOC"]
+        CTX["context<br/>~6300 LOC"]
+        AUDIT["audit<br/>~1100 LOC"]
+        APPROVAL["approval<br/>~700 LOC"]
+        RAG["rag<br/>~1500 LOC"]
+        RERANK["rerank<br/>~500 LOC"]
+        OBS["observability<br/>~700 LOC"]
+        WS["workspace<br/>~1200 LOC"]
+        RESOURCE["resource<br/>~750 LOC"]
+    end
 
-    SESS["session<br/>对话记忆管理"]
-    ACT["action<br/>Action Runtime"]
-    MODEL["model<br/>LLM Provider"]
-    AUDIT["audit<br/>审计链"]
-    SCHEMA["schema<br/>契约校验"]
-    FLOW["flow<br/>编排引擎"]
+    subgraph mid["中间层 — 6 个模块，依赖基础层"]
+        COMP["components<br/>→ model"]
+        FLOW["flow<br/>→ schema"]
+        ACT["action<br/>→ approval, sandbox"]
+        MCPSERVER["mcpserver<br/>→ action"]
+        BUILTINS["builtins<br/>→ action"]
+        SERVER["server<br/>~3100 LOC<br/>→ flow, trigger/"]
+    end
 
-    SANDBOX["sandbox<br/>沙箱执行框架"]
-    SECURITY["security<br/>PII / 注入 / 限流 / RBAC"]
-    OBS["observability<br/>OpenTelemetry"]
-    WS["workspace<br/>工作区文件操作"]
+    subgraph orch["编排层 — 4 个模块，聚合中间层+基础层"]
+        ORCH["orchestrator<br/>→ action,audit,flow,model,observability,session"]
+        SECURITY["security<br/>→ orchestrator,session (接口注入)"]
+        EVAL["eval<br/>→ action,model,orchestrator,session"]
+        EXAMPLES["examples<br/>→ 多模块"]
+    end
 
-    %% 直接依赖（实线）
-    ORCH --> SESS
+    %% 中间层 → 基础层
+    COMP --> MODEL
+    FLOW --> SCHEMA
+    ACT --> APPROVAL
+    ACT -.->|"with_sandbox"| SANDBOX
+    MCPSERVER --> ACT
+    BUILTINS --> ACT
+
+    %% 编排层 → 中间层+基础层
     ORCH --> ACT
+    ORCH --> SESS
     ORCH --> MODEL
     ORCH --> AUDIT
     ORCH --> FLOW
-    FLOW --> SCHEMA
-
-    %% 可选依赖（虚线）
-    ACT -.->|"with_sandbox tag"| SANDBOX
-    SECURITY -.->|"sessionhook → MessageHook"| SESS
-    SECURITY -.->|"agenthook → PIIMasker / OutputHook"| ORCH
-    OBS -.-> ORCH
-    WS -.-> SANDBOX
+    ORCH --> OBS
+    SECURITY -.->|"接口注入"| SESS
+    SECURITY -.->|"接口注入"| ORCH
+    EVAL --> MODEL
+    EVAL --> ORCH
+    SERVER --> FLOW
 ```
-
-> **实线** = 编译时直接依赖　|　**虚线** = 可选依赖（build tag / 接口注入）
 
 ## 可插拔架构 (Pluggable Architecture)
 
@@ -144,168 +167,287 @@ exec := action.NewSandboxExecutor(action.SandboxExecutorConfig{
 
 ## 模块列表
 
-### Layer 1: model — LLM Provider 统一抽象层
+22 个独立 Go module，按依赖深度分为三层。总代码量约 62,000 行（不含测试）。
+
+### 基础层 — 12 个模块，零内部依赖
+
+#### model — LLM Provider 统一抽象层 (~8000 LOC)
 
 提供统一的 LLM Provider 抽象，屏蔽不同模型供应商（OpenAI、Anthropic、Ollama 等）的 API 差异。
 
 - **模块路径**: `github.com/inferglow/model`
 - **依赖**: 无（仅 stdlib + yaml.v3）
-- **核心类型**: `ModelRequest`, `ModelResponse`, `StreamChunk`, `ModelRequester`
-- **Schema 校验**: `BuildJSONSchemaFromOutput`（L1/L2 json_schema 生成）、`OutputValidator`（L4 后置 JSON 结构校验 + 重试）
-- **Provider 实现**: OpenAICompatibleProvider, AnthropicCompatibleProvider, OllamaProvider, OpenAIResponsesProvider（OpenAI Responses API `/responses` 端点）
-- **URL 解析**: `ResolveURL` — 支持 `full_url` 配置项完全覆盖 `base_url + default_path` 拼接
-- **非标字段映射**: `ContentMapping` + `ExtractByPath` — 从非标准 SSE JSON 路径提取 delta/reasoning（如 `choices[0].delta.reasoning_content`）
-- **流式 `<think>` 归一化**: `LeadingThinkNormalizer` — 三态状态机（unknown/reasoning/answer），流式分离 `<think>...</think>` 推理内容与正式回答，支持分块缓冲与大小写不敏感匹配
+- **核心类型**: `ModelRequest`, `ModelResponse`, `StreamChunk`, `ModelRequester`, `StreamRequester`
+- **Provider 实现**: OpenAICompatible, AnthropicCompatible, Ollama, OpenAIResponses（`/responses` 端点）
+- **Schema 校验**: `BuildJSONSchemaFromOutput`（L1/L2）、`OutputValidator`（L4 后置校验 + 重试）
+- **URL 解析**: `ResolveURL` — `full_url` 完全覆盖 `base_url + default_path`
+- **非标字段映射**: `ContentMapping` + `ExtractByPath` — 从非标准 SSE 路径提取 delta/reasoning
+- **流式归一化**: `LeadingThinkNormalizer` — 三态状态机分离 `<think>` 推理内容
+- **缓存预算**: `UsageInfo.PromptTokensDetails["cached_tokens"]` — Prefix Cache 命中信息回传
 
-### Layer 2: schema — Contract-First Schema 引擎
+#### schema — Contract-First Schema 引擎 (~2800 LOC)
 
-通过 Go 泛型 + 反射实现编译期 + 运行时双重校验，约束 LLM 的输出格式。
+通过 Go 泛型 + 反射实现编译期 + 运行时双重校验，约束 LLM 输出格式。
 
 - **模块路径**: `github.com/inferglow/schema`
 - **依赖**: 无（仅 yaml.v3）
 - **核心类型**: `OutputSchema`, `FieldDef`, `DataType`, `ContractEngine`
 - **核心功能**: 泛型推导、JSON Schema 转换、路径校验、JSON 提取
 
-### Layer 3: flow — TriggerFlow 编排引擎
-
-两层流引擎架构：线性 Flow 引擎（简单管道）和 TriggerFlow 事件驱动引擎（复杂业务编排）。
-
-- **模块路径**: `github.com/inferglow/flow`
-- **依赖**: `github.com/inferglow/schema`
-- **核心类型**: `Flow`, `Step`, `Operator`, `SignalNet`, `LifecycleMachine`
-- **算子类型**: 13 种（chunk、signal_gate、batch_fanout、for_each、match_case 等）
-- **Step.Schema 校验**: `Step.Schema *schema.OutputSchema` 字段在 `Engine.Execute` 中执行后被 `validateStepOutput` 主动校验，不合格则 `StatusFailed`
-
-### 独立模块: action — Action Runtime
-
-将 Go 函数注册为可发现、可校验、可执行的动作单元。
-
-- **模块路径**: `github.com/inferglow/action`
-- **依赖**: 无（默认完全独立；`SandboxExecutor` 通过 `with_sandbox` build tag 可选引入 `sandbox`）
-- **核心类型**: `Action`, `ActionExecutor`, `ActionResult`, `ActionRegistry`, `SandboxExecutor`（可选）
-- **核心功能**: LocalFunctionExecutor（三种签名自动包装）、SandboxExecutor（需 `with_sandbox` 标签）、ActionSpec 安全规格
-
-### 独立模块: session — 对话记忆管理
+#### session — 对话记忆管理 (~1800 LOC)
 
 对话历史维护、上下文窗口自动裁剪、多模态内容支持、JSON/YAML 持久化。
 
 - **模块路径**: `github.com/inferglow/session`
-- **依赖**: 无（完全独立；安全特性通过 `MessageHook` 接口注入，不直接依赖 `security`）
+- **依赖**: 无（安全特性通过 `MessageHook` 接口注入）
 - **核心类型**: `Session`, `ChatMessage`, `ContentBlock`, `ResizeHandler`, `MessageHook`
-- **核心功能**: 双消息列表、多策略 resize、持久化、`WithSecurityHook` 接口注入
 
-### 独立模块: sandbox — 沙箱执行框架
+#### sandbox — 沙箱执行框架 (~6300 LOC)
 
 隔离的代码执行环境，支持多种沙箱后端。
 
 - **模块路径**: `github.com/inferglow/sandbox`
 - **依赖**: 无（完全独立）
 - **核心类型**: `Provider`, `Handle`, `ExecutionPolicy`
-- **后端实现**: Docker、gVisor、本地、TrustedLocal、Seatbelt、WindowsAppContainer、E2B
-- **CLI 示例**: `sandbox/cmd/sandbox/main.go`（独立可运行）
+- **后端实现**: Docker、gVisor、本地、TrustedLocal、Seatbelt、E2B、Windows RestrictedToken、Windows AppContainer、Windows Sandbox (WSB)
 
-### 独立模块: audit — 链表式审计链
+#### context — 上下文管理引擎 (~6300 LOC)
+
+从 `session/contextmgr` 拆出的独立模块。三区压缩（hot/warm/cold）、Prefix Cache 预算、甜点区自适应、宪法区（Zone 0.5）、任务相关性重组。
+
+- **模块路径**: `github.com/inferglow/context`
+- **依赖**: 无（完全独立，通过接口与 session 交互）
+- **核心类型**: `HybridManager`, `CacheBudgetUpdater`, `ConstitutionalZone`
+- **核心功能**: sweet-spot 自适应阈值、缓存预算钩子（`CacheBudgetUpdater` 最小接口避免循环依赖）、三问重组、衰减预热
+
+#### audit — 链表式审计链 (~1100 LOC)
 
 基于 SHA-256 哈希指针的不可篡改审计日志，支持 HMAC 签名验证。
 
 - **模块路径**: `github.com/inferglow/audit`
-- **依赖**: 无（完全独立）
+- **依赖**: 无
 - **核心类型**: `AuditChain`, `AuditEntry`, `AuditHook`
-- **核心功能**: 哈希链写入、三重验证（prev_hash/hash/HMAC）、MaxEntries 软上限
 
-### 独立模块: security — 安全基础设施
+#### approval — HITL 审批 (~700 LOC)
 
-PII 脱敏、Prompt 注入检测、令牌桶限流、RBAC 访问控制。
+Human-in-the-Loop 审批流程管理。
 
-- **模块路径**: `github.com/inferglow/security`
-- **依赖**: `session`、`orchestrator/agent`（仅 `sessionhook`/`agenthook` 子包，用于实现接口契约；基础子包 `pii`/`prompt_injection`/`ratelimit`/`rbac` 仍完全独立）
-- **子模块**: `pii`（5 种 PII 模式）、`prompt_injection`（三级严重度）、`ratelimit`（令牌桶）、`rbac`（6 个文件）、`sessionhook`（`session.MessageHook` 实现）、`agenthook`（`agent.OutputSecurityHook` / `agent.PIIMasker` 实现）
-- **核心类型**: `Masker`, `Detector`, `TokenBucket`, `PermissionMatrix`, `SecurityHook`, `OutputInjectionHook`, `PIIMasker`
+- **模块路径**: `github.com/inferglow/approval`
+- **依赖**: 无
+- **核心类型**: `Manager`, `ApprovalRequest`, `AccessPolicy`
 
-### 独立模块: observability — OpenTelemetry 集成
+#### rag — RAG 管道 (~1500 LOC)
+
+文档加载、文本分割、Embedding 注册、检索管道。
+
+- **模块路径**: `github.com/inferglow/rag`
+- **依赖**: 无
+- **核心类型**: `Pipeline`, `Loader`（6 种格式）、`Splitter`（3 种策略）、`EmbeddingRegistry`
+
+#### rerank — 重排序 (~500 LOC)
+
+检索结果重排序，支持多种后端。
+
+- **模块路径**: `github.com/inferglow/rerank`
+- **依赖**: 无
+- **核心类型**: `Reranker`, `Document`
+- **后端**: Cohere、LLM-based、Fallback
+
+#### observability — OpenTelemetry 集成 (~700 LOC)
 
 语义化 Span 追踪，6 种 SpanKind 覆盖 Agent/LLM/Tool/Flow 全链路。
 
 - **模块路径**: `github.com/inferglow/observability`
-- **依赖**: 无（完全独立）
-- **核心类型**: `Tracer`, `SpanKind`
-- **Span 类型**: `SpanAgentRun`, `SpanLLMCall`, `SpanToolCall`, `SpanFlowExecute`, `SpanPause`, `SpanResume`
+- **依赖**: 无
 
-### 独立模块: workspace — 工作区文件操作
+#### workspace — 工作区文件操作 (~1200 LOC)
 
 沙箱化的文件/目录操作，路径穿越防护、文件大小/数量限制。
 
 - **模块路径**: `github.com/inferglow/workspace`
-- **依赖**: 无（完全独立）
-- **核心类型**: `Workspace`, `Config`
-- **核心功能**: SafePath 三重防护、ReadOnly 模式、FileCount 限制
-- **血缘追踪（LineageStore）为独立可选组件，需调用方显式集成，不自动嵌入文件操作**
+- **依赖**: 无
+- **核心功能**: SafePath 三重防护、ReadOnly 模式、LineageStore 血缘追踪
 
-### 独立模块: components — Prompt/Tool 通用接口
+#### resource — 资源管理 (~750 LOC)
+
+资源提供者抽象与管理。
+
+- **模块路径**: `github.com/inferglow/resource`
+- **依赖**: 无
+- **核心类型**: `Provider`, `Manager`, `Handle`
+
+#### server — REST API 服务 (~3100 LOC)
+
+Agent HTTP 托管服务，提供 RESTful 接口、外部触发器、持久化 Memory、流式工具调用和运行时状态检查。
+
+- **模块路径**: `github.com/inferglow/server`
+- **依赖**: `flow`, `trigger`（子包）
+- **核心类型**: `Server`, `Router`, `RunManager`, `MemoryStore`, `trigger.Registry`
+- **子包**: `trigger/`（Webhook/Cron/EventBus 三种触发器）
+- **V7 新增能力**:
+  - 外部触发器：Webhook（HMAC 验签）、Cron（定时）、EventBus（事件驱动）
+  - LCEL 声明式链（`flow/lcel.go`）：Chain/Pipe/Invoke/Build + 3 组合器
+  - 持久化 Memory：MemoryStore 接口 + InMemoryStore + CRUD API
+  - 运行时状态检查：只读 state/steps 查询 API
+  - 流式工具调用：AgentCallbacks → SSE 事件流桥接
+  - Session 结束自动提升：SessionEndHook 异步调用 LongMemPromoter
+
+### 中间层 — 6 个模块，依赖基础层
+
+#### flow — TriggerFlow + LCEL 编排引擎 (~7400 LOC)
+
+三层流引擎：线性 Flow（简单管道）、TriggerFlow 事件驱动引擎（复杂业务编排）、LCEL Chain（轻量线性管道）。
+
+- **模块路径**: `github.com/inferglow/flow`
+- **依赖**: `schema`
+- **核心类型**: `Flow`, `Step`, `Operator`, `SignalNet`, `LifecycleMachine`, `Chain`
+- **算子类型**: 13 种（chunk、signal_gate、batch_fanout、for_each、match_case 等）
+- **LCEL Chain**: `LCEL().Pipe().Build()` 线性管道 + MapChain/BranchChain/ParallelChain 组合器
+- **Step.Schema 校验**: 每步执行后 `validateStepOutput` 主动校验
+
+#### action — Action Runtime (~2900 LOC)
+
+将 Go 函数注册为可发现、可校验、可执行的动作单元。
+
+- **模块路径**: `github.com/inferglow/action`
+- **依赖**: `approval`, `sandbox`（`sandbox` 通过 `with_sandbox` build tag 可选）
+- **核心类型**: `Action`, `ActionExecutor`, `ActionResult`, `ActionRegistry`
+- **核心功能**: LocalFunctionExecutor（三种签名自动包装）、SandboxExecutor（需 `with_sandbox`）、ActionSpec 安全规格
+
+#### components — Prompt/Tool 通用接口 (~400 LOC)
 
 - **模块路径**: `github.com/inferglow/components`
-- **依赖**: 无（完全独立）
+- **依赖**: `model`
 
-### 独立模块: builtins — 内置 Action/Policy/Tool
+#### mcpserver — MCP 协议服务 (~850 LOC)
+
+MCP JSON-RPC 2.0 服务端，三种传输全覆盖。
+
+- **模块路径**: `github.com/inferglow/mcpserver`
+- **依赖**: `action`
+- **核心类型**: `Server`, `Transport`, `JSONRPCRequest`
+- **传输**: stdio（标准输入输出）、SSE（GET `/sse` + POST `/messages`）、StreamableHTTP（POST `/mcp`）
+
+#### builtins — 内置 Action/Policy/Tool (~2200 LOC)
+
+预置的常用 Action、安全策略和 Tool 定义。
 
 - **模块路径**: `github.com/inferglow/builtins`
-- **依赖**: 无（完全独立）
+- **依赖**: `action`
 
-### 编排层: orchestrator — Agent 编排层（用户入口）
+### 编排层 — 4 个模块，聚合中间层+基础层
 
-将基础模块粘合在一起的上层胶水，提供 PLAN-EXECUTE 循环引擎。安全特性（PII/注入检测）与沙箱通过接口注入 / build tag 可选启用。
+#### orchestrator — Agent 编排层 / 用户入口 (~7700 LOC)
+
+PLAN-EXECUTE 循环引擎。安全特性通过接口注入 / build tag 可选启用。
 
 - **模块路径**: `github.com/inferglow/orchestrator`
-- **依赖**: `action`, `audit`, `model`, `session`, `flow`（`security` 已解耦为接口注入；`sandbox` 通过 `with_sandbox` build tag 可选）
-- **核心类型**: `Agent`, `Engine`, `ActionDispatcher`, `LoopGuard`, `TurnLoop`, `CancelManager`, `PIIMasker`, `OutputSecurityHook`
-- **核心功能**: 并发 Action 执行、LLM 输出修复管道、死循环检测、三种取消安全点
+- **依赖**: `action`, `audit`, `flow`, `model`, `observability`, `session`（`security` 接口注入；`sandbox` 通过 `with_sandbox` 可选）
+- **核心类型**: `Agent`, `Engine`, `ActionDispatcher`, `LoopGuard`, `TurnLoop`, `CancelManager`
+- **核心功能**: 并发 Action 执行、function calling、LLM 输出修复管道、死循环检测、三种取消安全点、Agent 回放测试
+
+#### security — 安全基础设施 (~2000 LOC)
+
+PII 脱敏、Prompt 注入检测、令牌桶限流、RBAC 访问控制。通过接口注入模式接入，不注入即零开销。
+
+- **模块路径**: `github.com/inferglow/security`
+- **依赖**: `session`、`orchestrator`（仅 `sessionhook`/`agenthook` 子包实现接口契约）
+- **子模块**: `pii`（5 种模式）、`prompt_injection`（三级严重度）、`ratelimit`（令牌桶）、`rbac`、`sessionhook`（`MessageHook`）、`agenthook`（`OutputSecurityHook` / `PIIMasker`）
+
+#### eval — 离线评估框架 (~750 LOC)
+
+基于预录响应的 Agent 回放测试框架，支持并行执行与断言校验。
+
+- **模块路径**: `github.com/inferglow/eval`
+- **依赖**: `model`, `session`, `action`, `orchestrator`
+- **核心类型**: `Suite`, `Case`, `Runner`, `ScriptedProvider`, `Report`
+- **核心功能**: ScriptedProvider mock（实现 `model.ModelRequester`）、并行 Case 执行、Contains/NotContains/ToolSequence 断言、Golden Session 适配、Text/JSON 报告
+
+#### examples — 示例代码 (~2800 LOC)
+
+完整可运行的示例程序，覆盖主要使用场景。
+
+- **模块路径**: `github.com/inferglow/examples`
+- **依赖**: 多模块
 
 ## 模块依赖关系
 
 ```mermaid
 graph TD
-    subgraph chain["编排引擎链"]
-        MODEL["model (Layer 1)"]
-        SCHEMA["schema (独立)"]
-        FLOW["flow (Layer 3)"]
-        FLOW --> SCHEMA
-    end
-
-    subgraph independent["独立模块（无外部依赖）"]
-        ACT["action"]
+    subgraph foundation["基础层 — 零内部依赖"]
+        MODEL["model"]
+        SCHEMA["schema"]
         SESS["session"]
         SANDBOX["sandbox"]
+        CTX["context"]
         AUDIT["audit"]
+        APPROVAL["approval"]
+        RAG["rag"]
+        RERANK["rerank"]
         OBS["observability"]
         WS["workspace"]
-        COMP["components"]
-        BUILTIN["builtins"]
+        RESOURCE["resource"]
     end
 
-    SECURITY["security<br/>sessionhook → session<br/>agenthook → orchestrator/agent"]
+    subgraph mid["中间层"]
+        COMP["components"]
+        FLOW["flow"]
+        ACT["action"]
+        MCPSERVER["mcpserver"]
+        BUILTINS["builtins"]
+        SERVER["server"]
 
-    ORCH["orchestrator ← 用户入口"]
+        COMP --> MODEL
+        FLOW --> SCHEMA
+        ACT --> APPROVAL
+        ACT -.->|"with_sandbox"| SANDBOX
+        MCPSERVER --> ACT
+        BUILTINS --> ACT
+        SERVER --> FLOW
+    end
 
-    ORCH --> ACT
-    ORCH --> SESS
-    ORCH --> MODEL
-    ORCH --> AUDIT
-    ORCH --> FLOW
-    SECURITY -.-> SESS
-    SECURITY -.-> ORCH
+    subgraph orch["编排层"]
+        ORCH["orchestrator"]
+        SECURITY["security"]
+        EVAL["eval"]
+        EXAMPLES["examples"]
+
+        ORCH --> ACT
+        ORCH --> SESS
+        ORCH --> MODEL
+        ORCH --> AUDIT
+        ORCH --> FLOW
+        ORCH --> OBS
+        SECURITY -.->|"接口注入"| SESS
+        SECURITY -.->|"接口注入"| ORCH
+        EVAL --> MODEL
+        EVAL --> ORCH
+    end
 ```
 
-| 模块 | 依赖 | 被谁依赖 |
-|------|------|---------|
-| model | 无 | orchestrator |
-| schema | 无（仅 yaml.v3） | flow |
+| 模块 | 内部依赖 | 被谁依赖 |
+|------|---------|----------|
+| model | 无 | orchestrator, eval, components |
+| schema | 无 | flow |
 | flow | schema | orchestrator |
-| action | 无 | orchestrator |
-| session | 无 | orchestrator |
+| action | approval, sandbox | orchestrator, mcpserver, builtins, eval |
+| session | 无 | orchestrator, security, eval |
 | audit | 无 | orchestrator |
-| orchestrator | action, audit, model, session, **flow** | 用户代码 |
-| workspace | 无 | 用户代码（独立可选） |
-| sandbox | 无 | orchestrator |
+| sandbox | 无 | action (build tag) |
+| context | 无 | — (用户代码直接集成) |
+| orchestrator | action, audit, flow, model, observability, session | security, eval |
+| security | session, orchestrator (接口注入) | 用户代码 |
+| eval | model, session, action, orchestrator | 用户代码 |
+| server | flow, trigger（子包） | 用户代码 |
+| mcpserver | action | 用户代码 |
+| builtins | action | 用户代码 |
+| approval | 无 | action |
+| rag | 无 | 用户代码 |
+| rerank | 无 | 用户代码 |
+| observability | 无 | orchestrator |
+| workspace | 无 | 用户代码 |
+| resource | 无 | 用户代码 |
+| components | model | 用户代码 |
 
 ## 设计原则
 
@@ -364,7 +506,7 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 | [02-model-and-schema.md](./docs/system-analysis/02-model-and-schema.md) | LLM Provider 抽象、Schema 引擎、ContractEngine |
 | [03-flow.md](./docs/system-analysis/03-flow.md) | Flow/TriggerFlow 双引擎、13 种算子、Pause/Resume |
 | [04-action-and-mcp.md](./docs/system-analysis/04-action-and-mcp.md) | Action Runtime、三种 Executor、MCP JSON-RPC 协议 |
-| [05-session-sandbox-audit.md](./docs/system-analysis/05-session-sandbox-audit.md) | 双列表 Session、7 种沙箱后端、SHA-256 哈希链 |
+| [05-session-sandbox-audit.md](./docs/system-analysis/05-session-sandbox-audit.md) | 双列表 Session、8 种沙箱后端、SHA-256 哈希链 |
 | [06-security-observability-workspace.md](./docs/system-analysis/06-security-observability-workspace.md) | PII/注入/限流/RBAC、OTel 6 种 Span、工作区血缘 |
 | [07-orchestrator.md](./docs/system-analysis/07-orchestrator.md) | Agent 入口、executeLoop 18 步逐行解析、LoopGuard |
 | [08-call-chains.md](./docs/system-analysis/08-call-chains.md) | 13 条端到端调用链 + 全景关系图 + 错误传播表 |
@@ -373,10 +515,36 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 
 所有模块均已实现并经过完整测试：
 
-- **13 个 Go module**：全部通过 `go build` 和 `go vet`
-- **orchestrator 编排层**：已实现完整的 PLAN-EXECUTE 循环引擎
-- **核心特性**：并发 Action 执行、死循环检测、三种取消安全点、PII 脱敏、审计链、Schema 四层校验（L1 json_schema / L3 prompt 兜底 / L4 后置校验+重试 / Flow step.Schema 校验）
-- **MCP 协议**：自实现 JSON-RPC 2.0 over stdio，支持工具自动发现
+- **22 个 Go module**：全部通过 `go build` 和 `go vet`，Windows 交叉编译 clean
+- **orchestrator 编排层**：Agent Loop + function calling + 并发 Action + 死循环检测 + 三种取消安全点
+- **Schema 四层校验**：L1 json_schema / L2 API 约束 / L3 prompt 兜底 / L4 后置校验+重试 + Flow step.Schema
+- **MCP 协议**：JSON-RPC 2.0 三种传输全覆盖（stdio / SSE / StreamableHTTP）
+- **沙箱**：8 种后端（Docker、gVisor、本地、TrustedLocal、Seatbelt、E2B、Windows RestrictedToken/AppContainer/Sandbox）
+- **上下文管理**：独立 `context/` 模块，三区压缩 + Prefix Cache 预算 + 甜点区自适应 + 宪法区
+- **评估框架**：`eval/` 离线回放测试，ScriptedProvider mock + 并行执行 + 断言校验
+- **外部触发器**：Webhook（HMAC 验签）/ Cron（定时）/ EventBus（事件驱动），trigger.Registry 生命周期管理
+- **LCEL 声明式链**：Chain/Pipe/Invoke/Build + MapChain/BranchChain/ParallelChain 组合器
+- **持久化 Memory**：MemoryStore 接口 + InMemoryStore + CRUD API + SessionEndHook 自动提升
+- **运行时状态检查**：只读 state/steps 查询 API，ExecState 快照
+- **流式工具调用**：AgentCallbacks → SSE 事件流桥接，step_done 逐步事件
+
+### V6 架构演进完成事项
+
+| 梯队 | 任务 | 状态 | 说明 |
+|------|------|:----:|------|
+| **第一梯队** 结构修复 | S1 otel 解耦 | ✅ | `ports.go` SpanStarter 接口，删除 7 处直接 import |
+| | S2 contextmgr 独立 module | ✅ | `context/` 从 `session/` 拆出，独立 go.mod |
+| | S3 middleware.Handler 统一签名 | ✅ | `orchestrator/middleware/` 统一 `Handler` 类型 |
+| **第二梯队** fork 差异化 | S4 team/ 包 | ✅ | Multi-Agent 协调器 |
+| | S5 扩展机制文档化 | ✅ | `docs/EXTENDING.md` 7 种机制 |
+| | F1 HITL 审批集成 | ✅ | `approval/` 独立模块 |
+| | F3 Agent 回放测试 | ✅ | `agent/replay.go` |
+| | F4 提示词版本标记 | ✅ | `SessionData.PromptVersion` |
+| | F5 成本模型 | ✅ | `CacheBudgetUpdater` 接口 |
+| **第三梯队** 远期 | L1 Prefix Cache 预算 | ✅ | `context/hybrid.go` sweet-spot + 缓存预算钩 |
+| | L2 Eval Runner | ✅ | `eval/` 独立模块，11 个测试 |
+| | L3 MCP 三传输 | ✅ | stdio + SSE + StreamableHTTP |
+| | L4 Windows 沙箱 | ✅ | RestrictedToken + AppContainer + WindowsSandbox (WSB) |
 
 ## License
 

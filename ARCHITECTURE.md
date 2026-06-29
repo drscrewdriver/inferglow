@@ -87,7 +87,7 @@ Action
 │   │   ├── func(ctx, InputT) (OutputT, error)
 │   │   ├── func(InputT) (OutputT, error)
 │   │   └── func(ctx, InputT) OutputT
-│   ├── MCPExecutor:    远程 MCP 协议（待实现）
+│   ├── MCPExecutor:    远程 MCP 协议客户端（已实现）
 │   └── SandboxExecutor: 沙箱执行器（需 `with_sandbox` build tag）
 └── 规格: ActionSpec
     ├── SideEffectLevel:   "read" | "write" | "exec"
@@ -166,14 +166,13 @@ OpenAICompatibleProvider.RequestModel()           ← 解析 SSE 流
     ↓
 chunk.ToolCalls = [{Name:"celsius_to_fahrenheit", Arguments:{"celsius":37}}]
     ↓
-                                    ← inferglow 尚未实现！
-orchestrator 编排层的 ActionRuntime:
-    ├── OrchestratorResponseParser                ← 解析结构化输出
-    ├── OrchestratorActionRuntime                 ← 规划协议
-    └── ActionNormalization.normalize_action_decision()  ← 提取 ActionCall
+orchestrator 编排层的 Engine.executeLoop:
+    ├── engine.go executeLoop()                   ← 解析 function calling 响应
+    ├── Engine 内部 ActionCall 提取               ← 映射到 ActionRegistry 调度执行
+    └── ActionDispatcher.Execute()                ← 安全门控 → Action 执行
 ```
 
-**回答：在 orchestrator 编排层的 ActionRuntime 层。** inferglow 目前只有 `ModelRequester` 能返回 `ToolCall`，但**没有一层来消费它、映射到 ActionRegistry、调度执行**。
+**回答：在 orchestrator 编排层的 Engine.executeLoop 中。** `engine.go` 解析 LLM 返回的 `ToolCall`，映射到 ActionRegistry 调度执行。
 
 ### 3. Action 执行后结果怎么回传给 LLM？
 
@@ -247,13 +246,11 @@ ActionDispatcher.async_execute()                  ← 安全门控层
                        │
                        ▼
 ┌─────────────────────────────────────────────────┐
-│  ★ orchestrator 编排层 (尚未实现) ★                │
-│                                                  │
-│  ★ 这是 inferglow 最缺的 "胶水" ★                 │
+│  orchestrator 编排层（已实现）                      │
 │                                                  │
 │  1. 从 StreamChunk 中提取 ToolCall                │
 │  2. 解析 LLM 的结构化输出 → ActionCall            │
-│  3. ActionDispatcher 检查 PolicyApproval          │
+│  3. ActionDispatcher 安全门控                     │
 │  4. ActionRegistry.Execute(action, input)         │
 │  5. 检查 sandbox_required → 审批 → 创建沙箱       │
 │  6. Executor.Execute() → ActionResult             │
@@ -293,31 +290,35 @@ func shouldContinue(decision, roundIndex, maxRounds int) bool {
 
 ## 四、inferglow 当前状态评估
 
-### 已完成（零件）
+### 已完成模块
 
 | 模块 | 完成度 | 说明 |
 |------|--------|------|
-| **model** | ✅ 100% | Provider 抽象、流式传输、配置系统、重试 |
+| **model** | ✅ 100% | Provider 抽象、流式传输、配置系统、重试、非标字段映射 |
 | **schema** | ✅ 100% | 泛型推导、JSON Schema 转换、ContractEngine、Blueprint |
-| **flow** | ✅ 100% | 线性 Flow、TriggerFlow、13 种算子、持久化 |
-| **action** | ✅ 80% | Registry、LocalFunctionExecutor 完整，MCP/Sandbox Executor 待实现 |
-| **session** | ✅ 90% | 双列表、三种 resize 策略、持久化完整 |
-| **sandbox** | ✅ 85% | Docker/gVisor/本地后端完整，Windows/macOS 适配中 |
+| **flow** | ✅ 100% | 线性 Flow、TriggerFlow、LCEL Chain、13 种算子、持久化 |
+| **action** | ✅ 95% | Registry、LocalFunctionExecutor、SandboxExecutor、MCPExecutor 完整 |
+| **session** | ✅ 95% | 双列表、三种 resize、持久化完整、Memory 接口 + SummaryMemory/TokenBufferMemory |
+| **sandbox** | ✅ 95% | 8 种后端全部完成（Docker/gVisor/本地/TrustedLocal/Seatbelt/E2B/Windows×3） |
+| **orchestrator** | ✅ 95% | Agent Loop + function calling + 并发 Action + 死循环检测 + 三种取消 + Middleware + Callbacks |
+| **context** | ✅ 95% | 三区压缩 + Prefix Cache 预算 + 甜点区自适应 + 宪法区 + 三路融合检索 + 衰减 |
+| **server** | ✅ 90% | REST API + 触发器(Webhook/Cron/Event) + Memory CRUD + 流式 SSE + 状态查询 |
+| **security** | ✅ 90% | PII 脱敏 + 注入检测 + 令牌桶限流 + RBAC + 接口注入模式 |
+| **eval** | ✅ 90% | 离线回放测试、ScriptedProvider mock、并行执行、断言校验 |
 
-### 缺失（组装线）
+### 待增强方向
 
 | 组件 | 说明 | 优先级 |
 |------|------|--------|
-| **ActionRuntime** | 规划协议 + 执行调度 | **P0 必须** |
-| **Agent 类** | SessionExtension + ActionExtension + ModelRequester 桥接 | **P0 必须** |
-| **PolicyApproval** | 安全门控（审批模式） | **P1 重要** |
-| **ExecutionResource** | 沙箱环境创建与管理 | **P1 重要** |
-| **MCPExecutor** | MCP 协议执行器 | **P2 可选** |
-| **Structured Planning Handler** | 结构化输出解析 + ActionCall 提取 | **P0 必须** |
+| **Multi-Agent 协作** | 完善的 Host-Specialist 路由 + 任务委派 | P1 |
+| **向量检索** | Embedding-based 语义检索（当前仅 BM25+recency） | P1 |
+| **IM Bridge** | Telegram/飞书/QQ/微信多平台接入 | P2 |
+| **桌面端** | Tauri/Wails 桌面壳 + 记忆可视化 | P2 |
+| **插件系统** | 约定优先插件 + 两级权限 | P3 |
 
-### 缺失的本质
+### 现状总结
 
-inferglow 目前有 **model、schema、flow、action、session、sandbox 六个"零件"**，但缺少把它们串起来的**组装线**——这个组装线就是上层的 **orchestrator 编排层**（对应 Python Agently 的 `Agently/agently/` 目录）。
+inferglow 已从“零件库”演进为**完整的 Agent 基础设施框架**：12 个基础模块 + 6 个中间层模块 + 4 个编排层模块，总计 22 个独立 Go module、~62,000 LOC。核心 Agent Loop（orchestrator）已完备，当前重点是上层产品化（CLI Agent / 桌面端 / 多平台接入）。
 
 ---
 
@@ -386,92 +387,95 @@ Qwen3 32B 的 Function Calling 能力已经足够：
 
 ---
 
-## 六、主模块实施蓝图
+## 六、主模块实施蓝图（已完成）
 
-### 总体架构
+> 以下 Phase 1-4 的任务均已实现，对应代码位于 `orchestrator/` 模块。
+
+### 总体架构（已实现）
 
 ```
-orchestrator 编排层（上层业务逻辑）
+orchestrator 编排层（用户入口）
 │
-├── Agent 类                          ← 用户入口
-│   ├── SessionExtension              ← 对话记忆管理
-│   ├── ActionExtension               ← 工具注册与执行
-│   └── ModelRequestRunner            ← 模型调用
+├── agent/
+│   ├── agent.go                      ← Agent 类（用户入口）
+│   ├── engine.go                     ← Engine（PLAN→EXECUTE 循环）
+│   ├── callbacks.go                  ← 6 个生命周期钩子
+│   ├── middleware.go                  ← Middleware 链
+│   ├── flow_context_impl.go          ← Flow 集成 + 并行执行
+│   └── replay.go                     ← Agent 回放测试
 │
-├── ActionRuntime                      ← 规划协议 + 执行调度
-│   ├── StructuredPlanningHandler     ← 结构化规划
-│   ├── NativeToolCallsHandler        ← 原生工具调用
-│   └── ActionExecutionHandler        ← 执行动作
+├── actionruntime/                     ← 规划协议 + 执行调度
+│   ├── dispatcher.go                 ← ActionDispatcher + 安全门控
+│   ├── planning.go                   ← 结构化规划协议
+│   └── types.go                      ← Decision/ActionCall 类型
 │
-├── ActionDispatcher                   ← 安全门控 + 执行调度
-│   ├── PolicyApproval                ← 审批检查
-│   ├── ExecutionResource             ← 沙箱环境
-│   └── Executor.Execute              ← 实际执行
+├── team/                              ← Multi-Agent 协调器
+│   ├── bus.go                        ← Agent 间消息总线
+│   └── coordinator.go                ← 协调器实现
 │
-└── ActionFlow (DAG)                   ← PLAN → EXECUTE 循环
-    ├── plan_step:  决定下一步 action
-    ├── execute_step: 执行 action_calls
-    └── finalize:   返回最终结果
+└── skill/                             ← SkillLibrary 技能管理
+    └── library.go                    ← 技能库实现
 ```
 
-### Phase 1: 核心引擎（必须实现）
+### Phase 1: 核心引擎（✅ 已完成）
 
-**目标**: 跑通最简单的 "用户输入 → LLM → 工具调用 → 结果" 闭环
-
-| 任务 | 模块 | 工作量 | 依赖 |
-|------|------|--------|------|
-| 1.1 ActionRuntime 基础 | 新建 `agently/` 主模块 | 大 | action, model |
-| 1.2 结构化规划协议 | actionruntime/planning.go | 中 | model |
-| 1.3 ActionDispatcher 基础 | actionruntime/dispatcher.go | 中 | action |
-| 1.4 Agent 基础类 | agent/agent.go | 大 | session, action, model |
-| 1.5 SessionExtension | agent/session_ext.go | 小 | session |
-| 1.6 ActionExtension | agent/action_ext.go | 中 | action |
+| 任务 | 实际位置 | 状态 |
+|------|---------|:----:|
+| ActionRuntime 基础 | `orchestrator/agent/engine.go` | ✅ |
+| 原生工具调用 (function calling) | `orchestrator/agent/engine.go` executeLoop | ✅ |
+| Agent 基础类 | `orchestrator/agent/agent.go` | ✅ |
+| Session/Action Extension | 内联于 `agent.go` + `engine.go` | ✅ |
 
 **验收标准**:
 - 注册 2-3 个 Action
 - 用户输入 → LLM 选择工具 → Action 执行 → 结果返回 → 下一轮 LLM
 - 至少支持 OpenAI 兼容 Provider
 
-### Phase 2: 编排增强（重要）
+### Phase 2: 编排增强（✅ 已完成）
 
-**目标**: 支持复杂的多步工具调用和并发执行
-
-| 任务 | 模块 | 工作量 | 依赖 |
-|------|------|--------|------|
-| 2.1 ActionFlow (PLAN → EXECUTE 循环) | actionruntime/flow.go | 大 | actionruntime |
-| 2.2 并发执行控制 | actionruntime/concurrency.go | 中 | actionruntime |
-| 2.3 TriggerFlow 集成 | agent/triggerflow.go | 中 | flow, action |
-| 2.4 结构化输出验证 | schema/validator.go | 小 | schema, model |
+| 任务 | 实际位置 | 状态 |
+|------|---------|:----:|
+| PLAN → EXECUTE 循环 | `orchestrator/agent/engine.go` executeLoop | ✅ |
+| 并发 Action 执行 | `orchestrator/agent/flow_context_impl.go` RunAgentParallel | ✅ |
+| TriggerFlow 集成 | `orchestrator/agent/flow_context_impl.go` | ✅ |
+| 结构化输出验证 + 重试 | `model/` OutputValidator + L4 后置校验 | ✅ |
+| Middleware 链 | `orchestrator/agent/middleware.go` | ✅ |
+| 生命周期 Callbacks | `orchestrator/agent/callbacks.go` | ✅ |
 
 **验收标准**:
 - 支持 max_rounds 控制
 - 支持并发 action 执行
 - ContractEngine 验证 + 自动重试
 
-### Phase 3: 安全框架（重要）
+### Phase 3: 安全框架（✅ 已完成）
 
-**目标**: 完整的沙箱审批和安全门控
-
-| 任务 | 模块 | 工作量 | 依赖 |
-|------|------|--------|------|
-| 3.1 PolicyApproval 管理器 | security/policy_approval.go | 中 | action |
-| 3.2 四种审批模式 | security/handlers.go | 小 | policy_approval |
-| 3.3 ExecutionResource 管理 | security/exec_resource.go | 大 | sandbox |
-| 3.4 SandboxExecutor 实现 | action/executor_sandbox.go | 中 | sandbox, action |
+| 任务 | 实际位置 | 状态 |
+|------|---------|:----:|
+| 接口注入模式 | `security/sessionhook/` + `security/agenthook/` | ✅ |
+| PII 脱敏 (5 种模式) | `security/pii/` | ✅ |
+| Prompt 注入检测 (三级严重度) | `security/prompt_injection/` | ✅ |
+| SandboxExecutor (8 种后端) | `action/executor_sandbox.go` + `sandbox/` | ✅ |
+| 令牌桶限流 | `security/ratelimit/` | ✅ |
+| RBAC 访问控制 | `security/rbac/` | ✅ |
 
 **验收标准**:
 - sandbox_required = true 的 Action 必须走审批流程
 - 支持 auto_approve / fail_closed / input_timeout_fail
 - SandboxExecutor 能创建 Docker 容器执行命令
 
-### Phase 4: 高级功能（可选）
+### Phase 4: 高级功能（✅ 大部分已完成）
 
-| 任务 | 模块 | 工作量 |
-|------|------|--------|
-| 4.1 MCPExecutor | action/executor_mcp.go | 中 |
-| 4.2 SessionMemory 插件 | session/memory_plugin.go | 中 |
-| 4.3 Blueprint 序列化 | schema/blueprint.go | 小 |
-| 4.4 Flow 持久化/恢复 | flow/persistence.go | 小 |
+| 任务 | 实际位置 | 状态 |
+|------|---------|:----:|
+| MCPExecutor (三传输) | `mcpserver/` | ✅ |
+| Memory 接口 + SummaryMemory/TokenBufferMemory | `session/memory*.go` | ✅ |
+| Blueprint 序列化 | `schema/blueprint.go` | ✅ |
+| Flow 持久化/恢复 | `flow/` Pause/Resume | ✅ |
+| 外部触发器 (Webhook/Cron/Event) | `server/trigger/` | ✅ |
+| LCEL 声明式链 | `flow/lcel.go` | ✅ |
+| 持久化 Memory + CRUD API | `server/memory_store.go` + handlers | ✅ |
+| 运行时状态检查 | `server/handlers_flow.go` | ✅ |
+| 流式工具调用 (SSE) | `server/handlers_stream.go` | ✅ |
 
 ### 依赖关系图
 
@@ -485,62 +489,54 @@ phase 3:  PolicyApproval + ExecutionResource
 phase 4:  MCPExecutor + SessionMemory + 高级功能
 ```
 
-### 模块结构建议
+### 实际模块结构（已实现）
 
 ```
-agently/                              ← 主模块（新建）
+orchestrator/                          ← 编排层（已实现，~7700 LOC）
 ├── go.mod
 ├── agent/
 │   ├── agent.go                      ← Agent 类（用户入口）
-│   ├── session_ext.go                ← SessionExtension
-│   ├── action_ext.go                 ← ActionExtension
+│   ├── engine.go                     ← Engine（PLAN→EXECUTE 循环 + 工具调用处理）
+│   ├── callbacks.go                  ← 6 个生命周期钩子
+│   ├── middleware.go                  ← Middleware 链
+│   ├── flow_context_impl.go          ← Flow 集成 + 并行
+│   ├── replay.go                     ← Agent 回放测试
+│   ├── security_hook.go              ← OutputSecurityHook 接口
 │   └── streaming.go                  ← 流式输出支持
 ├── actionruntime/
+│   ├── dispatcher.go                 ← ActionDispatcher + 安全门控
 │   ├── planning.go                   ← 结构化规划协议
-│   ├── dispatcher.go                 ← ActionDispatcher
-│   ├── execution.go                  ← ActionExecutionHandler
-│   └── flow.go                       ← PLAN → EXECUTE 循环
-├── security/
-│   ├── policy_approval.go            ← PolicyApprovalManager
-│   ├── handlers.go                   ← 四种审批模式
-│   └── exec_resource.go              ← ExecutionResourceManager
-├── builtins/
-│   ├── actions/                      ← 内置 Action（Browse, Search 等）
-│   ├── executors/                    ← 内置 Executor（Local, Sandbox, MCP）
-│   └── plugins/                      ← 内置插件
-└── examples/
-    └── basic_agent.go                ← 完整示例
+│   └── types.go                      ← Decision/ActionCall 类型
+├── team/
+│   ├── bus.go                        ← Multi-Agent 消息总线
+│   └── coordinator.go                ← Multi-Agent 协调器
+└── skill/
+    └── library.go                    ← 技能管理
 ```
 
-### 与 inferglow 的关系
+### 与 inferglow 的关系（已实现）
 
 ```
-inferglow/                    ← 基础设施库（已完成）
+inferglow/                    ← 基础设施库（22 个 module，~62k LOC）
 ├── model/                    ← LLM Provider 抽象
 ├── schema/                   ← Schema 引擎
-├── flow/                     ← Flow 编排引擎
+├── flow/                     ← Flow + TriggerFlow + LCEL 引擎
 ├── action/                   ← Action Runtime
-├── session/                  ← Session 记忆管理
-└── sandbox/                  ← 沙箱框架
+├── session/                  ← Session 记忆管理 + Memory 接口
+├── sandbox/                  ← 沙箱框架（8 后端）
+├── context/                  ← 上下文管理引擎
+├── server/                   ← REST API + 触发器 + Memory
+├── security/                 ← PII/注入/限流/RBAC
+├── eval/                     ← 离线评估框架
+└── ...
 
-agently/                      ← 上层应用层（待开发）
-├── agent/                    ← Agent 类
-├── actionruntime/            ← 规划 + 调度
-├── security/                 ← 安全门控
-└── builtins/                 ← 内置实现
+orchestrator/                 ← 编排层（用户入口，~7700 LOC）
+├── agent/                    ← Agent 类 + Engine + Callbacks
+├── team/                     ← Multi-Agent 协调
+└── skill/                    ← 技能管理
 ```
 
-**agently 主模块通过 replace 指令引用 inferglow 的子模块：**
-
-```go
-// agently/go.mod
-replace github.com/inferglow/model => ../inferglow/model
-replace github.com/inferglow/schema => ../inferglow/schema
-replace github.com/inferglow/flow => ../inferglow/flow
-replace github.com/inferglow/action => ../inferglow/action
-replace github.com/inferglow/session => ../inferglow/session
-replace github.com/inferglow/sandbox => ../inferglow/sandbox
-```
+**orchestrator 通过 go.mod replace 指令引用 inferglow 的子模块。**
 
 ---
 
@@ -548,22 +544,23 @@ replace github.com/inferglow/sandbox => ../inferglow/sandbox
 
 ### inferglow 当前状态
 
-- **已完成**: 6 个基础设施子模块（model/schema/flow/action/session/sandbox）
-- **缺失**: orchestrator 编排层（组装线）
-- **定位**: 纯基础设施库，等待上层 orchestrator 编排层引用
+- **已完成**: 22 个 Go module，~62,000 LOC，覆盖从模型抽象到桌面端的全链路
+- **核心引擎**: orchestrator 编排层已完备（Agent Loop + function calling + 并发 Action + Middleware + Callbacks）
+- **产品化方向**: CLI Agent / 桌面端 / Multi-Agent / IM Bridge（见 Reasonix Agent 实施计划）
 
 ### 模型选择
 
 - **Qwen3 32B 完全够用**，成本约为 GPT-4o 的 1/30
-- 高级模型仅在特定场景作为"升级选项"
+- 高级模型仅在特定场景作为“升级选项”
 - 核心能力：ContractEngine 自动重试可以弥补 Qwen3 32B 在结构化输出上的不足
 
-### 实施策略
+### 演进历程
 
-1. **Phase 1 先跑通闭环**：最小可用 Agent（Session + Action + ModelRequest）
-2. **Phase 2 增强编排**：多步工具调用、并发执行
-3. **Phase 3 安全门控**：PolicyApproval、沙箱审批
-4. **Phase 4 锦上添花**：MCP、SessionMemory、Blueprint
+1. **V1-V3**: 基础设施零件（model/schema/flow/action/session/sandbox）
+2. **V4-V5**: orchestrator 编排层 + 安全框架 + 上下文管理
+3. **V6**: 6-Wave 优化（Middleware/Callbacks/Memory/解耦）
+4. **V7**: 能力补齐（触发器/LCEL/Memory/状态检查/流式）
+5. **下一步**: Reasonix 对标 CLI Agent → 桌面端 → 全平台个人 AI 助理
 
 ---
 
@@ -626,3 +623,60 @@ replace github.com/inferglow/sandbox => ../inferglow/sandbox
 | 文件 | 修复 |
 |------|------|
 | `orchestrator/agent/agent.go` | Agent struct 新增 `callbacks *AgentCallbacks` 和 `middlewares []Middleware` 字段，确保 `WithCallbacks`/`WithMiddleware` 传给 `New()` 时不被静默丢弃，`Run()` 中传播到 engine |
+
+---
+
+## 九、V7 能力补齐（5 项对标能力）
+
+> 实施日期：2026-07-30
+> 目标：横评覆盖率 72% → ~82%，补齐 5 项缺失对标能力
+
+### Phase 1: 外部触发器（Webhook/Cron/EventBus）
+
+| 文件 | 说明 |
+|------|------|
+| `server/trigger/trigger.go` | Trigger/RunStarter/RunHandle 接口 + StarterFunc 适配器 + Registry |
+| `server/trigger/webhook.go` | WebhookTrigger + HMAC 验签 + body 单次读取修复 |
+| `server/trigger/cron.go` | CronTrigger 定时触发 |
+| `server/trigger/event.go` | EventBus + EventTrigger 事件驱动触发 |
+| `server/handlers_trigger.go` | 7 个 trigger REST handler |
+| `server/trigger/trigger_test.go` | 6 个测试覆盖 Registry/Cron/Event/Webhook |
+
+### Phase 2: LCEL 声明式链
+
+| 文件 | 说明 |
+|------|------|
+| `flow/lcel.go` | Chain/Pipe/Invoke/Build + MapChain/BranchChain/ParallelChain 组合器 |
+| `flow/lcel_test.go` | 9 个测试覆盖全部 LCEL 功能 |
+
+### Phase 3: 持久化 Memory
+
+| 文件 | 说明 |
+|------|------|
+| `server/memory_store.go` | MemoryStore 接口 + InMemoryStore 实现 |
+| `server/handlers.go` | 4 个 CRUD handler (create/search/get/delete) |
+| `server/run_manager.go` | SessionEndHook 类型 + 成功后异步调用 |
+
+### Phase 4: 运行时状态检查（只读）
+
+| 文件 | 说明 |
+|------|------|
+| `server/run_manager.go` | ExecState 快照字段，execute() 中保存执行状态 |
+| `server/handlers_flow.go` | handleGetRunState + handleGetRunSteps |
+
+### Phase 5: 流式工具调用
+
+| 文件 | 说明 |
+|------|------|
+| `server/handlers_stream.go` | streamCallbacks 桥接 6 个 AgentCallbacks 钩子到 SSE |
+| `server/run_manager.go` | step_done 事件逐 step 发射 |
+
+### 架构决策
+
+| 决策 | 原因 |
+|------|------|
+| StarterFunc 函数适配器 | 桥接 RunManager → trigger.RunStarter，避免修改 Start 签名 |
+| SessionEndHook 函数类型 | 模块解耦，不直接依赖 LongMemPromoter |
+| 只读状态检查（无 PUT） | 零风险，不影响执行路径 |
+| Webhook body 单次读取 | 同时传给 HMAC 验签和 JSON 解析，避免双读 bug |
+| Mutex 保护 ExecState | 等价于 atomic.Value 安全性 |
