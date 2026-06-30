@@ -26,6 +26,9 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/inferglow/flow/stage"
+	"github.com/inferglow/server/trigger"
 )
 
 // Config holds server configuration.
@@ -55,6 +58,27 @@ type Server struct {
 	httpServer *http.Server
 	agentStore AgentStore
 	tenantMgr  *TenantManager
+	flowStore  *FlowStore
+	runMgr     *RunManager
+	triggerReg *trigger.Registry
+	memStore   MemoryStore
+}
+
+// MemoryRecord represents a persistent memory entry.
+type MemoryRecord struct {
+	ID       string   `json:"id"`
+	Content  string   `json:"content"`
+	Category string   `json:"category,omitempty"`
+	Facts    []string `json:"facts,omitempty"`
+}
+
+// MemoryStore is the interface for persistent memory operations.
+// Implementations include in-memory, JSONL, SQLite, etc.
+type MemoryStore interface {
+	UpsertMemory(rec MemoryRecord) error
+	GetMemory(id string) (*MemoryRecord, error)
+	SearchMemory(query string, category string, limit int) ([]MemoryRecord, error)
+	DeleteMemory(id string) error
 }
 
 // AgentStore provides access to agents by ID.
@@ -124,11 +148,39 @@ func (tm *TenantManager) Authenticate(apiKey string) (*Tenant, error) {
 
 // NewServer creates a new REST API server.
 func NewServer(cfg Config, agentStore AgentStore) *Server {
+	stages := stage.NewRegistry()
+	flowStore := NewFlowStore(stages)
+	runMgr := NewRunManager(flowStore)
+	starter := trigger.StarterFunc(func(flowName string, inputs map[string]any, owner string) (trigger.RunHandle, error) {
+		return runMgr.Start(flowName, inputs, owner)
+	})
 	s := &Server{
 		cfg:        cfg,
 		mux:        http.NewServeMux(),
 		agentStore: agentStore,
 		tenantMgr:  NewTenantManager(),
+		flowStore:  flowStore,
+		runMgr:     runMgr,
+		triggerReg: trigger.NewRegistry(starter),
+	}
+	s.registerRoutes()
+	return s
+}
+
+// NewServerWithFlows creates a server with a pre-configured FlowStore.
+func NewServerWithFlows(cfg Config, agentStore AgentStore, flowStore *FlowStore) *Server {
+	runMgr := NewRunManager(flowStore)
+	starter := trigger.StarterFunc(func(flowName string, inputs map[string]any, owner string) (trigger.RunHandle, error) {
+		return runMgr.Start(flowName, inputs, owner)
+	})
+	s := &Server{
+		cfg:        cfg,
+		mux:        http.NewServeMux(),
+		agentStore: agentStore,
+		tenantMgr:  NewTenantManager(),
+		flowStore:  flowStore,
+		runMgr:     runMgr,
+		triggerReg: trigger.NewRegistry(starter),
 	}
 	s.registerRoutes()
 	return s
@@ -153,13 +205,37 @@ func (s *Server) Start() error {
 		IdleTimeout:  s.cfg.IdleTimeout,
 	}
 
+	// Start all enabled triggers.
+	_ = s.triggerReg.StartAll(context.Background())
+
 	return s.httpServer.Serve(ln)
 }
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	// Stop all triggers first.
+	_ = s.triggerReg.StopAll()
+
 	if s.httpServer == nil {
 		return nil
 	}
 	return s.httpServer.Shutdown(ctx)
+}
+
+// SetFlowContextFactory sets the factory for creating FlowContext in runs.
+// This enables stage functions to call LLM via fctx.GenerateModel().
+func (s *Server) SetFlowContextFactory(factory FlowContextFactory) {
+	s.runMgr.SetFlowContextFactory(factory)
+}
+
+// SetMemoryStore sets the persistent memory backend.
+// When set, the /v1/memories endpoints use this store for CRUD operations.
+func (s *Server) SetMemoryStore(store MemoryStore) {
+	s.memStore = store
+}
+
+// SetSessionEndHook sets a hook called after each successful flow run.
+// Typical use: inject LongMemPromoter.OnSessionEnd for auto-promotion.
+func (s *Server) SetSessionEndHook(hook SessionEndHook) {
+	s.runMgr.SetSessionEndHook(hook)
 }
