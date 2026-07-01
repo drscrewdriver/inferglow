@@ -607,7 +607,7 @@ orchestrator/                          ← 编排层（已实现，~7700 LOC）
 
 | 文件 | 说明 |
 |------|------|
-| `orchestrator/agent/middleware.go` | `type Middleware func(next AgentHandler) AgentHandler`，支持 Logging/Auth/Recovery 等中间件 |
+| `orchestrator/agent/middleware.go` | `WithMiddleware(mw ...middleware.Middleware) RunOption`，统一使用 `middleware.Handler` / `middleware.Middleware` 签名 |
 | `orchestrator/agent/middleware_test.go` | 日志中间件、Auth 阻断、链式顺序测试 |
 
 ### Wave 4：Agent 生命周期 Callbacks

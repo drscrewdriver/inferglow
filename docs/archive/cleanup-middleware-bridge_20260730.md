@@ -1,6 +1,6 @@
 # 清理计划：Middleware 遗留桥接
 
-> **审定状态（2026-07-30）**：已确认废弃类型（`AgentHandler`、旧`Middleware`、`chainMiddleware`、`adaptUnifiedToLegacy`）仍全部存在于 `agent/middleware.go`，零外部消费者确认无误。**计划仍然有效，待执行。**
+> **状态（2026-07-30）**：✅ 已完成。废弃类型已删除，`WithUnifiedMiddleware` 已重命名为 `WithMiddleware`，桥接代码已消除，全部测试通过。
 
 > 目标：清除 `orchestrator/agent/middleware.go` 中的两套类型系统并发现象，
 > 统一为 `orchestrator/middleware/` 的单一路径。

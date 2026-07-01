@@ -4,6 +4,12 @@
 > 本计划与 `cleanup-middleware-bridge.md`（middleware 类型清理）和
 > `orchestration-layer-consolidation.md`（StepFunc/StageFunc 归并）**正交**：
 > 三者修改的文件集合不重叠，可并行实施。
+>
+> **阶段 1-2 已完成（2026-07-30）**：✅
+> - 阶段 1：新增 `AuditHook`/`SecurityHook`/`SpanStarterHook`/`KVStore` 四个小接口 + 8 个 context 函数 + 4 个 noop 实现（~112 行）
+> - 阶段 2：`flowContextImpl` 添加编译期接口检查，`executeFlow` 注入 4 个 hook 到 context
+> - 新增测试文件 `flow/flow_context_hooks_test.go`（8 个测试用例全部通过）
+> - 旧 `FlowContext` 接口保持不变，零破坏
 
 ---
 

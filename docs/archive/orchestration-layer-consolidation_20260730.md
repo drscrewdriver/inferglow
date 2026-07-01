@@ -1,6 +1,14 @@
 # 编排层架构归并计划
 
-> **审定状态（2026-07-30）**：已确认 `StepFunc`/`StageFunc` 两套签名仍存在；`FlowContext` 现有14 个方法（原文写 12，已修正）；`executeFlow` 绕过 InputQueue 问题仍存在。**四个问题均有效，计划待执行。**
+> **审定状态（2026-07-30）**：已确认 `StepFunc`/`StageFunc` 两套签名仍存在；`FlowContext` 现有 14 个方法；`executeFlow` 绕过 InputQueue 问题仍存在。**四个问题均有效，计划待执行。**
+> **前置依赖 `cleanup-middleware-bridge.md` 已于 2026-07-30 完成。**
+>
+> **问题 1 已完成（2026-07-30）**：✅
+> - 在 `stage` 包添加 `Adapt` 桥接函数，将 `StageFunc` 转为 `StepFunc`
+> - 在 `StepFunc` 和 `StageFunc` 类型声明添加关系注释，明确推荐方向 A
+> - `flowdef/adapter.go` 改用 `stage.Adapt` 简化代码
+> - 新增 5 个桥接测试用例全部通过
+> - `FlowContext` 接口膨胀问题已由 `flowcontext-interface-split.md` 阶段 1-2 解决
 
 > 目标：消除 `flow/` 与 `orchestrator/` 之间执行单元接口的重复与不兼容，
 > 为三模式抢占（PreemptQueue/SafePoint/Force）在上层落定铺平道路。
@@ -12,12 +20,12 @@
 
 ## 问题清单
 
-| # | 问题 | 影响 | 建议时机 |
-|---|------|------|----------|
-| 1 | `StepFunc` vs `StageFunc` 两套执行单元签名 | 开发者需二选一，不互操作 | 有消费需求时 |
-| 2 | `FlowContext` 接口膨胀（12 方法） | 实现方负担重，mock 成本高 | 接口稳定后 |
-| 3 | `executeFlow` 绕过 InputQueue | Flow 模式下 queue 消费不可见 | Flow 成为主流路径前 |
-| 4 | Middleware/Flow 嵌套角色未定义 | Flow 执行时 middleware 语义模糊 | 与 #1 同步 |
+| # | 问题 | 影响 | 建议时机 | 状态 |
+|---|------|------|----------|------|
+| 1 | `StepFunc` vs `StageFunc` 两套执行单元签名 | 开发者需二选一，不互操作 | 有消费需求时 | ✅ 已完成 |
+| 2 | `FlowContext` 接口膨胀（12 方法） | 实现方负担重，mock 成本高 | 接口稳定后 | ✅ 阶段 1-2 完成 |
+| 3 | `executeFlow` 绕过 InputQueue | Flow 模式下 queue 消费不可见 | Flow 成为主流路径前 | 待实施 |
+| 4 | Middleware/Flow 嵌套角色未定义 | Flow 执行时 middleware 语义模糊 | 与 #1 同步 | 待实施 |
 
 ---
 
