@@ -8,7 +8,7 @@ Go 生态缺乏一个对标 Agently 设计理念的框架：**契约优先、可
 
 ## 架构概览
 
-InferGlow 采用 **22 个独立 Go module** 的细粒度架构，按依赖深度自然形成三层结构。
+InferGlow 采用 **23 个独立 Go module** 的细粒度架构，按依赖深度自然形成四层结构。
 
 ```mermaid
 graph TD
@@ -27,19 +27,23 @@ graph TD
         RESOURCE["resource<br/>~750 LOC"]
     end
 
-    subgraph mid["中间层 — 6 个模块，依赖基础层"]
+    subgraph mid["中间层 — 5 个模块，依赖基础层"]
         COMP["components<br/>→ model"]
         FLOW["flow<br/>→ schema"]
         ACT["action<br/>→ approval, sandbox"]
         MCPSERVER["mcpserver<br/>→ action"]
         BUILTINS["builtins<br/>→ action"]
-        SERVER["server<br/>~3100 LOC<br/>→ flow, trigger/"]
     end
 
-    subgraph orch["编排层 — 4 个模块，聚合中间层+基础层"]
+    subgraph orch["编排层 — 3 个模块，聚合中间层+基础层"]
         ORCH["orchestrator<br/>→ action,audit,flow,model,observability,session"]
         SECURITY["security<br/>→ orchestrator,session (接口注入)"]
         EVAL["eval<br/>→ action,model,orchestrator,session"]
+    end
+
+    subgraph app["应用层 — 3 个模块，面向用户的入口"]
+        SERVER["server<br/>~3100 LOC<br/>→ flow, orchestrator"]
+        CLI["cli<br/>→ orchestrator,context,builtins"]
         EXAMPLES["examples<br/>→ 多模块"]
     end
 
@@ -62,7 +66,13 @@ graph TD
     SECURITY -.->|"接口注入"| ORCH
     EVAL --> MODEL
     EVAL --> ORCH
+
+    %% 应用层 → 编排层+中间层
+    SERVER --> ORCH
     SERVER --> FLOW
+    CLI --> ORCH
+    CLI --> CTX
+    CLI --> BUILTINS
 ```
 
 ## 可插拔架构 (Pluggable Architecture)
@@ -167,7 +177,7 @@ exec := action.NewSandboxExecutor(action.SandboxExecutorConfig{
 
 ## 模块列表
 
-22 个独立 Go module，按依赖深度分为三层。总代码量约 62,000 行（不含测试）。
+23 个独立 Go module，按依赖深度分为四层。总代码量约 62,000 行（不含测试）。
 
 ### 基础层 — 12 个模块，零内部依赖
 
@@ -276,23 +286,7 @@ Human-in-the-Loop 审批流程管理。
 - **依赖**: 无
 - **核心类型**: `Provider`, `Manager`, `Handle`
 
-#### server — REST API 服务 (~3100 LOC)
-
-Agent HTTP 托管服务，提供 RESTful 接口、外部触发器、持久化 Memory、流式工具调用和运行时状态检查。
-
-- **模块路径**: `github.com/inferglow/server`
-- **依赖**: `flow`, `trigger`（子包）
-- **核心类型**: `Server`, `Router`, `RunManager`, `MemoryStore`, `trigger.Registry`
-- **子包**: `trigger/`（Webhook/Cron/EventBus 三种触发器）
-- **V7 新增能力**:
-  - 外部触发器：Webhook（HMAC 验签）、Cron（定时）、EventBus（事件驱动）
-  - LCEL 声明式链（`flow/lcel.go`）：Chain/Pipe/Invoke/Build + 3 组合器
-  - 持久化 Memory：MemoryStore 接口 + InMemoryStore + CRUD API
-  - 运行时状态检查：只读 state/steps 查询 API
-  - 流式工具调用：AgentCallbacks → SSE 事件流桥接
-  - Session 结束自动提升：SessionEndHook 异步调用 LongMemPromoter
-
-### 中间层 — 6 个模块，依赖基础层
+### 中间层 — 5 个模块，依赖基础层
 
 #### flow — TriggerFlow + LCEL 编排引擎 (~7400 LOC)
 
@@ -335,7 +329,7 @@ MCP JSON-RPC 2.0 服务端，三种传输全覆盖。
 - **模块路径**: `github.com/inferglow/builtins`
 - **依赖**: `action`
 
-### 编排层 — 4 个模块，聚合中间层+基础层
+### 编排层 — 3 个模块，聚合中间层+基础层
 
 #### orchestrator — Agent 编排层 / 用户入口 (~7700 LOC)
 
@@ -370,6 +364,34 @@ PII 脱敏、Prompt 注入检测、令牌桶限流、RBAC 访问控制。通过�
 - **模块路径**: `github.com/inferglow/examples`
 - **依赖**: 多模块
 
+### 应用层 — 3 个模块，面向用户的入口
+
+#### server — REST API 服务 (~3100 LOC)
+
+Agent HTTP 托管服务，提供 RESTful 接口、外部触发器、持久化 Memory、流式工具调用和运行时状态检查。
+
+- **模块路径**: `github.com/inferglow/server`
+- **依赖**: `orchestrator`（Agent 执行）, `flow`（声明式 Flow 数据模型 + trigger 子包）
+- **核心类型**: `Server`, `Router`, `RunManager`, `MemoryStore`, `trigger.Registry`
+- **子包**: `trigger/`（Webhook/Cron/EventBus 三种触发器）
+- **架构说明**: server 对 flow 的依赖是**数据模型层**（REST API 需要序列化 `FlowDef`、注册 `stage.Registry`），Agent 执行路径通过 orchestrator 完成
+- **V7 新增能力**:
+  - 外部触发器：Webhook（HMAC 验签）、Cron（定时）、EventBus（事件驱动）
+  - LCEL 声明式链（`flow/lcel.go`）：Chain/Pipe/Invoke/Build + 3 组合器
+  - 持久化 Memory：MemoryStore 接口 + InMemoryStore + CRUD API
+  - 运行时状态检查：只读 state/steps 查询 API
+  - 流式工具调用：AgentCallbacks → SSE 事件流桥接
+  - Session 结束自动提升：SessionEndHook 异步调用 LongMemPromoter
+
+#### cli — 终端 REPL 客户端 (~1200 LOC)
+
+交互式终端 Agent 客户端，内置持久记忆注入、上下文压缩、会话管理。GUI 项目可选择将 cli 作为子进程调用，或完全独立实现。
+
+- **模块路径**: `github.com/inferglow/cli`
+- **依赖**: `orchestrator`, `action`, `builtins`, `context`, `model`, `session`
+- **核心类型**: `RunREPL`, `MemoryBridge`, `CLIConfig`, `CommandFunc`
+- **核心功能**: 交互式 REPL、持久记忆注入（ProactiveRecall）、上下文压缩（`/compact`）、宪法区加载、会话恢复
+
 ## 模块依赖关系
 
 ```mermaid
@@ -395,7 +417,6 @@ graph TD
         ACT["action"]
         MCPSERVER["mcpserver"]
         BUILTINS["builtins"]
-        SERVER["server"]
 
         COMP --> MODEL
         FLOW --> SCHEMA
@@ -403,14 +424,12 @@ graph TD
         ACT -.->|"with_sandbox"| SANDBOX
         MCPSERVER --> ACT
         BUILTINS --> ACT
-        SERVER --> FLOW
     end
 
     subgraph orch["编排层"]
         ORCH["orchestrator"]
         SECURITY["security"]
         EVAL["eval"]
-        EXAMPLES["examples"]
 
         ORCH --> ACT
         ORCH --> SESS
@@ -423,22 +442,35 @@ graph TD
         EVAL --> MODEL
         EVAL --> ORCH
     end
+
+    subgraph app["应用层"]
+        SERVER["server"]
+        CLI["cli"]
+        EXAMPLES["examples"]
+
+        SERVER --> ORCH
+        SERVER --> FLOW
+        CLI --> ORCH
+        CLI --> CTX
+        CLI --> BUILTINS
+    end
 ```
 
 | 模块 | 内部依赖 | 被谁依赖 |
 |------|---------|----------|
 | model | 无 | orchestrator, eval, components |
 | schema | 无 | flow |
-| flow | schema | orchestrator |
+| flow | schema | orchestrator, server |
 | action | approval, sandbox | orchestrator, mcpserver, builtins, eval |
 | session | 无 | orchestrator, security, eval |
 | audit | 无 | orchestrator |
 | sandbox | 无 | action (build tag) |
 | context | 无 | — (用户代码直接集成) |
-| orchestrator | action, audit, flow, model, observability, session | security, eval |
+| orchestrator | action, audit, flow, model, observability, session | security, eval, server |
 | security | session, orchestrator (接口注入) | 用户代码 |
 | eval | model, session, action, orchestrator | 用户代码 |
-| server | flow, trigger（子包） | 用户代码 |
+| server | flow（数据模型）, orchestrator（Agent 执行）, trigger（子包） | 用户代码 |
+| cli | orchestrator, action, builtins, context, model, session | 用户代码 / GUI 子进程 |
 | mcpserver | action | 用户代码 |
 | builtins | action | 用户代码 |
 | approval | 无 | action |
@@ -515,7 +547,7 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 
 所有模块均已实现并经过完整测试：
 
-- **22 个 Go module**：全部通过 `go build` 和 `go vet`，Windows 交叉编译 clean
+- **23 个 Go module**：全部通过 `go build` 和 `go vet`，Windows 交叉编译 clean
 - **orchestrator 编排层**：Agent Loop + function calling + 并发 Action + 死循环检测 + 三种取消安全点
 - **Schema 四层校验**：L1 json_schema / L2 API 约束 / L3 prompt 兜底 / L4 后置校验+重试 + Flow step.Schema
 - **MCP 协议**：JSON-RPC 2.0 三种传输全覆盖（stdio / SSE / StreamableHTTP）
@@ -527,6 +559,7 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 - **持久化 Memory**：MemoryStore 接口 + InMemoryStore + CRUD API + SessionEndHook 自动提升
 - **运行时状态检查**：只读 state/steps 查询 API，ExecState 快照
 - **流式工具调用**：AgentCallbacks → SSE 事件流桥接，step_done 逐步事件
+- **CLI 终端客户端**：`cli/` 独立模块，交互式 REPL + 持久记忆注入 + 上下文压缩 + 会话恢复，GUI 可作子进程接入
 
 ### V6 架构演进完成事项
 

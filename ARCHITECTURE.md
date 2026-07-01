@@ -318,7 +318,7 @@ func shouldContinue(decision, roundIndex, maxRounds int) bool {
 
 ### 现状总结
 
-inferglow 已从“零件库”演进为**完整的 Agent 基础设施框架**：12 个基础模块 + 6 个中间层模块 + 4 个编排层模块，总计 22 个独立 Go module、~62,000 LOC。核心 Agent Loop（orchestrator）已完备，当前重点是上层产品化（CLI Agent / 桌面端 / 多平台接入）。
+inferglow 已从“零件库”演进为**完整的 Agent 基础设施框架**：12 个基础模块 + 5 个中间层模块 + 3 个编排层模块 + 3 个应用层模块，总计 23 个独立 Go module、~62,000 LOC。核心 Agent Loop（orchestrator）已完备，当前重点是上层产品化（CLI Agent / 桌面端 / 多平台接入）。
 
 ---
 
@@ -517,24 +517,44 @@ orchestrator/                          ← 编排层（已实现，~7700 LOC）
 ### 与 inferglow 的关系（已实现）
 
 ```
-inferglow/                    ← 基础设施库（22 个 module，~62k LOC）
-├── model/                    ← LLM Provider 抽象
-├── schema/                   ← Schema 引擎
+四层架构（23 个独立 Go module，~62k LOC）：
+
+应用层（面向用户入口）：
+├── server/                   ← REST API + 触发器 + Memory（依赖 flow 数据模型 + orchestrator 执行）
+├── cli/                      ← 终端 REPL 客户端
+└── examples/                 ← 示例代码
+
+编排层（聚合中间层+基础层）：
+├── orchestrator/             ← Agent 编排层 / 用户入口（~7700 LOC）
+│   ├── agent/                ← Agent 类 + Engine + Callbacks
+│   ├── team/                 ← Multi-Agent 协调
+│   └── skill/                ← 技能管理
+├── security/                 ← PII/注入/限流/RBAC
+└── eval/                     ← 离线评估框架
+
+中间层（依赖基础层）：
 ├── flow/                     ← Flow + TriggerFlow + LCEL 引擎
 ├── action/                   ← Action Runtime
+├── components/               ← Prompt/Tool 通用接口
+├── mcpserver/                ← MCP 协议服务
+└── builtins/                 ← 内置 Action/Policy/Tool
+
+基础层（零内部依赖）：
+├── model/                    ← LLM Provider 抽象
+├── schema/                   ← Schema 引擎
 ├── session/                  ← Session 记忆管理 + Memory 接口
 ├── sandbox/                  ← 沙箱框架（8 后端）
 ├── context/                  ← 上下文管理引擎
-├── server/                   ← REST API + 触发器 + Memory
-├── security/                 ← PII/注入/限流/RBAC
-├── eval/                     ← 离线评估框架
-└── ...
-
-orchestrator/                 ← 编排层（用户入口，~7700 LOC）
-├── agent/                    ← Agent 类 + Engine + Callbacks
-├── team/                     ← Multi-Agent 协调
-└── skill/                    ← 技能管理
+├── audit/                    ← 审计链
+├── approval/                 ← HITL 审批
+├── rag/                      ← RAG 管道
+├── rerank/                   ← 重排序
+├── observability/            ← OpenTelemetry 集成
+├── workspace/                ← 工作区文件操作
+└── resource/                 ← 资源管理
 ```
+
+**server 对 flow 的依赖是数据模型层**（REST API 需要序列化 `FlowDef`、注册 `stage.Registry`），Agent 执行路径通过 orchestrator 完成。
 
 **orchestrator 通过 go.mod replace 指令引用 inferglow 的子模块。**
 
@@ -544,7 +564,7 @@ orchestrator/                 ← 编排层（用户入口，~7700 LOC）
 
 ### inferglow 当前状态
 
-- **已完成**: 22 个 Go module，~62,000 LOC，覆盖从模型抽象到桌面端的全链路
+- **已完成**: 23 个 Go module，~62,000 LOC，覆盖从模型抽象到桌面端的全链路
 - **核心引擎**: orchestrator 编排层已完备（Agent Loop + function calling + 并发 Action + Middleware + Callbacks）
 - **产品化方向**: CLI Agent / 桌面端 / Multi-Agent / IM Bridge（见 Reasonix Agent 实施计划）
 

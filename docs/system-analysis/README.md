@@ -15,6 +15,7 @@
 | 06 | [security、observability 与 workspace 模块](./06-security-observability-workspace.md) | PII 脱敏、注入防护、限流、RBAC、OTel、工作区血缘 |
 | 07 | [orchestrator 模块](./07-orchestrator.md) | Agent 入口、PLAN-EXECUTE 引擎、ActionDispatcher、LoopGuard |
 | 08 | [关键调用链](./08-call-chains.md) | 端到端函数调用链追踪（含行号引用） |
+| 09 | [编排层与中间层：历史成因与发展分析](./09-middleware-and-orchestration-history.md) | 两个聚类的演化史、设计动机、消费现状与遗留复杂性 |
 
 ## 阅读建议
 

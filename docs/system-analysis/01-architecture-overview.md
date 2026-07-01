@@ -2,7 +2,9 @@
 
 ## 一、分层架构
 
-InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 22 个独立 Go module 组成，按依赖深度分为三层：基础层（13 个零依赖模块）、中间层（5 个依赖基础层的模块）、编排层（4 个聚合模块）。编排层（orchestrator）把基础模块粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
+InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施层由 24 个独立 Go module 组成，按依赖深度分为三层：基础层（14 个零依赖模块）、中间层（5 个依赖基础层的模块）、编排层（5 个聚合模块，含 cli）。编排层（orchestrator）把基础模块粘合成可运行的 Agent。安全（security）、审计（audit）、可观测（observability）作为横切关注点贯穿全栈。
+
+> **应用接入层**：`server/`（REST API）和 `cli/`（终端 REPL）是面向用户的接入模块。GUI 项目可选择：①通过 `server` REST API 接入；②将 `cli` 作为子进程调用；③独立实现并直接依赖 `orchestrator`。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -80,17 +82,24 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 │  周期管理        │      │  可插拔 Handler  │
 └─────────────────┘      └──────────────────┘
 
-┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│   context       │      │   eval           │      │   mcpserver      │
-│  上下文管理引擎   │      │  离线评估框架     │      │  MCP 三传输服务    │
-│  三区+缓存预算   │      │  ScriptedProvider│      │  stdio/SSE/HTTP  │
-└─────────────────┘      └──────────────────┘      └──────────────────┘
+┌─────────────────┐      ┌──────────────────┐
+│   context       │      │   eval           │
+│  上下文管理引擎   │      │  离线评估框架     │
+│  三区+缓存预算   │      │  ScriptedProvider│
+└─────────────────┘      └──────────────────┘
 
 ┌─────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│   server        │      │   rag            │      │   rerank         │
-│  REST API 服务   │      │  RAG 管道        │      │  重排序服务       │
-│  Agent HTTP 托管 │      │  6种加载+3种分割  │      │  Cohere/LLM/降级  │
+│   server        │      │   cli            │      │   rag            │
+│  REST API 服务   │      │  终端 REPL 客户端 │      │  RAG 管道        │
+│  Agent HTTP 托管 │      │  Agent+Memory    │      │  6种加载+3种分割  │
+│  GUI/外部接入    │      │  GUI 可作子进程   │      │                  │
 └─────────────────┘      └──────────────────┘      └──────────────────┘
+
+┌──────────────────┐      ┌──────────────────┐
+│   rerank         │      │   mcpserver      │
+│  重排序服务       │      │  MCP 三传输服务    │
+│  Cohere/LLM/降级  │      │  stdio/SSE/HTTP  │
+└──────────────────┘      └──────────────────┘
 ```
 
 ## 二、模块依赖关系图
@@ -150,7 +159,8 @@ InferGlow 采用**基础设施层 + 编排层**的两段式架构。基础设施
 | `context` | 无（完全独立，通过接口与 session 交互） |
 | `security` | `session` `orchestrator`（仅 `sessionhook`/`agenthook` 子包实现接口契约） |
 | `eval` | `model` `session` `action` `orchestrator` |
-| `server` | 无（完全独立，仅引用自身子包） |
+| `server` | `orchestrator` `flow`（通过 replace 间接依赖基础模块） |
+| `cli` | `orchestrator` `action` `builtins` `context` `model` `session` |
 | `mcpserver` | `action` |
 | `builtins` | `action` |
 | `schema` | 无 |
@@ -316,6 +326,7 @@ inferglow/
 ├── rerank/go.mod               module github.com/inferglow/rerank
 ├── orchestrator/go.mod         module github.com/inferglow/orchestrator
 ├── server/go.mod               module github.com/inferglow/server     (V6: REST API)
+├── cli/go.mod                  module github.com/inferglow/cli        (V7: 终端 REPL，GUI 可作子进程)
 ├── mcpserver/go.mod            module github.com/inferglow/mcpserver  (V6: MCP 三传输)
 ├── eval/go.mod                 module github.com/inferglow/eval       (V6: 离线评估)
 ├── components/go.mod           module github.com/inferglow/components
@@ -323,7 +334,7 @@ inferglow/
 └── examples/go.mod             module github.com/inferglow/examples
 ```
 
-> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），22 个子模块各自独立。`orchestrator/go.mod` 通过 `replace` 指令把基础模块指向本地 `../` 路径。`context/` 是 V6 从 `session/contextmgr` 拆出的独立模块。`eval/`、`server/`、`mcpserver/` 是 V6 第三梯队新增。
+> 根 `go.mod` 的 module 名为 `github.com/inferglow/model`（历史遗留），24 个子模块各自独立。`orchestrator/go.mod` 通过 `replace` 指令把基础模块指向本地 `../` 路径。`context/` 是 V6 从 `session/contextmgr` 拆出的独立模块。`eval/`、`server/`、`mcpserver/` 是 V6 第三梯队新增。`cli/` 是 V7 新增的终端 REPL 模块，依赖 `orchestrator`+`context`+`builtins`，GUI 项目可将其作为子进程调用或完全独立实现。
 
 ## 六、与旧版 ARCHITECTURE.md 的差异
 
