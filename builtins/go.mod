@@ -2,7 +2,12 @@ module github.com/inferglow/builtins
 
 go 1.25.0
 
-require github.com/inferglow/action v0.0.0
+require (
+	github.com/inferglow/action v0.0.0
+	github.com/inferglow/context v0.0.0
+	github.com/inferglow/flow v0.0.0
+	github.com/inferglow/memory v0.0.0
+)
 
 require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
@@ -18,6 +23,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/inferglow/approval v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
+	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc3 // indirect
@@ -32,6 +38,7 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/inferglow/action => ../action
@@ -39,3 +46,11 @@ replace github.com/inferglow/action => ../action
 replace github.com/inferglow/sandbox => ../sandbox
 
 replace github.com/inferglow/approval => ../approval
+
+replace github.com/inferglow/memory => ../memory
+
+replace github.com/inferglow/flow => ../flow
+
+replace github.com/inferglow/context => ../context
+
+replace github.com/inferglow/schema => ../schema

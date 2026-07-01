@@ -26,9 +26,6 @@
 // they do not import session, model, or any other InferGlow module. This
 // allows agent, team, and workflow packages to share the same middleware
 // chain without pulling in heavy dependencies.
-//
-// S3: This package coexists with the legacy agent.AgentHandler / agent.Middleware
-// types. Adapters in agent/middleware.go bridge between the two signatures.
 package middleware
 
 import (
