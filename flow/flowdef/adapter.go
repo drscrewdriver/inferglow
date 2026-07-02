@@ -66,13 +66,14 @@ func (a *Adapter) ToFlow(def *FlowDef) (*flow.Flow, error) {
 //   - Receives the accumulated data map (flow inputs + prior outputs) as input
 //   - Evaluates the `when` expression; if false, skips the stage and returns
 //     the data map unchanged
-//   - For the `stage` operator: renders step.Inputs templates, calls the
-//     registered StageFunc, and stores the output under step.Name
+//   - For the `stage` operator: uses stage.Adapt to convert the registered
+//     StageFunc into a StepFunc, then wraps it with template rendering and
+//     data merging logic
 //   - For other operators: pass-through stub (TODO: Phase 1.5)
 func (a *Adapter) toStepFunc(sd StepDef) (flow.StepFunc, error) {
 	// Pre-resolve the stage function for stage operators so that missing
 	// stages are reported at build time (ToFlow), not at execution time.
-	var stageFn stage.StageFunc
+	var adaptedFn flow.StepFunc
 	if sd.Operator == "stage" {
 		if a.stages == nil {
 			return nil, fmt.Errorf("stage registry is nil")
@@ -81,7 +82,8 @@ func (a *Adapter) toStepFunc(sd StepDef) (flow.StepFunc, error) {
 		if !ok {
 			return nil, fmt.Errorf("stage %q not found in registry", sd.Stage)
 		}
-		stageFn = fn
+		// Use stage.Adapt to convert StageFunc to StepFunc.
+		adaptedFn = stage.Adapt(fn)
 	}
 
 	return func(ctx context.Context, input any) (any, error) {
@@ -118,20 +120,19 @@ func (a *Adapter) toStepFunc(sd StepDef) (flow.StepFunc, error) {
 			}
 		}
 
-		// Extract FlowContext (may be absent in unit tests).
-		fctx, _ := flow.FlowContextFrom(ctx)
-
-		outputs, err := stageFn(ctx, stageInputs, fctx)
+		// Call the adapted stage function.
+		// Convert stage.Inputs to map[string]any for the adapted function.
+		inputMap := make(map[string]any, len(stageInputs))
+		for k, v := range stageInputs {
+			inputMap[k] = v
+		}
+		result, err := adaptedFn(ctx, inputMap)
 		if err != nil {
 			return nil, fmt.Errorf("step %q stage %q: %w", sd.Name, sd.Stage, err)
 		}
 
-		// Copy outputs into a plain map[string]any so that downstream
-		// templates and type assertions work uniformly.
-		outMap := make(map[string]any, len(outputs))
-		for k, v := range outputs {
-			outMap[k] = v
-		}
+		// Convert result to map and merge into accumulated data.
+		outMap := toDataMap(result)
 
 		// Return a new accumulated map with this step's output merged in.
 		// Copying avoids mutating the predecessor's data in place.

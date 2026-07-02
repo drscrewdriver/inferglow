@@ -26,7 +26,18 @@ import (
 	"github.com/inferglow/schema"
 )
 
-// StepFunc defines a single step function
+// StepFunc defines a single step function.
+//
+// StepFunc is the primary execution unit in InferGlow flows. It follows
+// the LCEL (LangChain Expression Language) pattern: a generic any→any
+// function that threads data through a pipeline.
+//
+// Relationship to stage.StageFunc:
+//   - stage.StageFunc is a specialised form with typed Inputs/Outputs maps
+//     and direct access to FlowContext. Use stage.Adapt to convert a
+//     StageFunc into a StepFunc for use in LCEL chains or flow.Step.
+//   - StepFunc can access FlowContext via flow.FlowContextFrom(ctx),
+//     so it can do everything StageFunc can, just with untyped input/output.
 type StepFunc func(ctx context.Context, input any) (any, error)
 
 // Step represents a single executable step in a flow

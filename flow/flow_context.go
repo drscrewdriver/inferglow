@@ -120,6 +120,10 @@ type FlowContext interface {
 // 的 executeFlow 路径时（后者会注入 engine 引用）。
 var ErrAgentNotConfigured = errors.New("flow: agent runtime not configured")
 
+// ErrAgentDepthExceeded 是 RunAgent 在子 Agent 嵌套深度超过 MaxDepth 时
+// 返回的哨兵错误。防止模型无限递归生成子 Agent。
+var ErrAgentDepthExceeded = errors.New("flow: agent depth exceeded")
+
 // AgentRunOptions 配置单次 Agent 循环的行为。
 // 采用结构化选项而非位置参数，为后续并行子 Agent / Session 隔离 / Token 预算等
 // 扩展预留空间，不破坏已有调用方。
@@ -129,6 +133,11 @@ type AgentRunOptions struct {
 	// SessionIsolation 为 true 时，内嵌 Agent 使用独立 Session（不污染外层会话历史）。
 	// 默认为 false（共享 Session）。
 	SessionIsolation bool
+	// ModelID 指定子 Agent 使用的模型标识。空字符串继承父 Agent 的模型。
+	ModelID string
+	// MaxDepth 最大嵌套深度。0 = 使用默认值 3。
+	// 当 engine.depth >= MaxDepth 时，RunAgent 返回 ErrAgentDepthExceeded。
+	MaxDepth int
 }
 
 // AgentSubTask 描述 RunAgentParallel 中的一个并行子 Agent 任务。
@@ -155,6 +164,118 @@ func FlowContextFrom(ctx context.Context) (FlowContext, bool) {
 	fc, ok := ctx.Value(flowContextKey{}).(FlowContext)
 	return fc, ok
 }
+
+// ---------------------------------------------------------------------------
+// 横切关注点小接口（通过 context 值注入，未注入时返回 noop 实现）
+//
+// 这些接口将 FlowContext 中的横切方法（审计/安全/可观测/KV）解耦为独立
+// 的小接口，step 可通过 context getter 访问而无需依赖完整的 FlowContext。
+// 这是四阶段迁移的阶段 1：定义接口 + context getter，零破坏。
+// ---------------------------------------------------------------------------
+
+// AuditHook 是审计记录的横切接口。未注入时 AuditHookFrom 返回 noopAuditHook。
+type AuditHook interface {
+	AuditAppend(source, action string, input, output any)
+}
+
+type auditHookKey struct{}
+
+// WithAuditHook 将 AuditHook 注入到 context 中。
+func WithAuditHook(ctx context.Context, h AuditHook) context.Context {
+	return context.WithValue(ctx, auditHookKey{}, h)
+}
+
+// AuditHookFrom 从 context 中提取 AuditHook。未注入时返回 noop 实现。
+func AuditHookFrom(ctx context.Context) AuditHook {
+	if h, ok := ctx.Value(auditHookKey{}).(AuditHook); ok && h != nil {
+		return h
+	}
+	return noopAuditHook{}
+}
+
+type noopAuditHook struct{}
+
+func (noopAuditHook) AuditAppend(string, string, any, any) {}
+
+// SecurityHook 是输入脱敏/输出校验的横切接口。未注入时 SecurityHookFrom 返回 noopSecurityHook。
+type SecurityHook interface {
+	MaskInput(input string) string
+	CheckOutput(output string) error
+}
+
+type securityHookKey struct{}
+
+// WithSecurityHook 将 SecurityHook 注入到 context 中。
+func WithSecurityHook(ctx context.Context, h SecurityHook) context.Context {
+	return context.WithValue(ctx, securityHookKey{}, h)
+}
+
+// SecurityHookFrom 从 context 中提取 SecurityHook。未注入时返回 noop 实现。
+func SecurityHookFrom(ctx context.Context) SecurityHook {
+	if h, ok := ctx.Value(securityHookKey{}).(SecurityHook); ok && h != nil {
+		return h
+	}
+	return noopSecurityHook{}
+}
+
+type noopSecurityHook struct{}
+
+func (noopSecurityHook) MaskInput(input string) string { return input }
+func (noopSecurityHook) CheckOutput(string) error      { return nil }
+
+// SpanStarterHook 是 tracing span 启动的横切接口。
+// 注意：该接口与 FlowContext.StartSpan 签名一致，但独立定义以便通过 context 传递。
+// 未注入时 SpanStarterHookFrom 返回 noopSpanStarter。
+type SpanStarterHook interface {
+	StartSpan(ctx context.Context, kind SpanKind, name string) (context.Context, Span)
+}
+
+type spanStarterHookKey struct{}
+
+// WithSpanStarterHook 将 SpanStarterHook 注入到 context 中。
+func WithSpanStarterHook(ctx context.Context, s SpanStarterHook) context.Context {
+	return context.WithValue(ctx, spanStarterHookKey{}, s)
+}
+
+// SpanStarterHookFrom 从 context 中提取 SpanStarterHook。未注入时返回 noop 实现。
+func SpanStarterHookFrom(ctx context.Context) SpanStarterHook {
+	if s, ok := ctx.Value(spanStarterHookKey{}).(SpanStarterHook); ok && s != nil {
+		return s
+	}
+	return noopSpanStarter{}
+}
+
+type noopSpanStarter struct{}
+
+func (noopSpanStarter) StartSpan(ctx context.Context, kind SpanKind, name string) (context.Context, Span) {
+	return ctx, NoopSpan()
+}
+
+// KVStore 是键值存储的横切接口。未注入时 KVStoreFrom 返回 noopKVStore。
+type KVStore interface {
+	SetValue(key string, value any)
+	GetValue(key string) (any, bool)
+}
+
+type kvStoreKey struct{}
+
+// WithKVStore 将 KVStore 注入到 context 中。
+func WithKVStore(ctx context.Context, kv KVStore) context.Context {
+	return context.WithValue(ctx, kvStoreKey{}, kv)
+}
+
+// KVStoreFrom 从 context 中提取 KVStore。未注入时返回 noop 实现。
+func KVStoreFrom(ctx context.Context) KVStore {
+	if kv, ok := ctx.Value(kvStoreKey{}).(KVStore); ok && kv != nil {
+		return kv
+	}
+	return noopKVStore{}
+}
+
+type noopKVStore struct{}
+
+func (noopKVStore) SetValue(string, any)  {}
+func (noopKVStore) GetValue(string) (any, bool) { return nil, false }
 
 // pauseSignalKey 是 context.Value 的私有 key 类型，用于携带暂停信号。
 type pauseSignalKey struct{}
