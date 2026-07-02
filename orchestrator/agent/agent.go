@@ -126,17 +126,16 @@ type Agent struct {
 	// WithCallbacks on New; overridden by a per-call WithCallbacks on Run.
 	// nil disables callbacks (default).
 	callbacks *AgentCallbacks
-	// middlewares is the persisted ordered list of middleware wrappers.
+	// middlewares is the persisted list of unified middlewares.
 	// Set via WithMiddleware on New; overridden by a per-call WithMiddleware
-	// on Run. Empty means the core handler is called directly.
-	middlewares []Middleware
-	// unifiedMiddlewares is the persisted list of new-style unified middlewares.
-	// Set via WithUnifiedMiddleware on New; overridden by a per-call
-	// WithUnifiedMiddleware on Run.
-	unifiedMiddlewares []middleware.Middleware
+	// on Run. Empty means the core handler is called directly (zero overhead).
+	middlewares []middleware.Middleware
 	// cacheBudgetUpdater receives cached_tokens feedback from LLM responses
 	// and adjusts context management sweet-spot thresholds. nil disables.
 	cacheBudgetUpdater CacheBudgetUpdater
+	// compactHook is called after each LLM turn with promptTokens
+	// to trigger ModeSummary compaction. nil disables (default).
+	compactHook func(promptTokens int)
 	// inputQueue is the bounded FIFO queue for user inputs submitted while
 	// the agent is busy. nil disables queue mode (default).
 	inputQueue *InputQueue
@@ -176,16 +175,15 @@ type runConfig struct {
 	// of the LLM response. Populated from the Agent default and optionally
 	// overridden by a per-call WithOutputSchema. nil disables L4 validation.
 	outputSchema *model.OutputSchema
-	// middlewares is the ordered list of middleware wrappers. Empty means
+	// middlewares is the list of unified middlewares. Empty means
 	// the core handler is called directly (zero overhead).
-	middlewares []Middleware
-	// unifiedMiddlewares is the list of new-style unified middlewares.
-	// They are adapted to legacy middlewares and prepended to the chain.
-	unifiedMiddlewares []middleware.Middleware
+	middlewares []middleware.Middleware
 	// callbacks provides lifecycle hooks for observability. nil disables.
 	callbacks *AgentCallbacks
 	// cacheBudgetUpdater receives cached_tokens feedback. nil disables.
 	cacheBudgetUpdater CacheBudgetUpdater
+	// compactHook is called after each LLM turn for ModeSummary compaction.
+	compactHook func(promptTokens int)
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -271,6 +269,15 @@ func WithContextManager(u CacheBudgetUpdater) RunOption {
 	}
 }
 
+// WithCompactHook installs a callback invoked after each LLM turn with
+// promptTokens. Used by ModeSummary to trigger session compaction when
+// the prompt approaches the context window limit.
+func WithCompactHook(hook func(promptTokens int)) RunOption {
+	return func(c *runConfig) {
+		c.compactHook = hook
+	}
+}
+
 // New creates an Agent from the given components. Options applied here
 // (e.g. WithMaxRounds, WithSystemPrompt, WithStreamTimeout) are persisted
 // on the Agent and used by subsequent Run calls unless overridden by a
@@ -305,9 +312,8 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 		flow:          c.flow,
 		outputSchema:  c.outputSchema,
 		rateLimitHook: c.rateLimitHook,
-		callbacks:     c.callbacks,
-		middlewares:   c.middlewares,
-		unifiedMiddlewares: c.unifiedMiddlewares,
+		callbacks:          c.callbacks,
+		middlewares:        c.middlewares,
 		cacheBudgetUpdater: c.cacheBudgetUpdater,
 	}
 }
@@ -335,7 +341,6 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	c.rateLimitHook = a.rateLimitHook
 	c.callbacks = a.callbacks
 	c.middlewares = a.middlewares
-	c.unifiedMiddlewares = a.unifiedMiddlewares
 	c.featuresSet = true
 	for _, opt := range opts {
 		opt(c)
@@ -377,6 +382,10 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	} else {
 		a.engine.cacheBudgetHook = nil
 	}
+
+	// Propagate the compact hook so executeLoop can trigger ModeSummary
+	// compaction after each LLM turn. nil disables.
+	a.engine.compactHook = c.compactHook
 
 	// Propagate the input queue to the engine so executeLoop can drain it
 	// at turn boundaries.
@@ -464,18 +473,36 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	}
 
 	// Apply middleware chain when middlewares are configured.
-	// Unified middlewares are adapted and prepended (outermost) to legacy ones.
-	var handler AgentHandler = coreHandler
-	allMiddlewares := make([]Middleware, 0, len(c.unifiedMiddlewares)+len(c.middlewares))
-	for _, umw := range c.unifiedMiddlewares {
-		allMiddlewares = append(allMiddlewares, adaptUnifiedToLegacy(umw))
+	// When no middlewares are present, the core handler is called directly
+	// (zero overhead).
+	if len(c.middlewares) > 0 {
+		// Wrap coreHandler into a middleware.Handler.
+		core := func(ctx context.Context, input *middleware.Input) (*middleware.Output, error) {
+			msg := ""
+			if len(input.Messages) > 0 {
+				msg = input.Messages[len(input.Messages)-1].Content
+			}
+			resp, err := coreHandler(ctx, msg)
+			if err != nil {
+				return nil, err
+			}
+			return &middleware.Output{
+				Messages: []middleware.Message{{Role: "assistant", Content: resp}},
+			}, nil
+		}
+		handler := middleware.Chain(c.middlewares...)(core)
+		out, err := handler(ctx, &middleware.Input{
+			Messages: []middleware.Message{{Role: "user", Content: userMessage}},
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(out.Messages) > 0 {
+			return out.Messages[len(out.Messages)-1].Content, nil
+		}
+		return "", nil
 	}
-	allMiddlewares = append(allMiddlewares, c.middlewares...)
-	if len(allMiddlewares) > 0 {
-		handler = chainMiddleware(allMiddlewares)(coreHandler)
-	}
-
-	return handler(ctx, userMessage)
+	return coreHandler(ctx, userMessage)
 }
 
 // SetInputQueue installs an InputQueue on the Agent for queue-mode input.

@@ -27,29 +27,45 @@ import (
 	"testing"
 
 	"github.com/inferglow/model"
+	"github.com/inferglow/orchestrator/middleware"
 	"github.com/inferglow/session"
 )
 
-// loggingMiddleware records each call's userMessage and delegates to next.
-func loggingMiddleware(log *[]string) Middleware {
-	return func(next AgentHandler) AgentHandler {
-		return func(ctx context.Context, userMessage string) (string, error) {
-			*log = append(*log, "before:"+userMessage)
-			resp, err := next(ctx, userMessage)
+// loggingMiddleware records each call's user message and delegates to next.
+func loggingMiddleware(log *[]string) middleware.Middleware {
+	return func(next middleware.Handler) middleware.Handler {
+		return func(ctx context.Context, input *middleware.Input) (*middleware.Output, error) {
+			msg := ""
+			if len(input.Messages) > 0 {
+				msg = input.Messages[len(input.Messages)-1].Content
+			}
+			*log = append(*log, "before:"+msg)
+			out, err := next(ctx, input)
+			if err != nil {
+				return nil, err
+			}
+			resp := ""
+			if len(out.Messages) > 0 {
+				resp = out.Messages[len(out.Messages)-1].Content
+			}
 			*log = append(*log, "after:"+resp)
-			return resp, err
+			return out, err
 		}
 	}
 }
 
 // authBlockingMiddleware rejects messages containing "forbidden".
-func authBlockingMiddleware() Middleware {
-	return func(next AgentHandler) AgentHandler {
-		return func(ctx context.Context, userMessage string) (string, error) {
-			if strings.Contains(userMessage, "forbidden") {
-				return "", errors.New("auth: message blocked by middleware")
+func authBlockingMiddleware() middleware.Middleware {
+	return func(next middleware.Handler) middleware.Handler {
+		return func(ctx context.Context, input *middleware.Input) (*middleware.Output, error) {
+			msg := ""
+			if len(input.Messages) > 0 {
+				msg = input.Messages[len(input.Messages)-1].Content
 			}
-			return next(ctx, userMessage)
+			if strings.Contains(msg, "forbidden") {
+				return nil, errors.New("auth: message blocked by middleware")
+			}
+			return next(ctx, input)
 		}
 	}
 }
@@ -130,20 +146,20 @@ func TestMiddleware_ChainOrder(t *testing.T) {
 	}
 
 	var order []string
-	mw1 := func(next AgentHandler) AgentHandler {
-		return func(ctx context.Context, msg string) (string, error) {
+	mw1 := func(next middleware.Handler) middleware.Handler {
+		return func(ctx context.Context, input *middleware.Input) (*middleware.Output, error) {
 			order = append(order, "mw1-before")
-			resp, err := next(ctx, msg)
+			out, err := next(ctx, input)
 			order = append(order, "mw1-after")
-			return resp, err
+			return out, err
 		}
 	}
-	mw2 := func(next AgentHandler) AgentHandler {
-		return func(ctx context.Context, msg string) (string, error) {
+	mw2 := func(next middleware.Handler) middleware.Handler {
+		return func(ctx context.Context, input *middleware.Input) (*middleware.Output, error) {
 			order = append(order, "mw2-before")
-			resp, err := next(ctx, msg)
+			out, err := next(ctx, input)
 			order = append(order, "mw2-after")
-			return resp, err
+			return out, err
 		}
 	}
 

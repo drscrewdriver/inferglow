@@ -258,3 +258,18 @@ func (e *SessionExtension) SetImmutablePrefix(systemPrompt string, tools []any) 
 func (e *SessionExtension) ClearVolatileScratch() {
 	e.s.ClearVolatileScratch()
 }
+
+// Rewrite replaces the active message window on the underlying session
+// backend and returns the original messages for archival. It persists
+// the rewritten session to disk (Write + Sync) so the compaction survives
+// daemon crashes. If the backend does not implement RewritableBackend,
+// Rewrite is a no-op returning nil.
+func (e *SessionExtension) Rewrite(msgs []session.ChatMessage) []session.ChatMessage {
+	rw, ok := e.s.(session.RewritableBackend)
+	if !ok {
+		return nil
+	}
+	old := rw.Rewrite(msgs)
+	e.persist()
+	return old
+}

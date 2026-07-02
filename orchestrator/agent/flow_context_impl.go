@@ -90,8 +90,17 @@ func flowToOtelKind(kind flow.SpanKind) SemanticSpanKind {
 	}
 }
 
-// Compile-time interface satisfaction check.
-var _ flow.FlowContext = (*flowContextImpl)(nil)
+// Compile-time interface satisfaction checks.
+// flowContextImpl satisfies both the full FlowContext interface and the
+// four small hook interfaces (AuditHook, SecurityHook, SpanStarterHook, KVStore)
+// so it can be injected into context for step-level access via *From(ctx) getters.
+var (
+	_ flow.FlowContext     = (*flowContextImpl)(nil)
+	_ flow.AuditHook       = (*flowContextImpl)(nil)
+	_ flow.SecurityHook    = (*flowContextImpl)(nil)
+	_ flow.SpanStarterHook = (*flowContextImpl)(nil)
+	_ flow.KVStore         = (*flowContextImpl)(nil)
+)
 
 // ExecuteAction invokes a registered action by name with the given params
 // and returns its result. It mirrors the Engine's dispatch path: a fresh
@@ -248,6 +257,14 @@ func (fc *flowContextImpl) RunAgent(ctx context.Context, userMessage string, sys
 	if fc.engine == nil {
 		return "", flow.ErrAgentNotConfigured
 	}
+	// Depth check: prevent infinite recursive sub-agent spawning.
+	maxDepth := 3
+	if opts != nil && opts.MaxDepth > 0 {
+		maxDepth = opts.MaxDepth
+	}
+	if fc.engine.depth >= maxDepth {
+		return "", flow.ErrAgentDepthExceeded
+	}
 	maxRounds := 10
 	_ = false // sessionIsolation 预留，Phase 2 使用
 	if opts != nil {
@@ -324,6 +341,7 @@ func cloneEngineForParallel(src *Engine) *Engine {
 		outputSchema:  src.outputSchema,
 		tracer:        src.tracer,
 		maxToolCallRounds: src.maxToolCallRounds,
+		depth:         src.depth + 1,
 	}
 }
 
