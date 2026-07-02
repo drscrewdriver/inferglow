@@ -41,6 +41,10 @@ const (
 	ModePassthrough Mode = "passthrough"
 	// ModeThreeZone uses the three-zone session adapter.
 	ModeThreeZone Mode = "three_zone"
+	// ModeSummary uses session-level summary compaction (对标 Reasonix compact.go).
+	// When prompt tokens exceed a threshold, older messages are summarized
+	// by an LLM and replaced with a structured compaction summary.
+	ModeSummary Mode = "summary"
 	// ModeHybrid uses full compression with L0-L4 levels.
 	ModeHybrid Mode = "hybrid"
 )

@@ -242,6 +242,18 @@ func (s *ThreeZoneSession) ClearVolatileScratch() {
 	s.volatileScratch = nil
 }
 
+// Rewrite implements RewritableBackend. It replaces Zone 2 (append-only
+// history) with the given messages and returns the original history for
+// archival. Zone 1 (immutable prefix) and Zone 3 (volatile scratch) are
+// not modified.
+func (s *ThreeZoneSession) Rewrite(msgs []ChatMessage) []ChatMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.appendOnlyHistory
+	s.appendOnlyHistory = msgs
+	return old
+}
+
 // BuildPrompt builds the full prompt for the LLM:
 // Zone 1 (immutable) + Zone 2 (append-only history) + Zone 3 (volatile scratch).
 // Zone 1 and Zone 2 are in cache-stable order; Zone 3 is appended last.

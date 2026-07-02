@@ -144,6 +144,16 @@ type MaskableStore interface {
 	SetMessageMasker(m MessageMasker)
 }
 
+// RewritableBackend is an optional interface for session backends that
+// support rewriting their active message window. ModeSummary uses this
+// to replace the context window with a compacted summary + tail.
+// FullContext (audit trail) is never modified by Rewrite.
+type RewritableBackend interface {
+	// Rewrite replaces the active message window with msgs.
+	// It returns the original messages for archival.
+	Rewrite(msgs []ChatMessage) []ChatMessage
+}
+
 // SessionBackend is the union of the four capability interfaces above.
 // It is the interface that both Session and ThreeZoneSession implement so
 // that SessionExtension can work with either backend without type
@@ -523,6 +533,17 @@ func (s *Session) GetContextWindow() []ChatMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.copyMessages(s.ContextWindow)
+}
+
+// Rewrite implements RewritableBackend. It replaces ContextWindow with
+// the given messages and returns the original window for archival.
+// FullContext is NOT modified — the audit trail is preserved.
+func (s *Session) Rewrite(msgs []ChatMessage) []ChatMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.ContextWindow
+	s.ContextWindow = msgs
+	return old
 }
 
 // copyMessages creates a shallow copy of a ChatMessage slice.
