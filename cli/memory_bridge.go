@@ -29,6 +29,7 @@ import (
 	contextmgr "github.com/inferglow/context"
 	"github.com/inferglow/context/retrieval"
 	"github.com/inferglow/context/store/jsonl"
+	"github.com/inferglow/memory"
 )
 
 // MemoryBridge connects the CLI agent with the context management and
@@ -41,6 +42,7 @@ type MemoryBridge struct {
 	bm25      *retrieval.BM25Index
 	promoter  *contextmgr.LongMemPromoter
 	store     *jsonl.Store
+	memStore  memory.Store // file-based auto-memory store
 	topK      int
 	stepSeq   int
 	sessionID string
@@ -78,6 +80,9 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 	// 5. Long-term memory promoter.
 	promoter := contextmgr.NewLongMemPromoter(store, ctxCfg.LongMem, sessionID)
 
+	// 6. File-based auto-memory store (Reasonix-compatible).
+	memStore := memory.StoreFor(cfg.DataDir, ".")
+
 	return &MemoryBridge{
 		mgr:       mgr,
 		hybrid:    hybrid,
@@ -85,6 +90,7 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 		bm25:      bm25,
 		promoter:  promoter,
 		store:     store,
+		memStore:  memStore,
 		topK:      cfg.TopK,
 		sessionID: sessionID,
 	}, nil
@@ -208,6 +214,27 @@ func (b *MemoryBridge) SearchMemory(ctx context.Context, query string) ([]contex
 func (b *MemoryBridge) OnSessionEnd(ctx context.Context) {
 	_ = b.promoter.OnSessionEnd(ctx)
 	_ = b.store.Close()
+}
+
+// MemoryIndex returns the MEMORY.md index content for injection into
+// the system prompt. Returns "" if no memories are stored.
+func (b *MemoryBridge) MemoryIndex() string {
+	return b.memStore.Index()
+}
+
+// StandingFacts returns the memory index formatted as standing facts
+// for injection into compaction summaries.
+func (b *MemoryBridge) StandingFacts() string {
+	idx := b.memStore.Index()
+	if idx == "" {
+		return ""
+	}
+	return "<standing_facts>\n" + idx + "</standing_facts>"
+}
+
+// MemStore returns the underlying file-based memory store.
+func (b *MemoryBridge) MemStore() memory.Store {
+	return b.memStore
 }
 
 // AppendConstitutional adds constitutional entries to the hybrid manager.

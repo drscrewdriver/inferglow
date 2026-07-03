@@ -7,6 +7,7 @@ require (
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/builtins v0.0.0
 	github.com/inferglow/context v0.0.0
+	github.com/inferglow/memory v0.0.0
 	github.com/inferglow/model v0.0.0
 	github.com/inferglow/orchestrator v0.0.0
 	github.com/inferglow/session v0.0.0
@@ -25,7 +26,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/inferglow/approval v0.0.0 // indirect
 	github.com/inferglow/audit v0.0.0 // indirect
-	github.com/inferglow/flow v0.0.0-00010101000000-000000000000 // indirect
+	github.com/inferglow/flow v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -68,3 +69,5 @@ replace github.com/inferglow/flow => ../flow
 replace github.com/inferglow/observability => ../observability
 
 replace github.com/inferglow/approval => ../approval
+
+replace github.com/inferglow/memory => ../memory
