@@ -73,6 +73,21 @@ func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.A
 	urlFetch := actions.NewURLFetchAction(actions.URLFetchConfig{})
 	actExt.Register(wrapWithIngest(urlFetch, bridge))
 
+	// Memory tools (Phase 2): remember / memory / forget
+	memStore := bridge.MemStore()
+	remember := actions.NewMemoryRememberAction(actions.MemoryRememberConfig{Store: memStore})
+	actExt.Register(wrapWithIngest(remember, bridge))
+
+	recall := actions.NewMemoryRecallAction(actions.MemoryRecallConfig{Store: memStore})
+	actExt.Register(recall) // read-only, no ingest wrapping
+
+	forget := actions.NewMemoryForgetAction(actions.MemoryForgetConfig{Store: memStore})
+	actExt.Register(wrapWithIngest(forget, bridge))
+
+	// Sub-agent tool (Phase 3): spawn_agent
+	subAgent := actions.NewSubAgentAction(actions.SubAgentConfig{MaxDepth: 3, MaxRounds: 15})
+	actExt.Register(wrapWithIngest(subAgent, bridge))
+
 	// 4. Callbacks for auto-ingest of assistant responses.
 	callbacks := &agent.AgentCallbacks{
 		OnRunEnd: func(ctx context.Context, response string, err error) {
