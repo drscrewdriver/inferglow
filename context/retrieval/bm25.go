@@ -23,6 +23,7 @@ package retrieval
 import (
 	"context"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -126,13 +127,9 @@ func (idx *BM25Index) Search(ctx context.Context, query string, limit int) ([]Se
 	}
 
 	// Sort by score descending
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].Score > results[i].Score {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
 
 	if len(results) > limit {
 		results = results[:limit]
