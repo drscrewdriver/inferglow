@@ -7,6 +7,7 @@ require (
 	github.com/inferglow/context v0.0.0
 	github.com/inferglow/flow v0.0.0
 	github.com/inferglow/memory v0.0.0
+	github.com/inferglow/skill v0.0.0
 )
 
 require (
@@ -54,3 +55,5 @@ replace github.com/inferglow/flow => ../flow
 replace github.com/inferglow/context => ../context
 
 replace github.com/inferglow/schema => ../schema
+
+replace github.com/inferglow/skill => ../skill
