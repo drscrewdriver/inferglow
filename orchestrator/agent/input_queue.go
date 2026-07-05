@@ -58,6 +58,9 @@ type InputQueue struct {
 	mu       sync.Mutex
 	pending  []InputRequest
 	capacity int
+	// notify is a cap=1 channel used to wake consumers when a new request
+	// is enqueued. Non-blocking send on Enqueue; consumers select on WaitCh().
+	notify chan struct{}
 }
 
 // NewInputQueue creates an InputQueue with the given capacity. A capacity
@@ -69,6 +72,7 @@ func NewInputQueue(capacity int) *InputQueue {
 	return &InputQueue{
 		pending:  make([]InputRequest, 0, capacity),
 		capacity: capacity,
+		notify:   make(chan struct{}, 1),
 	}
 }
 
@@ -89,6 +93,12 @@ func (q *InputQueue) Enqueue(req InputRequest) error {
 		return ErrQueueFull
 	}
 	q.pending = append(q.pending, req)
+	// Wake consumers waiting on WaitCh(). Non-blocking: if a notification
+	// is already pending, skip (consumer will drain all pending on wake).
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -126,4 +136,11 @@ func (q *InputQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.pending)
+}
+
+// WaitCh returns a channel that receives a signal when a new request is
+// enqueued. Consumers should select on this channel to avoid polling.
+// The channel is never closed; it is safe to select on indefinitely.
+func (q *InputQueue) WaitCh() <-chan struct{} {
+	return q.notify
 }

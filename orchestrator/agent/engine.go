@@ -135,10 +135,24 @@ type Engine struct {
 	// Propagated from Agent.Run via runConfig.cacheBudgetUpdater.
 	cacheBudgetHook func(cachedTokens int)
 
+	// compactHook is called after each LLM turn with promptTokens
+	// to trigger ModeSummary compaction. nil disables (default).
+	// Propagated from Agent.Run via runConfig.compactHook.
+	compactHook func(promptTokens int)
+
 	// inputQueue is the bounded FIFO queue for user inputs submitted while
 	// the agent is busy. nil disables queue draining (default).
 	// Propagated from Agent.inputQueue.
 	inputQueue *InputQueue
+
+	// pendingInterleave holds the InputRequest currently being processed
+	// from the input queue. When the turn completes, the response is sent
+	// on pendingInterleave.ResponseCh. nil when no interleave is active.
+	pendingInterleave *InputRequest
+
+	// depth tracks the nesting level for sub-agents. 0 = top-level.
+	// Incremented by cloneEngineForParallel. Used to enforce MaxDepth.
+	depth int
 
 	// lastPreemptState stores the TurnState snapshot from the most recent
 	// preempt exit path. nil when no preempt has occurred.
@@ -193,6 +207,16 @@ func (e *Engine) RunLoop(ctx context.Context, userMessage string, maxRounds int,
 			return "", fmt.Errorf("agent: synthesis call failed: %w", synthErr)
 		}
 		decision.FinalResponse = synthResp
+	}
+
+	// Deliver the response to a pending interleave request (message queue
+	// drain). The caller that submitted the message via SubmitInput blocks
+	// on ResponseCh; send the final response so it unblocks.
+	if e.pendingInterleave != nil {
+		if e.pendingInterleave.ResponseCh != nil {
+			e.pendingInterleave.ResponseCh <- InputResponse{Response: decision.FinalResponse}
+		}
+		e.pendingInterleave = nil
 	}
 
 	return decision.FinalResponse, nil
@@ -512,9 +536,14 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					break streamLoop
 				}
 				content.WriteString(chunk.Delta)
+				// Emit token delta for real-time display.
+				if chunk.Delta != "" {
+					fireOnToken(e.callbacks, ctx, chunk.Delta)
+				}
 				// G1-02: accumulate reasoning content for DeepSeek/MiMo passback.
 				if chunk.Reasoning != "" {
 					reasoning.WriteString(chunk.Reasoning)
+					fireOnReasoning(e.callbacks, ctx, chunk.Reasoning)
 				}
 				// Collect native tool calls from the stream.
 				if len(chunk.Tools) > 0 {
@@ -591,6 +620,11 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if cached := lastUsage.PromptTokensDetails["cached_tokens"]; cached > 0 {
 				e.cacheBudgetHook(cached)
 			}
+		}
+
+		// Trigger ModeSummary compaction check after each LLM turn.
+		if e.compactHook != nil && lastUsage != nil && lastUsage.PromptTokens > 0 {
+			e.compactHook(lastUsage.PromptTokens)
 		}
 
 		// Approximate token accumulation: prefer provider-reported UsageInfo
@@ -827,11 +861,9 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				// Reset per-loop state for the new turn.
 				prefixSet = false
 				halfwayWarned = false
-				// Send the response back via the request's channel
-				// after the next iteration produces it. For now,
-				// just continue the loop; the ResponseCh will be
-				// sent to when the turn completes.
-				_ = req // ResponseCh is handled at turn completion
+				// Save the request so we can send the response back
+				// via ResponseCh when this turn completes.
+				e.pendingInterleave = &req
 				continue
 			}
 		}

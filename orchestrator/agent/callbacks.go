@@ -40,6 +40,12 @@ type AgentCallbacks struct {
 	OnToolCallStart func(ctx context.Context, toolName string)
 	// OnToolCallEnd is called after a tool/action completes.
 	OnToolCallEnd func(ctx context.Context, toolName string, err error)
+	// OnToken is called for each text delta chunk from the LLM stream.
+	// Enables real-time token-by-token display in CLI/TUI frontends.
+	OnToken func(ctx context.Context, delta string)
+	// OnReasoning is called for each reasoning delta chunk (DeepSeek/MiMo).
+	// Enables real-time reasoning display in CLI/TUI frontends.
+	OnReasoning func(ctx context.Context, delta string)
 }
 
 // WithCallbacks installs lifecycle callbacks for this Run call.
@@ -90,5 +96,19 @@ func fireOnToolCallStart(cb *AgentCallbacks, ctx context.Context, toolName strin
 func fireOnToolCallEnd(cb *AgentCallbacks, ctx context.Context, toolName string, err error) {
 	if cb != nil && cb.OnToolCallEnd != nil {
 		cb.OnToolCallEnd(ctx, toolName, err)
+	}
+}
+
+// fireOnToken invokes OnToken if non-nil. Called for each text delta chunk.
+func fireOnToken(cb *AgentCallbacks, ctx context.Context, delta string) {
+	if cb != nil && cb.OnToken != nil {
+		cb.OnToken(ctx, delta)
+	}
+}
+
+// fireOnReasoning invokes OnReasoning if non-nil. Called for each reasoning delta.
+func fireOnReasoning(cb *AgentCallbacks, ctx context.Context, delta string) {
+	if cb != nil && cb.OnReasoning != nil {
+		cb.OnReasoning(ctx, delta)
 	}
 }

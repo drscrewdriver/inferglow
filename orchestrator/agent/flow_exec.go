@@ -102,6 +102,12 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 
 	// 2. 注入到 context
 	ctx = flow.WithFlowContext(ctx, fc)
+	// Phase 2: 同时注入横切小接口，使 step 可通过 flow.AuditHookFrom(ctx) 等
+	// getter 访问横切能力，无需依赖完整的 FlowContext 接口。
+	ctx = flow.WithAuditHook(ctx, fc)
+	ctx = flow.WithSecurityHook(ctx, fc)
+	ctx = flow.WithSpanStarterHook(ctx, fc)
+	ctx = flow.WithKVStore(ctx, fc)
 
 	// 3. 添加用户消息到 session
 	e.session.AddUserMessage(userMessage)
@@ -155,6 +161,35 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 
 	// 10. 添加助手回复到 session
 	e.session.AddAssistantMessage(response)
+
+	// 11. Drain input queue: process queued user messages by re-executing
+	// the flow. Bounded to maxInterleaveTurns to prevent infinite drain
+	// when the queue is continuously fed.
+	const maxInterleaveTurns = 4
+	for i := 0; i < maxInterleaveTurns && e.inputQueue != nil; i++ {
+		req, ok := e.inputQueue.Dequeue()
+		if !ok {
+			break
+		}
+		// Process the queued message as a new flow execution.
+		e.session.AddUserMessage(req.Message)
+		exec = f.Execute(ctx, req.Message)
+		if exec.State.Status == flow.StatusFailed {
+			if req.ResponseCh != nil {
+				errMsg := "flow execution failed"
+				if len(exec.State.Errors) > 0 {
+					errMsg = fmt.Sprintf("flow execution failed: %v", exec.State.Errors[0])
+				}
+				req.ResponseCh <- InputResponse{Error: errors.New(errMsg)}
+			}
+			break
+		}
+		response = extractFlowResponse(exec.State.Result)
+		e.session.AddAssistantMessage(response)
+		if req.ResponseCh != nil {
+			req.ResponseCh <- InputResponse{Response: response}
+		}
+	}
 
 	return exec, response, nil
 }
