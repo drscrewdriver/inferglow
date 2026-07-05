@@ -131,15 +131,44 @@ func chatOnce(ctx context.Context, ag *agent.Agent, bridge *MemoryBridge, cfg CL
 		sysPrompt = baseSystemPrompt
 	}
 
-	// Run agent.
-	resp, err := ag.Run(ctx, message, agent.WithSystemPrompt(sysPrompt))
+	// Create an event sink for real-time token display.
+	sink, events, closeSink := agent.NewChannelSink(256)
+	defer closeSink()
+
+	// Start a goroutine to consume events and print tokens in real-time.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range events {
+			switch ev.Kind {
+			case agent.EventToken:
+				fmt.Print(ev.Text)
+			case agent.EventToolStart:
+				fmt.Printf("\n[tool: %s]\n", ev.ToolName)
+			case agent.EventToolEnd:
+				if ev.Err != nil {
+					fmt.Printf("[tool error: %v]\n", ev.Err)
+				}
+			}
+		}
+	}()
+
+	// Run agent with event callbacks.
+	cb := agent.CallbacksFromSink(sink)
+	resp, err := ag.Run(ctx, message,
+		agent.WithSystemPrompt(sysPrompt),
+		agent.WithCallbacks(cb),
+	)
+	closeSink() // Signal the consumer goroutine to exit.
+	<-done
+
 	if err != nil {
 		return err
 	}
 
+	// Print final response (tokens were already streamed, so just add newline).
 	fmt.Println()
-	fmt.Println(resp)
-	fmt.Println()
+	_ = resp // Response already streamed via EventToken.
 
 	return nil
 }
