@@ -52,13 +52,25 @@ type Tool interface {
 // RegisterContextTools registers all context management tools (§8B.1).
 // Tools are only registered when mode != passthrough.
 func RegisterContextTools(reg Registry, mgr contextmgr.ContextManager) {
+	RegisterContextToolsWithStore(reg, mgr, nil)
+}
+
+// StepStoreProvider is the interface for accessing the step store directly.
+// Implemented by HybridManager when it wraps a StepStoreLike.
+type StepStoreProvider interface {
+	StepStore() contextmgr.StepStoreLike
+}
+
+// RegisterContextToolsWithStore registers all context tools including
+// context_trace when a StepStoreLike is available.
+func RegisterContextToolsWithStore(reg Registry, mgr contextmgr.ContextManager, store contextmgr.StepStoreLike) {
 	if mgr.Mode() == contextmgr.ModePassthrough {
 		return
 	}
 
 	reg.Register(&ContextSearchTool{mgr: mgr})
 	reg.Register(&ContextExpandTool{mgr: mgr})
-	reg.Register(&ContextSurroundTool{mgr: mgr})
+	reg.Register(&ContextSurroundTool{mgr: mgr, store: store})
 
 	// memory_search only if longmem is enabled (check via stats)
 	stats := mgr.Stats()
@@ -70,6 +82,48 @@ func RegisterContextTools(reg Registry, mgr contextmgr.ContextManager) {
 	if reorgMgr, ok := mgr.(ReorganizeProvider); ok {
 		reg.Register(&ContextReorganizeTool{mgr: reorgMgr})
 	}
+
+	// context_trace: only if we have a step store
+	if store != nil {
+		reg.Register(&ContextTraceTool{store: store})
+	} else if sp, ok := mgr.(StepStoreProvider); ok {
+		reg.Register(&ContextTraceTool{store: sp.StepStore()})
+	}
+}
+
+// NewContextTools returns initialized context tool instances for external
+// registration (e.g. into the agent ActionExtension). Returns nil if the
+// context manager is in passthrough mode.
+func NewContextTools(mgr contextmgr.ContextManager, store contextmgr.StepStoreLike) []Tool {
+	if mgr.Mode() == contextmgr.ModePassthrough {
+		return nil
+	}
+
+	// Resolve store from manager if not provided
+	if store == nil {
+		if sp, ok := mgr.(StepStoreProvider); ok {
+			store = sp.StepStore()
+		}
+	}
+
+	toolList := []Tool{
+		&ContextSearchTool{mgr: mgr},
+		&ContextExpandTool{mgr: mgr},
+		&ContextSurroundTool{mgr: mgr, store: store},
+		&MemorySearchTool{mgr: mgr},
+	}
+
+	// context_trace requires a store
+	if store != nil {
+		toolList = append(toolList, &ContextTraceTool{store: store})
+	}
+
+	// context_reorganize: only if supported
+	if reorgMgr, ok := mgr.(ReorganizeProvider); ok {
+		toolList = append(toolList, &ContextReorganizeTool{mgr: reorgMgr})
+	}
+
+	return toolList
 }
 
 // ReorganizeProvider is the interface a ContextManager must implement
@@ -220,9 +274,11 @@ func (t *ContextExpandTool) Execute(ctx context.Context, input json.RawMessage) 
 
 // ContextSurroundInput is the input schema for context_surround.
 type ContextSurroundInput struct {
-	StepID int `json:"step_id" jsonschema:"description=中心step编号"`
-	Before int `json:"before,omitempty" jsonschema:"description=向前看N步,默认2"`
-	After  int `json:"after,omitempty" jsonschema:"description=向后看N步,默认2"`
+	StepID    int    `json:"step_id" jsonschema:"description=中心step编号"`
+	Before    int    `json:"before,omitempty" jsonschema:"description=向前看N步,默认2"`
+	After     int    `json:"after,omitempty" jsonschema:"description=向后看N步,默认2"`
+	Causal    bool   `json:"causal,omitempty" jsonschema:"description=因果模式:沿文件依赖链追踪"`
+	TaskGroup string `json:"task_group,omitempty" jsonschema:"description=按任务组聚合"`
 }
 
 // ContextSurroundOutput is the output for context_surround.
@@ -244,19 +300,30 @@ var stepTypeRe = regexp.MustCompile(`\u27E8\u00A7\d+\u00B7(\w+)\u00B7L\d\u27E9`)
 
 // ContextSurroundTool implements context_surround.
 type ContextSurroundTool struct {
-	mgr contextmgr.ContextManager
+	mgr   contextmgr.ContextManager
+	store contextmgr.StepStoreLike // optional, for causal mode
 }
 
 func (t *ContextSurroundTool) Name() string        { return "context_surround" }
 func (t *ContextSurroundTool) Description() string  { return "查看某 step 前后的上下文" }
 func (t *ContextSurroundTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"step_id":{"type":"integer"},"before":{"type":"integer"},"after":{"type":"integer"}},"required":["step_id"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"step_id":{"type":"integer"},"before":{"type":"integer"},"after":{"type":"integer"},"causal":{"type":"boolean"},"task_group":{"type":"string"}},"required":["step_id"]}`)
 }
 
 func (t *ContextSurroundTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var in ContextSurroundInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("context_surround: invalid input: %w", err)
+	}
+
+	// Causal mode: trace file dependencies instead of contiguous window
+	if in.Causal && t.store != nil {
+		return t.executeCausal(ctx, in)
+	}
+
+	// TaskGroup mode: show all steps in the same task group
+	if in.TaskGroup != "" && t.store != nil {
+		return t.executeTaskGroup(ctx, in)
 	}
 
 	if in.Before <= 0 {
@@ -283,6 +350,59 @@ func (t *ContextSurroundTool) Execute(ctx context.Context, input json.RawMessage
 		})
 	}
 	return json.Marshal(out)
+}
+
+// executeCausal runs context_surround in causal mode.
+func (t *ContextSurroundTool) executeCausal(_ context.Context, in ContextSurroundInput) (json.RawMessage, error) {
+	chain, err := contextmgr.TraceChain(t.store, in.StepID)
+	if err != nil {
+		return nil, fmt.Errorf("context_surround: causal trace: %w", err)
+	}
+
+	out := ContextSurroundOutput{}
+	for _, s := range chain.Steps {
+		out.Steps = append(out.Steps, SurroundStepOutput{
+			StepID:   s.StepID,
+			Type:     s.Type,
+			Level:    0,
+			Content:  truncateContent(s.Content, 500),
+			IsCenter: s.StepID == in.StepID,
+		})
+	}
+	if len(out.Steps) == 0 {
+		return json.Marshal(map[string]string{"hint": "因果链为空，该步骤无文件依赖"})
+	}
+	return json.Marshal(out)
+}
+
+// executeTaskGroup runs context_surround in task group mode.
+func (t *ContextSurroundTool) executeTaskGroup(_ context.Context, in ContextSurroundInput) (json.RawMessage, error) {
+	steps, err := contextmgr.TraceTaskGroup(t.store, in.TaskGroup)
+	if err != nil {
+		return nil, fmt.Errorf("context_surround: trace task group: %w", err)
+	}
+
+	out := ContextSurroundOutput{}
+	for _, s := range steps {
+		out.Steps = append(out.Steps, SurroundStepOutput{
+			StepID:  s.StepID,
+			Type:    s.Type,
+			Level:   0,
+			Content: truncateContent(s.Content, 500),
+		})
+	}
+	if len(out.Steps) == 0 {
+		return json.Marshal(map[string]string{"hint": fmt.Sprintf("任务组 '%s' 无步骤", in.TaskGroup)})
+	}
+	return json.Marshal(out)
+}
+
+// truncateContent limits content to maxLen chars.
+func truncateContent(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // extractStepType parses the type from a ⟨§N·type·Lx⟩ marker.
@@ -405,4 +525,118 @@ func (t *ContextReorganizeTool) Execute(ctx context.Context, input json.RawMessa
 		"steps_adjusted":       result.StepsAdjusted,
 		"hint":                 fmt.Sprintf("重组完成：宪法+%d, 头部改写=%v, step调整=%d", result.ConstitutionalAdded, result.HeadRewritten, result.StepsAdjusted),
 	})
+}
+
+// --- context_trace (B3) ---
+
+// ContextTraceInput is the input schema for context_trace.
+type ContextTraceInput struct {
+	File      string `json:"file,omitempty" jsonschema:"description=追踪涉及该文件的所有步骤"`
+	StepID    int    `json:"step_id,omitempty" jsonschema:"description=从该步骤出发追踪因果链"`
+	TaskGroup string `json:"task_group,omitempty" jsonschema:"description=列出同组所有步骤"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"description=返回条数,默认10"`
+}
+
+// ContextTraceOutput is the output for context_trace.
+type ContextTraceOutput struct {
+	Steps []TraceStepOutput `json:"steps"`
+	Files []string          `json:"files,omitempty"`
+	Hint  string            `json:"hint,omitempty"`
+}
+
+// TraceStepOutput is a single step in the trace output.
+type TraceStepOutput struct {
+	StepID        int      `json:"step_id"`
+	Type          string   `json:"type"`
+	ToolName      string   `json:"tool_name,omitempty"`
+	FilesRead     []string `json:"files_read,omitempty"`
+	FilesModified []string `json:"files_modified,omitempty"`
+	TaskGroup     string   `json:"task_group,omitempty"`
+	Snippet       string   `json:"snippet"`
+}
+
+// ContextTraceTool implements context_trace.
+type ContextTraceTool struct {
+	store contextmgr.StepStoreLike
+}
+
+func (t *ContextTraceTool) Name() string        { return "context_trace" }
+func (t *ContextTraceTool) Description() string  { return "沿文件依赖链追踪因果关系" }
+func (t *ContextTraceTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"file":{"type":"string"},"step_id":{"type":"integer"},"task_group":{"type":"string"},"limit":{"type":"integer"}}}`)
+}
+
+func (t *ContextTraceTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	var in ContextTraceInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, fmt.Errorf("context_trace: invalid input: %w", err)
+	}
+
+	if in.Limit <= 0 {
+		in.Limit = 10
+	}
+
+	out := ContextTraceOutput{}
+
+	// Mode 1: trace by file
+	if in.File != "" {
+		steps, err := contextmgr.TraceFiles(t.store, []string{in.File}, in.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("context_trace: %w", err)
+		}
+		for _, s := range steps {
+			out.Steps = append(out.Steps, stepToTraceOutput(s))
+		}
+		out.Files = []string{in.File}
+		out.Hint = fmt.Sprintf("涉及文件 '%s' 的步骤共 %d 个", in.File, len(steps))
+	}
+
+	// Mode 2: trace causal chain from step
+	if in.StepID > 0 {
+		chain, err := contextmgr.TraceChain(t.store, in.StepID)
+		if err != nil {
+			return nil, fmt.Errorf("context_trace: %w", err)
+		}
+		for _, s := range chain.Steps {
+			if len(out.Steps) >= in.Limit {
+				break
+			}
+			out.Steps = append(out.Steps, stepToTraceOutput(s))
+		}
+		out.Files = chain.Files
+		out.Hint = fmt.Sprintf("从 step %d 追踪因果链，涉及 %d 个文件", in.StepID, len(chain.Files))
+	}
+
+	// Mode 3: trace by task group
+	if in.TaskGroup != "" {
+		steps, err := contextmgr.TraceTaskGroup(t.store, in.TaskGroup)
+		if err != nil {
+			return nil, fmt.Errorf("context_trace: %w", err)
+		}
+		for _, s := range steps {
+			if len(out.Steps) >= in.Limit {
+				break
+			}
+			out.Steps = append(out.Steps, stepToTraceOutput(s))
+		}
+		out.Hint = fmt.Sprintf("任务组 '%s' 共 %d 个步骤", in.TaskGroup, len(steps))
+	}
+
+	if len(out.Steps) == 0 {
+		return json.Marshal(map[string]string{"hint": "无匹配，请指定 file/step_id/task_group"})
+	}
+	return json.Marshal(out)
+}
+
+// stepToTraceOutput converts a StepRecord to trace output format.
+func stepToTraceOutput(s contextmgr.StepRecord) TraceStepOutput {
+	return TraceStepOutput{
+		StepID:        s.StepID,
+		Type:          s.Type,
+		ToolName:      s.ToolName,
+		FilesRead:     s.FilesRead,
+		FilesModified: s.FilesModified,
+		TaskGroup:     s.TaskGroup,
+		Snippet:       truncateContent(s.Content, 200),
+	}
 }

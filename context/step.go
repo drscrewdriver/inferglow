@@ -32,6 +32,12 @@ type StepRecord struct {
 	ToolName   string `json:"tool_name,omitempty"`   // for tool steps
 	KeyParams  string `json:"key_params,omitempty"`  // summarized key params
 	CreatedAt  int64  `json:"created_at,omitempty"`  // unix timestamp
+
+	// Causal tracking metadata (B1)
+	FilesRead     []string `json:"files_read,omitempty"`     // files read in this step
+	FilesModified []string `json:"files_modified,omitempty"` // files modified in this step
+	DependsOn     []int    `json:"depends_on,omitempty"`     // dependent step IDs
+	TaskGroup     string   `json:"task_group,omitempty"`     // task group identifier
 }
 
 // RefRecord tracks the current compression state and access statistics
