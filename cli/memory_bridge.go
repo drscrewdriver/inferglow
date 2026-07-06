@@ -30,6 +30,7 @@ import (
 	"github.com/inferglow/context/retrieval"
 	"github.com/inferglow/context/store/jsonl"
 	"github.com/inferglow/memory"
+	"github.com/inferglow/skill"
 )
 
 // MemoryBridge connects the CLI agent with the context management and
@@ -42,7 +43,9 @@ type MemoryBridge struct {
 	bm25      *retrieval.BM25Index
 	promoter  *contextmgr.LongMemPromoter
 	store     *jsonl.Store
-	memStore  memory.Store // file-based auto-memory store
+	memStore  memory.Store  // file-based auto-memory store
+	skillStore *skill.Store // procedural memory (skill store)
+	projectRoot string      // project root for meta-memory scanning
 	topK      int
 	stepSeq   int
 	sessionID string
@@ -83,16 +86,23 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 	// 6. File-based auto-memory store (Reasonix-compatible).
 	memStore := memory.StoreFor(cfg.DataDir, ".")
 
+	// 7. Skill store (procedural memory).
+	skillDir := cfg.DataDir + "/projects/default/skills"
+	globalSkillDir := cfg.DataDir + "/skills/global"
+	skillStore := skill.NewStore(skillDir, globalSkillDir)
+
 	return &MemoryBridge{
-		mgr:       mgr,
-		hybrid:    hybrid,
-		retriever: fusion,
-		bm25:      bm25,
-		promoter:  promoter,
-		store:     store,
-		memStore:  memStore,
-		topK:      cfg.TopK,
-		sessionID: sessionID,
+		mgr:        mgr,
+		hybrid:     hybrid,
+		retriever:  fusion,
+		bm25:       bm25,
+		promoter:   promoter,
+		store:      store,
+		memStore:   memStore,
+		skillStore: skillStore,
+		projectRoot: ".",
+		topK:       cfg.TopK,
+		sessionID:  sessionID,
 	}, nil
 }
 
@@ -235,6 +245,41 @@ func (b *MemoryBridge) StandingFacts() string {
 // MemStore returns the underlying file-based memory store.
 func (b *MemoryBridge) MemStore() memory.Store {
 	return b.memStore
+}
+
+// ContextManager returns the context manager.
+func (b *MemoryBridge) ContextManager() contextmgr.ContextManager {
+	return b.mgr
+}
+
+// SkillStore returns the skill store for procedural memory.
+func (b *MemoryBridge) SkillStore() *skill.Store {
+	return b.skillStore
+}
+
+// BuildSystemPrompt assembles the complete system prompt with memory layers.
+// Order: base prompt + semantic memory + skills index + project instructions.
+func (b *MemoryBridge) BuildSystemPrompt(base, query string) string {
+	prompt := base
+
+	// Semantic memory injection
+	if memText, _ := b.Recall(context.Background(), query); memText != "" {
+		prompt += "\n\n" + memText
+	}
+
+	// Procedural memory: skills index injection
+	if b.skillStore != nil {
+		if skills := b.skillStore.IndexBlock(); skills != "" {
+			prompt += "\n\n" + skills
+		}
+
+		// Meta-memory: project instructions (AGENTS.md etc.)
+		if instructions := b.skillStore.ProjectInstructions(b.projectRoot); instructions != "" {
+			prompt += "\n\n" + instructions
+		}
+	}
+
+	return prompt
 }
 
 // AppendConstitutional adds constitutional entries to the hybrid manager.

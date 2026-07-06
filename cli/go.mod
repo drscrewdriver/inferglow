@@ -11,6 +11,7 @@ require (
 	github.com/inferglow/model v0.0.0
 	github.com/inferglow/orchestrator v0.0.0
 	github.com/inferglow/session v0.0.0
+	github.com/inferglow/skill v0.0.0
 )
 
 require (
@@ -71,3 +72,5 @@ replace github.com/inferglow/observability => ../observability
 replace github.com/inferglow/approval => ../approval
 
 replace github.com/inferglow/memory => ../memory
+
+replace github.com/inferglow/skill => ../skill

@@ -22,10 +22,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
+	"github.com/inferglow/action"
 	"github.com/inferglow/builtins/actions"
+	contextmgr "github.com/inferglow/context"
+	"github.com/inferglow/context/tools"
 	"github.com/inferglow/orchestrator/agent"
 	"github.com/inferglow/session"
 )
@@ -88,6 +92,16 @@ func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.A
 	subAgent := actions.NewSubAgentAction(actions.SubAgentConfig{MaxDepth: 3, MaxRounds: 15})
 	actExt.Register(wrapWithIngest(subAgent, bridge))
 
+	// Skill tool: run_skill (procedural memory)
+	runSkill := actions.NewRunSkillAction(actions.RunSkillConfig{
+		Store:     bridge.SkillStore(),
+		MaxRounds: 15,
+	})
+	actExt.Register(wrapWithIngest(runSkill, bridge))
+
+	// Context tools: bridge context tools to agent tool system so LLM can see them.
+	registerContextTools(actExt, bridge)
+
 	// 4. Callbacks for auto-ingest of assistant responses.
 	callbacks := &agent.AgentCallbacks{
 		OnRunEnd: func(ctx context.Context, response string, err error) {
@@ -100,4 +114,74 @@ func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.A
 	// 5. Construct agent.
 	ag := agent.New(sess, actExt, modelReq, agent.WithCallbacks(callbacks))
 	return ag, nil
+}
+
+// registerContextTools bridges context tools (context_search, context_expand,
+// context_surround, memory_search, context_trace) to the agent tool system
+// so the LLM can see and invoke them.
+func registerContextTools(actExt *agent.ActionExtension, bridge *MemoryBridge) {
+	mgr := bridge.ContextManager()
+	if mgr == nil || mgr.Mode() == contextmgr.ModePassthrough {
+		return
+	}
+
+	// Create initialized context tools via factory function
+	ctxTools := tools.NewContextTools(mgr, nil)
+
+	// Register each tool as an action
+	for _, t := range ctxTools {
+		act := wrapContextToolAsAction(t, bridge)
+		_ = actExt.Register(act)
+	}
+}
+
+// contextToolAdapter adapts a context tools.Tool to action.ActionExecutor.
+type contextToolAdapter struct {
+	tool   tools.Tool
+	bridge *MemoryBridge
+}
+
+func (a *contextToolAdapter) Execute(ctx context.Context, input map[string]any) (*action.ActionResult, error) {
+	// Convert map input to JSON
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return &action.ActionResult{
+			OK:     false,
+			Status: "error",
+			Error:  fmt.Sprintf("context tool: marshal input: %v", err),
+		}, nil
+	}
+
+	// Execute the context tool
+	outputJSON, err := a.tool.Execute(ctx, inputJSON)
+	if err != nil {
+		return &action.ActionResult{
+			OK:     false,
+			Status: "error",
+			Error:  err.Error(),
+		}, nil
+	}
+
+	return &action.ActionResult{
+		OK:     true,
+		Status: "ok",
+		Result: string(outputJSON),
+	}, nil
+}
+
+// wrapContextToolAsAction wraps a context Tool as an *action.Action.
+func wrapContextToolAsAction(t tools.Tool, bridge *MemoryBridge) *action.Action {
+	schema := t.InputSchema()
+	var schemaMap map[string]any
+	if err := json.Unmarshal(schema, &schemaMap); err != nil {
+		schemaMap = map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+
+	return &action.Action{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Schema:      schemaMap,
+		Executor:    &contextToolAdapter{tool: t, bridge: bridge},
+		Tags:        []string{"context", "builtin"},
+	}
 }
