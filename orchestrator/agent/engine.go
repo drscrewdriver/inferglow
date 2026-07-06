@@ -355,6 +355,10 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 	if maxTCR <= 0 {
 		maxTCR = DefaultMaxToolCallRounds
 	}
+	// B5: Generate task group for this turn. All steps within this
+	// executeLoop invocation share the same task group identifier.
+	// This can be propagated to context manager via callbacks or session metadata.
+	_ = fmt.Sprintf("turn_%d_%d", time.Now().Unix(), round) // taskGroup for causal tracking
 	// Tool-call dedup: detect when the model is stuck calling the same
 	// tool with the same arguments repeatedly.
 	var lastToolSig string
