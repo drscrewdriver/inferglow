@@ -92,6 +92,9 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 
 func (h *HybridManager) Mode() Mode { return ModeHybrid }
 
+// StepStore returns the underlying step store for direct access (e.g., causal tracing).
+func (h *HybridManager) StepStore() StepStoreLike { return h.store }
+
 // SetHeadBuffer sets the immutable head buffer (zone 1). Called once at session init.
 func (h *HybridManager) SetHeadBuffer(blocks []RenderedBlock, version string) {
 	h.mu.Lock()

@@ -119,17 +119,9 @@ func chatOnce(ctx context.Context, ag *agent.Agent, bridge *MemoryBridge, cfg CL
 	// Ingest user message.
 	bridge.IngestUser(message)
 
-	// Recall relevant memories.
-	var sysPrompt string
-	if cfg.Features.MemoryInjection {
-		memText, _ := bridge.Recall(ctx, message)
-		sysPrompt = baseSystemPrompt
-		if memText != "" {
-			sysPrompt += "\n\n" + memText
-		}
-	} else {
-		sysPrompt = baseSystemPrompt
-	}
+	// Build system prompt with all memory layers:
+	// base prompt + semantic memory + skills index + project instructions
+	sysPrompt := bridge.BuildSystemPrompt(baseSystemPrompt, message)
 
 	// Create an event sink for real-time token display.
 	sink, events, closeSink := agent.NewChannelSink(256)
