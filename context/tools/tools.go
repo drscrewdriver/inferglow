@@ -296,7 +296,7 @@ type SurroundStepOutput struct {
 }
 
 // stepTypeRe extracts type from the ⟨§N·type·Lx⟩ marker in content.
-var stepTypeRe = regexp.MustCompile(`\u27E8\u00A7\d+\u00B7(\w+)\u00B7L\d\u27E9`)
+var stepTypeRe = regexp.MustCompile(`\x{27E8}\x{00A7}\d+\x{00B7}(\w+)\x{00B7}L\d\x{27E9}`)
 
 // ContextSurroundTool implements context_surround.
 type ContextSurroundTool struct {
