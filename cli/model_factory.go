@@ -35,20 +35,24 @@ func buildModelRequester(cfg CLIConfig) (model.ModelRequester, error) {
 		return nil, fmt.Errorf("llm.endpoint is required")
 	}
 
-	values := map[string]any{
-		"base_url": cfg.LLM.Endpoint,
-		"model":    cfg.LLM.Model,
-	}
-	if cfg.LLM.APIKey != "" {
-		values["api_key"] = cfg.LLM.APIKey
-	}
-
-	cp := &model.StaticConfigProvider{Values: values}
-
 	provider := cfg.LLM.Provider
 	if provider == "" {
 		provider = "openai"
 	}
+
+	// StaticConfigProvider uses traverseMap which splits on ".", so keys must
+	// be nested maps matching the provider prefix (e.g. {"openai": {"api_key": ...}}).
+	providerValues := map[string]any{
+		"base_url": cfg.LLM.Endpoint,
+		"model":    cfg.LLM.Model,
+	}
+	if cfg.LLM.APIKey != "" {
+		providerValues["api_key"] = cfg.LLM.APIKey
+	}
+
+	cp := &model.StaticConfigProvider{Values: map[string]any{
+		provider: providerValues,
+	}}
 
 	switch provider {
 	case "deepseek":
