@@ -83,3 +83,24 @@ func LoadConfig(path string) (CLIConfig, error) {
 	}
 	return cfg, nil
 }
+
+// ApplyEnvOverrides applies environment variable overrides to the config.
+// Supported environment variables:
+//   - LLM_ENDPOINT: API endpoint
+//   - LLM_MODEL: Model name
+//   - LLM_API_KEY: API key
+//   - LLM_PROVIDER: Provider type (openai, deepseek, anthropic, etc.)
+func ApplyEnvOverrides(cfg *CLIConfig) {
+	if v := os.Getenv("LLM_ENDPOINT"); v != "" {
+		cfg.LLM.Endpoint = v
+	}
+	if v := os.Getenv("LLM_MODEL"); v != "" {
+		cfg.LLM.Model = v
+	}
+	if v := os.Getenv("LLM_API_KEY"); v != "" {
+		cfg.LLM.APIKey = v
+	}
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		cfg.LLM.Provider = v
+	}
+}

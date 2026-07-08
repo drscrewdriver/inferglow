@@ -50,6 +50,9 @@ func main() {
 		cfg = loaded
 	}
 
+	// Apply environment variable overrides.
+	cli.ApplyEnvOverrides(&cfg)
+
 	// Override config with flags.
 	if *workspace != "." {
 		cfg.WorkspaceDir = *workspace
