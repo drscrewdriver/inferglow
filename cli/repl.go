@@ -125,7 +125,6 @@ func chatOnce(ctx context.Context, ag *agent.Agent, bridge *MemoryBridge, cfg CL
 
 	// Create an event sink for real-time token display.
 	sink, events, closeSink := agent.NewChannelSink(256)
-	defer closeSink()
 
 	// Start a goroutine to consume events and print tokens in real-time.
 	done := make(chan struct{})
