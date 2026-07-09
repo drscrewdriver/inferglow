@@ -20,7 +20,10 @@
 
 package agent
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // EventKind identifies the type of agent event.
 type EventKind int
@@ -123,13 +126,15 @@ func (s *channelSink) Emit(e AgentEvent) {
 // The returned channel delivers events in emission order. Token/reasoning
 // events are dropped when the buffer is full; lifecycle events block.
 // Close the channel by calling the returned close function when done.
+// The close function is idempotent — safe to call multiple times.
 func NewChannelSink(buf int) (EventSink, <-chan AgentEvent, func()) {
 	if buf <= 0 {
 		buf = 256
 	}
 	ch := make(chan AgentEvent, buf)
 	sink := &channelSink{ch: ch}
-	closeFn := func() { close(ch) }
+	var once sync.Once
+	closeFn := func() { once.Do(func() { close(ch) }) }
 	return sink, ch, closeFn
 }
 
