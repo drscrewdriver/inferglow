@@ -1,1 +1,5 @@
 graphify-out/
+
+# Build artifacts
+bin/inferglow-cli
+cli/inferglow-cli

@@ -168,6 +168,12 @@ func (c *AuditChain) snapshot() []*AuditEntry {
 	return out
 }
 
+// Snapshot returns a defensive copy of all audit entries.
+// This is the exported version for external consumers (e.g. REST API).
+func (c *AuditChain) Snapshot() []*AuditEntry {
+	return c.snapshot()
+}
+
 // lastEntry returns a pointer to the most recently appended entry, or
 // nil if the chain is empty. Caller must hold the read lock (or write
 // lock) — this helper does not take the lock itself.

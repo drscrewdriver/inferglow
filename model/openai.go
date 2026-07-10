@@ -360,6 +360,8 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 		"model":    data.Model,
 		"messages": msgs,
 		"stream":   true,
+		// Request usage info in streaming mode (OpenAI-compatible APIs).
+		"stream_options": map[string]any{"include_usage": true},
 	}
 	if data.Temperature > 0 {
 		reqBody["temperature"] = data.Temperature
@@ -571,8 +573,11 @@ func (p *OpenAICompatibleProvider) processOpenAILine(
 	}
 
 	// M-MEDIUM-4: empty-choices chunks carry usage or keepalive data, not a
-	// finish signal. Update usage but do not emit an IsDone chunk.
+	// finish signal. Emit a chunk with usage so the engine can capture it.
 	if len(chunk.Choices) == 0 {
+		if usage != nil {
+			emit(&StreamChunk{Usage: usage})
+		}
 		return usage
 	}
 

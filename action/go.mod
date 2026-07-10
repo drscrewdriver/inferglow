@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/inferglow/approval v0.0.0
+	github.com/inferglow/model v0.0.0
 	github.com/inferglow/sandbox v0.0.0-00010101000000-000000000000
 )
 
@@ -38,8 +39,11 @@ require (
 	golang.org/x/tools v0.9.1 // indirect
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/inferglow/sandbox => ../sandbox
 
 replace github.com/inferglow/approval => ../approval
+
+replace github.com/inferglow/model => ../model

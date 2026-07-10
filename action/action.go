@@ -38,6 +38,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/inferglow/model"
 )
 
 // Action is a named, schema-described unit of work bound to an Executor.
@@ -74,6 +76,10 @@ type ActionResult struct { //nolint:revive
 	Result   any
 	Error    string
 	Metadata map[string]any
+	// ContentBlocks carries multimodal output from the action
+	// (e.g. generated images, audio, files). When non-empty,
+	// callers can render these blocks in CLI/GUI.
+	ContentBlocks []model.ContentBlock
 }
 
 // ActionRegistry is a concurrency-safe catalog of Actions keyed by Name.

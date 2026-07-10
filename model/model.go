@@ -34,6 +34,10 @@ type ModelRequest struct { //nolint:revive
 	Tools        []ToolDefinition
 	Examples     []Example
 	Attachment   []Attachment
+	// ContentBlocks carries multimodal content (images, audio, etc.).
+	// When non-empty, providers should convert these into their native
+	// content block format (e.g. OpenAI image_url, Anthropic image source).
+	ContentBlocks []ContentBlock
 	Output       *OutputSchema
 	EnsureAll    bool
 	Options      map[string]any
@@ -76,6 +80,10 @@ type StreamChunk struct {
 	IsDone    bool
 	Usage     *UsageInfo
 	Meta      map[string]any
+	// ContentBlocks carries multimodal output in streaming responses
+	// (e.g. generated images, audio clips). Providers populate these
+	// when the model returns non-text content.
+	ContentBlocks []ContentBlock
 }
 
 // RequestData 发送给 Provider 的请求数据
