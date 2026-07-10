@@ -21,7 +21,10 @@
 // Package retrieval implements the three-way fusion retriever (§7.3).
 package retrieval
 
-import "context"
+import (
+	"context"
+	"sort"
+)
 
 // SemanticSearcher performs vector similarity search.
 type SemanticSearcher interface {
@@ -166,14 +169,10 @@ func (f *FusionRetriever) fuseScores(semantic, keyword, recency []SearchResult) 
 		})
 	}
 
-	// Sort by score descending (simple bubble sort for now)
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].Score > results[i].Score {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
 
 	return results
 }
