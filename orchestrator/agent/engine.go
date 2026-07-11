@@ -629,6 +629,8 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// Trigger ModeSummary compaction check after each LLM turn.
 		if e.compactHook != nil && lastUsage != nil && lastUsage.PromptTokens > 0 {
 			e.compactHook(lastUsage.PromptTokens)
+			// Fire compression callback for TUI visualization.
+			fireOnCompression(e.callbacks, ctx, 1)
 		}
 
 		// Approximate token accumulation: prefer provider-reported UsageInfo
@@ -639,8 +641,13 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			totalTokens += len(content.String())
 		}
 
-		// Fire OnLLMCallEnd callback.
-		fireOnLLMCallEnd(e.callbacks, ctx, round, len(content.String()))
+		// Fire OnLLMCallEnd callback with accurate token count.
+		// Prefer provider-reported CompletionTokens when available.
+		endTokens := len(content.String())
+		if lastUsage != nil && lastUsage.CompletionTokens > 0 {
+			endTokens = lastUsage.CompletionTokens
+		}
+		fireOnLLMCallEnd(e.callbacks, ctx, round, endTokens)
 
 		// Build decision: prefer native tool calls over custom JSON schema.
 		var decision *actionruntime.Decision
@@ -755,12 +762,31 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		}
 
 		// Fire OnToolCallEnd callbacks for each action.
+		// When a result is blocked, fire OnApprovalRequired instead.
 		for i, ac := range decision.ActionCalls {
-			var toolErr error
-			if i < len(results) && results[i] != nil && !results[i].OK {
-				toolErr = fmt.Errorf("%s", results[i].Error)
+			if i < len(results) && results[i] != nil {
+				res := results[i]
+				if res.Status == "blocked" {
+					// Extract recordID from error or metadata.
+					recordID := ""
+					if res.Metadata != nil {
+						if rid, ok := res.Metadata["recordID"]; ok {
+							recordID = fmt.Sprintf("%v", rid)
+						}
+					}
+					if recordID == "" {
+						recordID = res.Error
+					}
+					fireOnApprovalRequired(e.callbacks, ctx, ac.Name, recordID)
+				}
+				var toolErr error
+				if !res.OK {
+					toolErr = fmt.Errorf("%s", res.Error)
+				}
+				fireOnToolCallEnd(e.callbacks, ctx, ac.Name, toolErr)
+			} else {
+				fireOnToolCallEnd(e.callbacks, ctx, ac.Name, nil)
 			}
-			fireOnToolCallEnd(e.callbacks, ctx, ac.Name, toolErr)
 		}
 
 		// Add results to session using native tool message format when

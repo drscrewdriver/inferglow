@@ -46,6 +46,10 @@ type AgentCallbacks struct {
 	// OnReasoning is called for each reasoning delta chunk (DeepSeek/MiMo).
 	// Enables real-time reasoning display in CLI/TUI frontends.
 	OnReasoning func(ctx context.Context, delta string)
+	// OnApprovalRequired is called when a tool is blocked by approval policy.
+	OnApprovalRequired func(ctx context.Context, toolName, recordID string)
+	// OnCompression is called when context compression occurs.
+	OnCompression func(ctx context.Context, stepsCompressed int)
 }
 
 // WithCallbacks installs lifecycle callbacks for this Run call.
@@ -110,5 +114,19 @@ func fireOnToken(cb *AgentCallbacks, ctx context.Context, delta string) {
 func fireOnReasoning(cb *AgentCallbacks, ctx context.Context, delta string) {
 	if cb != nil && cb.OnReasoning != nil {
 		cb.OnReasoning(ctx, delta)
+	}
+}
+
+// fireOnApprovalRequired invokes OnApprovalRequired if non-nil.
+func fireOnApprovalRequired(cb *AgentCallbacks, ctx context.Context, toolName, recordID string) {
+	if cb != nil && cb.OnApprovalRequired != nil {
+		cb.OnApprovalRequired(ctx, toolName, recordID)
+	}
+}
+
+// fireOnCompression invokes OnCompression if non-nil.
+func fireOnCompression(cb *AgentCallbacks, ctx context.Context, stepsCompressed int) {
+	if cb != nil && cb.OnCompression != nil {
+		cb.OnCompression(ctx, stepsCompressed)
 	}
 }

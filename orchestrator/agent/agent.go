@@ -511,6 +511,31 @@ func (a *Agent) SetInputQueue(q *InputQueue) {
 	a.inputQueue = q
 }
 
+// Callbacks returns the agent's persisted lifecycle callbacks.
+// This allows callers to merge additional callbacks without replacing the originals.
+func (a *Agent) Callbacks() *AgentCallbacks {
+	return a.callbacks
+}
+
+// TurnPhase returns the current turn-loop phase as a human-readable string.
+// Possible values: "idle", "planning", "active", "unknown".
+// Returns "unknown" if the engine or turn-loop is not initialized.
+func (a *Agent) TurnPhase() string {
+	if a.engine == nil || a.engine.turnLoop == nil {
+		return "unknown"
+	}
+	switch a.engine.turnLoop.Phase() {
+	case TurnPhaseIdle:
+		return "idle"
+	case TurnPhasePlanning:
+		return "planning"
+	case TurnPhaseActive:
+		return "active"
+	default:
+		return "unknown"
+	}
+}
+
 // SubmitInput submits user input to the agent. If the agent is idle, it runs
 // immediately via Run. If busy, the request is enqueued according to mode:
 //   - PreemptQueue: enqueue without cancellation

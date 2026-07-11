@@ -22,6 +22,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -47,6 +48,10 @@ const (
 	EventReasoning
 	// EventError carries an error that occurred during execution.
 	EventError
+	// EventApproval signals a tool blocked by approval policy.
+	EventApproval
+	// EventCompression signals that context compression occurred.
+	EventCompression
 )
 
 // String returns a human-readable name for the event kind.
@@ -70,6 +75,10 @@ func (k EventKind) String() string {
 		return "reasoning"
 	case EventError:
 		return "error"
+	case EventApproval:
+		return "approval"
+	case EventCompression:
+		return "compression"
 	default:
 		return "unknown"
 	}
@@ -78,10 +87,13 @@ func (k EventKind) String() string {
 // AgentEvent is a typed event emitted during agent execution.
 type AgentEvent struct {
 	Kind     EventKind
-	Text     string // token/reasoning delta or response text
-	ToolName string // for EventToolStart/EventToolEnd
-	Round    int    // for EventLLMStart/EventLLMEnd
-	Err      error  // for EventError/EventRunEnd
+	Text     string            // token/reasoning delta or response text
+	ToolName string            // for EventToolStart/EventToolEnd
+	Round    int               // for EventLLMStart/EventLLMEnd
+	Tokens   int               // for EventLLMEnd: approximate completion token count
+	Err      error             // for EventError/EventRunEnd
+	Status   string            // ActionResult status: "blocked"/"success"/"error"
+	Metadata map[string]string // generic extension fields (recordID, sandboxMode, etc.)
 }
 
 // EventSink receives agent events. Implementations must be safe for
@@ -156,7 +168,7 @@ func CallbacksFromSink(sink EventSink) *AgentCallbacks {
 			sink.Emit(AgentEvent{Kind: EventLLMStart, Round: round})
 		},
 		OnLLMCallEnd: func(ctx context.Context, round int, tokens int) {
-			sink.Emit(AgentEvent{Kind: EventLLMEnd, Round: round})
+			sink.Emit(AgentEvent{Kind: EventLLMEnd, Round: round, Tokens: tokens})
 		},
 		OnToolCallStart: func(ctx context.Context, toolName string) {
 			sink.Emit(AgentEvent{Kind: EventToolStart, ToolName: toolName})
@@ -169,6 +181,19 @@ func CallbacksFromSink(sink EventSink) *AgentCallbacks {
 		},
 		OnReasoning: func(ctx context.Context, delta string) {
 			sink.Emit(AgentEvent{Kind: EventReasoning, Text: delta})
+		},
+		OnApprovalRequired: func(ctx context.Context, toolName, recordID string) {
+			sink.Emit(AgentEvent{
+				Kind:     EventApproval,
+				ToolName: toolName,
+				Metadata: map[string]string{"recordID": recordID},
+			})
+		},
+		OnCompression: func(ctx context.Context, stepsCompressed int) {
+			sink.Emit(AgentEvent{
+				Kind:     EventCompression,
+				Metadata: map[string]string{"stepsCompressed": fmt.Sprintf("%d", stepsCompressed)},
+			})
 		},
 	}
 }
