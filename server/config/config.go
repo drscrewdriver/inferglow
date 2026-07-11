@@ -22,6 +22,22 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Security SecurityConfig `yaml:"security"`
 	Flows    FlowsConfig    `yaml:"flows"`
+	Audit    AuditConfig    `yaml:"audit"`
+}
+
+// AuditConfig configures the audit chain for request/response logging
+// with cryptographic integrity verification.
+type AuditConfig struct {
+	// Enabled toggles audit chain creation. When false, no audit overhead.
+	Enabled bool `yaml:"enabled"`
+	// StorageBackend is "memory" (default) or "json_file".
+	StorageBackend string `yaml:"storage_backend"`
+	// StoragePath is the directory for JSONL audit logs (json_file backend).
+	StoragePath string `yaml:"storage_path"`
+	// SignatureKey is an optional HMAC-SHA256 key for entry signing.
+	SignatureKey string `yaml:"signature_key"`
+	// MaxEntries limits in-memory storage (0 = unlimited).
+	MaxEntries int `yaml:"max_entries"`
 }
 
 // ServerConfig configures the HTTP server.

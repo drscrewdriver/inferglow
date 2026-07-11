@@ -62,6 +62,9 @@ type Server struct {
 	runMgr     *RunManager
 	triggerReg *trigger.Registry
 	memStore   MemoryStore
+	teamStore  *TeamStore
+	teamRunner *TeamRunner
+	ctxProvider ContextProvider
 }
 
 // MemoryRecord represents a persistent memory entry.
@@ -100,9 +103,10 @@ type AgentLike interface {
 
 // AgentConfig holds the configuration for creating a new agent.
 type AgentConfig struct {
-	Name         string `json:"name"`
-	Model        string `json:"model"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
+	Name           string `json:"name"`
+	Model          string `json:"model"`
+	SystemPrompt   string `json:"system_prompt,omitempty"`
+	MemoryStrategy string `json:"memory_strategy,omitempty"` // "token_buffer" | "summary" | "" (default)
 }
 
 // TenantManager handles multi-tenant isolation and usage tracking.
@@ -238,4 +242,42 @@ func (s *Server) SetMemoryStore(store MemoryStore) {
 // Typical use: inject LongMemPromoter.OnSessionEnd for auto-promotion.
 func (s *Server) SetSessionEndHook(hook SessionEndHook) {
 	s.runMgr.SetSessionEndHook(hook)
+}
+
+// ContextProvider is a lightweight interface for context/semantic search.
+// Implementations wrap the full context.ContextManager without pulling
+// the entire context module dependency into the server package.
+type ContextProvider interface {
+	// Search performs a semantic or keyword search.
+	Search(ctx context.Context, query string, limit int, scope string) ([]ContextHit, error)
+	// Stats returns context subsystem statistics.
+	Stats() map[string]any
+}
+
+// ContextHit is a single search result from ContextProvider.
+type ContextHit struct {
+	Content  string  `json:"content"`
+	Score    float64 `json:"score"`
+	Source   string  `json:"source,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// SetTeamCoordinator initializes the team coordination subsystem.
+// This enables the /v1/teams endpoints.
+func (s *Server) SetTeamCoordinator(agentStore AgentStore) {
+	s.teamStore = NewTeamStore()
+	s.teamRunner = NewTeamRunner(agentStore, s.teamStore)
+}
+
+// SetContextProvider sets the context/semantic search provider.
+// This enables the /v1/context/search and /v1/context/stats endpoints.
+func (s *Server) SetContextProvider(p ContextProvider) {
+	s.ctxProvider = p
+}
+
+// SemanticMemoryStore is an optional interface that MemoryStore
+// implementations can satisfy to enable semantic search via /v1/memories/search.
+type SemanticMemoryStore interface {
+	SemanticSearch(ctx context.Context, query string, limit int) ([]MemoryRecord, error)
+	MemoryStats() map[string]any
 }

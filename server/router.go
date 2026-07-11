@@ -88,6 +88,29 @@ func (s *Server) registerRoutes() {
 	// Webhook entry point
 	api.HandleFunc("POST /v1/webhooks/{id}", s.handleWebhook)
 
+	// Team coordination (enabled by SetTeamCoordinator)
+	api.HandleFunc("POST /v1/teams", s.handleCreateTeam)
+	api.HandleFunc("GET /v1/teams", s.handleListTeams)
+	api.HandleFunc("GET /v1/teams/{id}", s.handleGetTeam)
+	api.HandleFunc("DELETE /v1/teams/{id}", s.handleDeleteTeam)
+	api.HandleFunc("POST /v1/teams/{id}/run", s.handleTeamRun)
+	api.HandleFunc("POST /v1/teams/{id}/stream", s.handleTeamStream)
+
+	// Context / semantic search (enabled by SetContextProvider)
+	api.HandleFunc("GET /v1/context/search", s.handleContextSearch)
+	api.HandleFunc("GET /v1/context/stats", s.handleContextStats)
+
+	// Enhanced memory endpoints
+	api.HandleFunc("POST /v1/memories/search", s.handleMemorySemanticSearch)
+	api.HandleFunc("GET /v1/memories/stats", s.handleMemoryStats)
+
+	// Agent status (TurnLoop phase)
+	api.HandleFunc("GET /v1/agents/{id}/status", s.handleAgentStatus)
+
+	// Audit chain verification and entry retrieval
+	api.HandleFunc("GET /v1/audit/verify", s.handleAuditVerify)
+	api.HandleFunc("GET /v1/audit/entries", s.handleAuditEntries)
+
 	// OpenAPI spec
 	api.HandleFunc("GET /openapi.json", handler.OpenAPISpec)
 
