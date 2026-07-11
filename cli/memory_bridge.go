@@ -49,6 +49,10 @@ type MemoryBridge struct {
 	topK      int
 	stepSeq   int
 	sessionID string
+
+	// Optional injected backends (nil = use defaults).
+	externalStore   StepStoreInjector
+	vectorBackend   VectorBackendInjector
 }
 
 // NewMemoryBridge creates a fully wired memory bridge for the given session.
@@ -289,6 +293,32 @@ func (b *MemoryBridge) AppendConstitutional(entries []string) {
 	}
 }
 
+// StepStoreInjector is an optional external step store (e.g. Postgres)
+// that can replace the default JSONL backend.
+type StepStoreInjector interface {
+	IngestStep(rec contextmgr.StepRecord) error
+	SearchSteps(ctx context.Context, query string, limit int) ([]contextmgr.StepRecord, error)
+}
+
+// WithStepStore replaces the JSONL store with an external store.
+// When called, the bridge skips JSONL persistence and delegates to the
+// injected store for all ingest/search operations.
+func (b *MemoryBridge) WithStepStore(s StepStoreInjector) {
+	b.externalStore = s
+}
+
+// VectorBackendInjector is an optional vector search backend that can
+// replace the in-memory BM25 + noop-embedder default.
+type VectorBackendInjector interface {
+	VectorSearch(ctx context.Context, query string, limit int) ([]retrieval.SearchResult, error)
+}
+
+// WithVectorBackend replaces the default BM25-only search with an
+// external vector backend (e.g. pgvector, Redis VSS).
+func (b *MemoryBridge) WithVectorBackend(vb VectorBackendInjector) {
+	b.vectorBackend = vb
+}
+
 // truncate limits content to maxBytes.
 func truncate(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
@@ -297,11 +327,19 @@ func truncate(s string, maxBytes int) string {
 	return s[:maxBytes] + "...[truncated]"
 }
 
-// estimateTokens provides a rough token count (4 chars ≈ 1 token).
+// estimateTokens provides a rough token count.
+// English: ~4 chars/token, CJK: ~1-2 chars/token.
+// Uses rune count for better accuracy with mixed content.
 func estimateTokens(s string) int {
-	n := len(s) / 4
-	if n < 1 {
+	if s == "" {
+		return 0
+	}
+	runes := []rune(s)
+	n := len(runes)
+	// Rough estimate: 1 token ≈ 3 runes for mixed content
+	tokens := n / 3
+	if tokens < 1 {
 		return 1
 	}
-	return n
+	return tokens
 }

@@ -33,22 +33,55 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch: "inferglow team ..." / "inferglow memory ..."
+	// If the first positional arg is a known subcommand, dispatch and return.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "team":
+			cfg, _, err := cli.LoadOrDefaultConfig("")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not load config: %v (using defaults)\n", err)
+			}
+			cli.ApplyEnvOverrides(&cfg)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := runTeam(ctx, cfg, os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "memory":
+			cfg, _, err := cli.LoadOrDefaultConfig("")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not load config: %v (using defaults)\n", err)
+			}
+			cli.ApplyEnvOverrides(&cfg)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := runMemory(ctx, cfg, os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	workspace := flag.String("workspace", ".", "Working directory for the agent")
 	modelName := flag.String("model", "", "Model name to use")
 	configPath := flag.String("config", "", "Path to config file")
 	resumeID := flag.String("resume", "", "Resume a previous session by ID")
 	unsafeMode := flag.Bool("unsafe", false, "Allow bash execution without confirmation")
+	flag.Bool("tui", true, "Enable full-screen TUI mode (default, ignored if --cli is set)")
+	cliMode := flag.Bool("cli", false, "Use single-output REPL mode instead of TUI")
+	oneshotPrompt := flag.String("z", "", "One-shot mode: send prompt, print final response to stdout, exit")
+	oneshotLong := flag.String("oneshot", "", "Same as -z (one-shot mode)")
 	flag.Parse()
 
-	cfg := cli.DefaultCLIConfig()
-	if *configPath != "" {
-		loaded, err := cli.LoadConfig(*configPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-			os.Exit(1)
-		}
-		cfg = loaded
+	cfg, loadedPath, err := cli.LoadOrDefaultConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not load config: %v (using defaults)\n", err)
 	}
+	_ = loadedPath // available for future /config reload
 
 	// Apply environment variable overrides.
 	cli.ApplyEnvOverrides(&cfg)
@@ -73,6 +106,32 @@ func main() {
 		fmt.Println("\nShutting down...")
 		cancel()
 	}()
+
+	// Mode dispatch — priority: oneshot > tui > cli(REPL).
+	//
+	// OneShot (-z / --oneshot): single prompt → stdout → exit.
+	// TUI (default): full-screen Bubble Tea alt-screen.
+	// REPL (--cli): line-based interactive loop.
+	prompt := *oneshotPrompt
+	if prompt == "" {
+		prompt = *oneshotLong
+	}
+
+	if prompt != "" {
+		if err := cli.RunOneShot(ctx, cfg, prompt); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if !*cliMode {
+		if err := cli.RunTUI(ctx, cfg, *resumeID); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := cli.RunREPL(ctx, cfg, *resumeID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

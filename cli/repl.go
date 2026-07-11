@@ -27,7 +27,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/inferglow/orchestrator/agent"
 )
 
@@ -38,34 +37,15 @@ automatically injected into the conversation context.`
 
 // RunREPL starts the interactive read-eval-print loop.
 func RunREPL(ctx context.Context, cfg CLIConfig, resumeID string) error {
-	// Determine session ID.
-	sessionID := resumeID
-	if sessionID == "" {
-		sessionID = uuid.New().String()
-	}
-
-	// Build memory bridge.
-	bridge, err := NewMemoryBridge(cfg, sessionID)
+	rt, err := BuildRuntime(cfg, resumeID)
 	if err != nil {
-		return fmt.Errorf("init memory bridge: %w", err)
+		return err
 	}
-	defer bridge.OnSessionEnd(ctx)
+	defer rt.Close(ctx)
 
-	// Load constitutional entries if configured.
-	if cfg.Features.Constitutional && cfg.Constitutional != "" {
-		entries, err := loadConstitutional(cfg.Constitutional)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load constitutional: %v\n", err)
-		} else {
-			bridge.AppendConstitutional(entries)
-		}
-	}
-
-	// Build agent.
-	ag, err := buildAgent(cfg, bridge, sessionID)
-	if err != nil {
-		return fmt.Errorf("init agent: %w", err)
-	}
+	ag := rt.Agent
+	bridge := rt.Bridge
+	sessionID := rt.SessionID
 
 	fmt.Printf("InferGlow CLI Agent (session: %s)\n", sessionID[:8])
 	fmt.Println("Type /help for commands, /quit to exit.")

@@ -35,6 +35,7 @@ type CLIConfig struct {
 	WindowTokens int          `json:"window_tokens"`
 	TopK         int          `json:"top_k"`
 	UnsafeMode   bool         `json:"unsafe_mode"`
+	SandboxMode  string       `json:"sandbox_mode,omitempty"` // "trusted_local", "local", "docker", "gvisor", "auto"
 	Features     FeatureFlags `json:"features"`
 }
 
@@ -48,11 +49,13 @@ type LLMConfig struct {
 
 // FeatureFlags controls optional features.
 type FeatureFlags struct {
-	MemoryInjection  bool `json:"memory_injection"`  // Per-turn auto recall
-	MemoryStorage    bool `json:"memory_storage"`    // Tool result auto-ingest
-	Constitutional   bool `json:"constitutional"`    // Load constitutional zone
-	Compression      bool `json:"compression"`       // Auto compression
-	ProactiveRecall  bool `json:"proactive_recall"`  // Auto recall on session start
+	MemoryInjection  bool   `json:"memory_injection"`  // Per-turn auto recall
+	MemoryStorage    bool   `json:"memory_storage"`    // Tool result auto-ingest
+	Constitutional   bool   `json:"constitutional"`    // Load constitutional zone
+	Compression      bool   `json:"compression"`       // Auto compression
+	ProactiveRecall  bool   `json:"proactive_recall"`  // Auto recall on session start
+	TUIMode          bool   `json:"tui_mode"`          // Enable full-screen TUI mode
+	OutputMode       string `json:"output_mode"`       // "tui", "cli", or "oneshot"; mirrors CLI flag dispatch
 }
 
 // DefaultCLIConfig returns a CLIConfig with sensible defaults.
@@ -63,10 +66,12 @@ func DefaultCLIConfig() CLIConfig {
 		WorkspaceDir: ".",
 		WindowTokens: 32000,
 		TopK:         5,
+		SandboxMode:  "trusted_local",
 		Features: FeatureFlags{
 			MemoryInjection: true,
 			MemoryStorage:   true,
 			Compression:     true,
+			TUIMode:         true,
 		},
 	}
 }
@@ -82,6 +87,51 @@ func LoadConfig(path string) (CLIConfig, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// DefaultConfigPath returns the default config file location.
+func DefaultConfigPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".inferglow", "config.json")
+}
+
+// SaveConfig writes the config to the given path as JSON.
+func SaveConfig(cfg CLIConfig, path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// LoadOrDefaultConfig tries to load from the given path, then the default
+// location (~/.inferglow/config.json). If neither exists, it returns the
+// default config and persists it to disk for future use.
+func LoadOrDefaultConfig(explicitPath string) (CLIConfig, string, error) {
+	cfg := DefaultCLIConfig()
+
+	// Try explicit path first.
+	if explicitPath != "" {
+		loaded, err := LoadConfig(explicitPath)
+		return loaded, explicitPath, err
+	}
+
+	// Try default location.
+	defaultPath := DefaultConfigPath()
+	if _, err := os.Stat(defaultPath); err == nil {
+		loaded, err := LoadConfig(defaultPath)
+		return loaded, defaultPath, err
+	}
+
+	// No config file found: persist defaults.
+	if err := SaveConfig(cfg, defaultPath); err != nil {
+		return cfg, defaultPath, nil // non-fatal: just use in-memory defaults
+	}
+	return cfg, defaultPath, nil
 }
 
 // ApplyEnvOverrides applies environment variable overrides to the config.
