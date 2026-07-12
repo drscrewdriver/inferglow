@@ -43,18 +43,25 @@ func addNumbers(ctx context.Context, req AddRequest) (int, error) {
 	return req.A + req.B, nil
 }
 
-// 2. 定义另一个函数（不同的签名）
-func greet(name string) string {
-	return "Hello, " + name + "!"
+// 2. 定义另一个函数（不同的签名：func(InputT) (OutputT, error)）
+type GreetRequest struct {
+	Name string `json:"name"`
+}
+
+func greet(req GreetRequest) (string, error) {
+	if req.Name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	return "Hello, " + req.Name + "!", nil
 }
 
 // 3. 带 error 返回的函数
-type GreetRequest struct {
+type GreetTitleRequest struct {
 	Name  string `json:"name"`
 	Title string `json:"title,omitempty"`
 }
 
-func greetWithTitle(req GreetRequest) (string, error) {
+func greetWithTitleFn(req GreetTitleRequest) (string, error) {
 	if req.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
@@ -88,19 +95,8 @@ func main() {
 		return
 	}
 
-	// --- 方式 3: 手动创建 Action（完整控制） ---
-	greetWithTitle := &action.Action{
-		Name:        "greet_with_title",
-		Description: "Greet with title",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"name": map[string]any{"type": "string"}, "title": map[string]any{"type": "string"}},
-			"required":   []string{"name"},
-		},
-		Executor: &action.LocalFunctionExecutor{},
-	}
-	// 这里用 New() 代替
-	greetWithTitleAction, _ := action.New("greet_with_title", "Greet with title", greetWithTitle)
+	// --- 方式 3: 用 New() 自动包装另一函数 ---
+	greetWithTitleAction, _ := action.New("greet_with_title", "Greet with title", greetWithTitleFn)
 
 	// --- 注册到 Registry ---
 	registry := action.NewRegistry()

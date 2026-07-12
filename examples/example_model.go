@@ -264,7 +264,7 @@ func main() {
 			"model":   "gpt-4o",
 		},
 	}}
-	responsesProvider, err := model.NewOpenAIResponsesProviderFromConfig(cpResponses)
+	responsesProvider, err := model.NewOpenAIResponsesProviderFromConfig(cpResponses, "openai_responses")
 	if err != nil {
 		fmt.Printf("  OpenAIResponsesProvider 构造失败: %v\n", err)
 	} else {

@@ -72,9 +72,10 @@ func main() {
 		fmt.Printf("  Field '%s': Type=%s, Required=%v, Desc=%s\n",
 			name, field.Type, field.Required, field.Description)
 	}
-	if len(weatherSchema.Fields["Forecasts"].Children) > 0 {
+	forecastsField := weatherSchema.Fields["forecasts"]
+	if forecastsField != nil && forecastsField.ItemDef != nil && len(forecastsField.ItemDef.Children) > 0 {
 		fmt.Printf("  Nested (Forecasts[] items):\n")
-		for n, f := range weatherSchema.Fields["Forecasts"].ItemDef.Children {
+		for n, f := range forecastsField.ItemDef.Children {
 			fmt.Printf("    - %s: Type=%s\n", n, f.Type)
 		}
 	}
