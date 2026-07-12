@@ -97,7 +97,11 @@ func (p *AnthropicCompatibleProvider) GenerateRequestData(ctx context.Context, r
 			userMsg.Content = req.Input
 		}
 	}
-	if userMsg.Content != "" {
+	// ContentBlocks 多模态处理：当存在图片/音频/视频等内容时，构建多模态消息
+	if len(req.ContentBlocks) > 0 {
+		userMsg.ContentBlocks = append(userMsg.ContentBlocks, req.ContentBlocks...)
+	}
+	if userMsg.Content != "" || len(userMsg.ContentBlocks) > 0 {
 		messages = append(messages, userMsg)
 	}
 
@@ -177,6 +181,7 @@ func (p *AnthropicCompatibleProvider) GenerateRequestData(ctx context.Context, r
 //     result preserves the strictly alternating user/assistant roles that the
 //     Anthropic API requires.
 //   - plain text messages keep string content (Anthropic accepts both forms).
+//   - user messages with ContentBlocks → content array with text + image blocks.
 func anthropicMessages(msgs []ChatMessage) []map[string]any {
 	result := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
@@ -242,6 +247,45 @@ func anthropicMessages(msgs []ChatMessage) []map[string]any {
 			}
 			result = append(result, map[string]any{
 				"role":    "assistant",
+				"content": blocks,
+			})
+		case m.Role == "user" && len(m.ContentBlocks) > 0:
+			// P0: user message with multimodal content (images, audio).
+			// Convert to Anthropic's content array format.
+			blocks := make([]map[string]any, 0, 1+len(m.ContentBlocks))
+			if m.Content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+			}
+			for _, cb := range m.ContentBlocks {
+				switch cb.Type {
+				case ContentImage:
+					source := map[string]any{}
+					if cb.IsRemote() {
+						source["type"] = "url"
+						source["url"] = cb.URL
+					} else if cb.IsInline() {
+						source["type"] = "base64"
+						source["media_type"] = cb.MIMEType
+						if source["media_type"] == "" {
+							source["media_type"] = "image/png"
+						}
+						source["data"] = base64Encode(cb.Data)
+					}
+					blocks = append(blocks, map[string]any{
+						"type":   "image",
+						"source": source,
+					})
+				case ContentText:
+					if len(cb.Data) > 0 {
+						blocks = append(blocks, map[string]any{
+							"type": "text",
+							"text": string(cb.Data),
+						})
+					}
+				}
+			}
+			result = append(result, map[string]any{
+				"role":    "user",
 				"content": blocks,
 			})
 		default:

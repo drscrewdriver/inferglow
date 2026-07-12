@@ -48,6 +48,9 @@ type ChatMessage struct {
 	// OpenRouter 等 Provider 使用 reasoning_details 字段返回推理信息。
 	// 该字段为 JSON 原始字符串，序列化时直接嵌入请求体。
 	ReasoningDetails string `json:"reasoning_details,omitempty"`
+	// ContentBlocks 携带多模态内容（图片/音频/视频）。
+	// 当非空时，MarshalJSON 会将其转换为 OpenAI/Anthropic 的原生格式。
+	ContentBlocks []ContentBlock `json:"-"`
 }
 
 // ToolDefinition 定义一个 LLM 可调用的工具
@@ -152,4 +155,139 @@ func (u *UsageInfo) ReasoningTokens() int {
 		return 0
 	}
 	return u.CompletionTokensDetails["reasoning_tokens"]
+}
+
+// chatMessageWire is the on-wire shape for ChatMessage serialization.
+// When ContentBlocks is non-empty, Content becomes a content array.
+type chatMessageWire struct {
+	Role               string         `json:"role"`
+	Content            any            `json:"content,omitempty"`
+	Name               string         `json:"name,omitempty"`
+	ToolCalls          []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID         string         `json:"tool_call_id,omitempty"`
+	ReasoningContent   string         `json:"reasoning_content,omitempty"`
+}
+
+// MarshalJSON serializes ChatMessage, converting ContentBlocks to the
+// OpenAI-compatible content array format when present.
+//
+// OpenAI vision format:
+//
+//	{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+//	{"type": "image_url", "image_url": {"url": "https://..."}}
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	// Fast path: no ContentBlocks, use standard serialization
+	if len(m.ContentBlocks) == 0 {
+		type Alias ChatMessage
+		return json.Marshal(struct {
+			Alias
+		}{Alias: Alias(m)})
+	}
+
+	// Build content array with text + multimodal blocks
+	content := make([]map[string]any, 0, 1+len(m.ContentBlocks))
+
+	// Add text content if present
+	if m.Content != "" {
+		content = append(content, map[string]any{
+			"type": "text",
+			"text": m.Content,
+		})
+	}
+
+	// Convert each ContentBlock to OpenAI format
+	for _, block := range m.ContentBlocks {
+		switch block.Type {
+		case ContentImage:
+			imgURL := map[string]any{}
+			if block.IsRemote() {
+				imgURL["url"] = block.URL
+			} else if block.IsInline() {
+				// Base64 encode inline data
+				mimeType := block.MIMEType
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				imgURL["url"] = "data:" + mimeType + ";base64," + base64Encode(block.Data)
+			}
+			content = append(content, map[string]any{
+				"type":      "image_url",
+				"image_url": imgURL,
+			})
+		case ContentAudio:
+			// OpenAI audio input format (GPT-4o-audio)
+			inputAudio := map[string]any{}
+			if block.IsInline() {
+				inputAudio["data"] = base64Encode(block.Data)
+				inputAudio["format"] = audioFormat(block.MIMEType)
+			}
+			content = append(content, map[string]any{
+				"type":       "input_audio",
+				"input_audio": inputAudio,
+			})
+		case ContentText:
+			if len(block.Data) > 0 {
+				content = append(content, map[string]any{
+					"type": "text",
+					"text": string(block.Data),
+				})
+			}
+		}
+	}
+
+	wire := chatMessageWire{
+		Role:             m.Role,
+		Content:          content,
+		Name:             m.Name,
+		ToolCalls:        m.ToolCalls,
+		ToolCallID:       m.ToolCallID,
+		ReasoningContent: m.ReasoningContent,
+	}
+	return json.Marshal(wire)
+}
+
+// base64Encode encodes data to base64 string.
+func base64Encode(data []byte) string {
+	const encodeStd = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	result := make([]byte, 0, (len(data)+2)/3*4)
+	for i := 0; i < len(data); i += 3 {
+		val := uint(data[i]) << 16
+		if i+1 < len(data) {
+			val |= uint(data[i+1]) << 8
+		}
+		if i+2 < len(data) {
+			val |= uint(data[i+2])
+		}
+		result = append(result, encodeStd[val>>18&0x3F])
+		result = append(result, encodeStd[val>>12&0x3F])
+		if i+1 < len(data) {
+			result = append(result, encodeStd[val>>6&0x3F])
+		} else {
+			result = append(result, '=')
+		}
+		if i+2 < len(data) {
+			result = append(result, encodeStd[val&0x3F])
+		} else {
+			result = append(result, '=')
+		}
+	}
+	return string(result)
+}
+
+// audioFormat extracts the audio format from MIME type.
+func audioFormat(mimeType string) string {
+	switch mimeType {
+	case "audio/mp3", "audio/mpeg":
+		return "mp3"
+	case "audio/wav":
+		return "wav"
+	case "audio/ogg":
+		return "ogg"
+	case "audio/flac":
+		return "flac"
+	case "audio/webm":
+		return "webm"
+	default:
+		return "wav"
+	}
 }

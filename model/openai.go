@@ -180,7 +180,11 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 			userMsg.Content = req.Input
 		}
 	}
-	if userMsg.Content != "" {
+	// ContentBlocks 多模态处理：当存在图片/音频/视频等内容时，构建多模态消息
+	if len(req.ContentBlocks) > 0 {
+		userMsg.ContentBlocks = append(userMsg.ContentBlocks, req.ContentBlocks...)
+	}
+	if userMsg.Content != "" || len(userMsg.ContentBlocks) > 0 {
 		messages = append(messages, userMsg)
 	}
 
