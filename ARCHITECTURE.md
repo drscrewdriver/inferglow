@@ -1,5 +1,59 @@
 # Inferglow 完整调用链与架构分析
 
+> 本文档基于 graphify 知识图谱（8017 节点、17577 边、414 社区）自动生成架构分析。
+> 源码地图：`graphify-out/graph.json` | 查询：`graphify query "<你的问题>"`
+
+## 代码库地图
+
+```
+inferglow/                          ← 23 个独立 Go module，~62,000 LOC
+│
+├── 基础层（12 模块，零内部依赖）
+│   ├── model/        ← LLM Provider 抽象 (~8000 LOC)
+│   ├── schema/       ← 契约优先 Schema 引擎 (~2800 LOC)
+│   ├── session/      ← 对话记忆管理 (~1800 LOC)
+│   ├── sandbox/      ← 沙箱执行框架，8 种后端 (~6300 LOC)
+│   ├── context/      ← 上下文管理引擎 (~6300 LOC)
+│   ├── audit/        ← 链表式审计链 (~1100 LOC)
+│   ├── approval/     ← HITL 审批 (~700 LOC)
+│   ├── rag/          ← RAG 管道 (~1500 LOC)
+│   ├── rerank/       ← 重排序 (~500 LOC)
+│   ├── observability/← OpenTelemetry 集成 (~700 LOC)
+│   ├── workspace/    ← 安全文件操作 (~1200 LOC)
+│   └── resource/     ← 资源管理 (~750 LOC)
+│
+├── 中间层（5 模块，依赖基础层）
+│   ├── components/   ← Prompt/Tool 通用接口 (~400 LOC)
+│   ├── flow/         ← TriggerFlow + LCEL 编排引擎 (~7400 LOC)
+│   ├── action/       ← Action 注册与执行 (~2900 LOC)
+│   ├── mcpserver/    ← MCP 协议服务 (~850 LOC)
+│   └── builtins/     ← 内置 Action/Policy/Tool (~2200 LOC)
+│
+├── 编排层（3 模块，聚合中间层+基础层）
+│   ├── orchestrator/ ← Agent 编排层，用户入口 (~7700 LOC)
+│   ├── security/     ← PII/注入/限流/RBAC (~2000 LOC)
+│   └── eval/         ← 离线评估框架 (~750 LOC)
+│
+└── 应用层（3 模块，面向用户入口）
+    ├── server/       ← REST API 服务 (~3100 LOC)
+    ├── cli/          ← 终端 REPL 客户端 (~1200 LOC)
+    └── examples/     ← 示例代码 (~2800 LOC)
+```
+
+### 开发者入口速查
+
+| 你的目标 | 入口 |
+|---------|------|
+| 快速体验完整 Agent | `examples/example_quickstart.go` |
+| 注册自定义工具 | `action/` 模块 + `action.New()` |
+| 编排多步骤流程 | `flow/` 模块 + `flow.NewFlow().AddStep().Build()` |
+| 启动 REST API 服务 | `server/cmd/inferglow-server/main.go` |
+| 使用 CLI 终端 | `cli/cmd/inferglow-cli/main.go` |
+| 调试 Agent 循环 | `orchestrator/agent/engine.go` → `executeLoop()` |
+| 添加新 LLM Provider | `model/` → 实现 `ModelRequester` 接口 |
+
+---
+
 ## 一、Session、Action、Flow 的关系澄清
 
 ### 核心结论：三者完全独立，由上层 orchestrator 编排层串联

@@ -23,6 +23,45 @@
 - **理解 Agent 主循环**：读 [07-orchestrator.md](./07-orchestrator.md) + [08-call-chains.md](./08-call-chains.md)
 - **深入某一模块**：直接跳转到对应编号文档
 
+## 面向新开发者
+
+如果你是第一次接触 inferglow，建议按以下路径学习：
+
+### 1. 先跑起来
+
+先执行 [`examples/example_quickstart.go`](../../examples/example_quickstart.go) 感受全貌：
+
+```bash
+cd examples
+go run example_quickstart.go
+```
+
+这个示例不需要任何外部依赖或 API Key，使用内置 MockLLM 即可运行。
+
+### 2. 理解核心概念
+
+| 概念 | 对应文档 | 示例代码 | 一句话说明 |
+|------|---------|---------|-----------|
+| **Agent** | [07-orchestrator.md](./07-orchestrator.md) | `example_orchestrator.go` | 编排层的入口，负责调度 LLM 和 Action 的交互循环 |
+| **Action** | [04-action-and-mcp.md](./04-action-and-mcp.md) | `example_action.go` | 将 Go 函数包装为 LLM 可调用的工具 |
+| **Session** | [05-session-sandbox-audit.md](./05-session-sandbox-audit.md) | `example_session.go` | 对话记忆管理器，维护上下文窗口 |
+| **Flow** | [03-flow.md](./03-flow.md) | `example_flow.go` | 步骤编排引擎，支持线性/条件/并行执行 |
+| **Schema** | [02-model-and-schema.md](./02-model-and-schema.md) | `example_schema.go` | 契约优先的 LLM 输出格式校验 |
+| **Model** | [02-model-and-schema.md](./02-model-and-schema.md) | `example_model.go` | LLM Provider 统一抽象（OpenAI/Anthropic/Ollama） |
+| **Audit** | [05-session-sandbox-audit.md](./05-session-sandbox-audit.md) | `example_audit.go` | 基于 SHA-256 哈希链的不可篡改审计日志 |
+| **LoopGuard** | [07-orchestrator.md](./07-orchestrator.md) | `example_orchestrator.go` | Agent 死循环检测器 |
+
+### 3. 理解模块依赖关系
+
+```
+应用层 (server, cli)  →  编排层 (orchestrator)  →  中间层 (flow, action)  →  基础层 (model, session, ...)
+```
+
+- 基础层模块零内部依赖，可独立使用
+- 中间层依赖基础层，提供上层能力
+- 编排层聚合所有模块，形成完整 Agent
+- 应用层面向用户，提供 REST API 和 CLI
+
 ## 模块速查表
 
 22 个独立 Go module，按依赖深度分为三层。

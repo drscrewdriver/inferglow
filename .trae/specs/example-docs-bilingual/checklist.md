@@ -1,0 +1,21 @@
+# Checklist
+
+- [x] All example files compile without errors (`go vet` passes)
+- [x] All example files run without errors (`go run` exits with code 0)
+- [x] `example_quickstart.md` created with bilingual content
+- [x] `example_action.md` created with bilingual content
+- [x] `example_flow.md` created with bilingual content
+- [x] `example_schema.md` created with bilingual content
+- [x] `example_session.md` created with bilingual content
+- [x] `example_audit.md` created with bilingual content
+- [x] `example_model.md` created with bilingual content
+- [x] `example_orchestrator.md` created with bilingual content
+- [x] `example_workspace.md` created with bilingual content
+- [x] `example_pluggable.md` created with bilingual content
+- [x] `example_sandbox_enabled.md` created with bilingual content
+- [x] `example_server_comprehensive.go` created and compiles
+- [x] `example_server_comprehensive.md` created with bilingual content
+- [x] Server example demonstrates: model, action, session, audit, flow, schema, sandbox, workspace
+- [x] Server example demonstrates audit on/off switch
+- [x] examples/README.md updated with bilingual doc links for all examples
+- [x] examples/README.md learning path updated

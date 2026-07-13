@@ -75,59 +75,135 @@ graph TD
     CLI --> BUILTINS
 ```
 
-## 可插拔架构 (Pluggable Architecture)
+## 快速开始
 
-Inferglow 自 v2 起将沙箱执行与安全特性改造为**可选依赖**，让核心编排层默认保持最小体积、零安全开销，需要时再通过编译标签或接口注入按需启用。
+> 下面是一个完整的端到端示例，演示如何用 inferglow 组装一个带工具调用的 Agent。
+> 无需真实 LLM API Key，使用 MockLLM 即可运行。
 
-### 1. Build Tags 机制（沙箱可选）
+### 1. 创建一个最简单的 Agent
 
-`action/executor_sandbox.go` 通过 `//go:build with_sandbox` 标签隔离，配套的 `action/executor_sandbox_stub.go` 在 `!with_sandbox` 下提供占位实现（调用 `Execute` 时返回明确错误）。默认编译不会引入 `github.com/inferglow/sandbox` 依赖。
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/inferglow/action"
+	"github.com/inferglow/model"
+	"github.com/inferglow/orchestrator/agent"
+	"github.com/inferglow/session"
+)
+
+// 自定义 MockLLM — 无需真实 API Key 即可演示 Agent 编排逻辑
+type mockLLM struct{}
+
+func (m *mockLLM) Name() string { return "mock-llm" }
+
+func (m *mockLLM) GenerateRequestData(ctx context.Context, req *model.ModelRequest) (*model.RequestData, error) {
+	return &model.RequestData{Model: "mock", Messages: req.ChatHistory}, nil
+}
+
+func (m *mockLLM) RequestModel(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+	ch := make(chan *model.StreamChunk, 1)
+	ch <- &model.StreamChunk{
+		Delta:  `{"next_action":"response","final_response":"Hello from inferglow Agent!"}`,
+		IsDone: true,
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockLLM) BroadcastResponse(ctx context.Context, stream <-chan *model.StreamChunk) (<-chan *model.ResultEvent, error) {
+	return nil, nil
+}
+
+func main() {
+	ctx := context.Background()
+
+	// 1. 创建 Session（对话记忆）
+	sess := session.NewSession("demo", 4000)
+
+	// 2. 创建 ActionExtension（管理可被 LLM 调用的工具）
+	actExt := agent.NewActionExtension()
+
+	// 3. 注册一个 Action（将 Go 函数包装为工具）
+	greetAction, _ := action.New("greet", "Greet a user",
+		func(ctx context.Context, req map[string]any) (string, error) {
+			name, _ := req["name"].(string)
+			if name == "" {
+				name = "friend"
+			}
+			return fmt.Sprintf("Hello, %s!", name), nil
+		})
+	actExt.Register(greetAction)
+
+	// 4. 创建 Agent 并运行
+	ag := agent.New(sess, actExt, &mockLLM{},
+		agent.WithMaxRounds(5),
+		agent.WithSystemPrompt("You are a helpful assistant."),
+	)
+
+	result, err := ag.Run(ctx, "Hello!", nil)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Agent response:", result)
+}
+```
+
+### 2. 运行方式
 
 ```bash
-# 默认模式（推荐）：不打包沙箱，体积更小
-go build ./...
+# 确保在 examples 目录下
+cd examples
 
-# 沙箱模式：打包完整沙箱后端
+# 默认模式（无沙箱，体积更小）— 推荐从这里开始
+go run example_quickstart.go
+
+# 或逐个验证各模块
+go run example_action.go      # Action 注册与执行
+go run example_flow.go        # Flow 步骤编排
+go run example_schema.go      # Schema 校验
+go run example_session.go     # 对话记忆管理
+go run example_audit.go       # 审计链
+go run example_model.go       # LLM Provider 抽象
+go run example_orchestrator.go # Agent 端到端编排
+
+# 沙箱模式（需要 with_sandbox build tag）
+go run -tags with_sandbox example_sandbox_enabled.go
+```
+
+### 3. 学习路径
+
+| 步骤 | 示例 | 学习内容 | 预计时间 |
+|------|------|---------|---------|
+| 1 | `example_action.go` | 将 Go 函数注册为 Action 并调用 | 5 min |
+| 2 | `example_flow.go` | 用 Flow 编排步骤管道 | 5 min |
+| 3 | `example_schema.go` | Schema 定义与校验 | 5 min |
+| 4 | `example_session.go` | 对话记忆管理与裁剪 | 5 min |
+| 5 | `example_audit.go` | 不可篡改审计链 | 5 min |
+| 6 | `example_model.go` | LLM Provider 抽象与重试 | 10 min |
+| 7 | `example_orchestrator.go` | 组装完整 Agent | 10 min |
+| 8 | `example_workspace.go` | 安全文件操作 | 5 min |
+| 9 | `example_pluggable.go` | 接口注入安全特性 | 10 min |
+| 10 | `example_sandbox_enabled.go` | 沙箱执行（需 build tag） | 10 min |
+
+> **推荐路径**：先跑 `example_quickstart.go` 感受全貌，再按顺序学习 1→7→8→9→10。
+
+### 4. 编译配置
+
+#### 默认模式（无沙箱，推荐）
+```bash
+go build ./...
+```
+
+#### 沙箱模式（打包完整沙箱后端）
+```bash
 go build -tags with_sandbox ./...
 ```
 
-### 2. 接口注入模式（安全可选）
-
-`session` 与 `orchestrator/agent` 不再直接 import `security`，只保留接口契约：
-
-| 接口 | 定义位置 | 实现位置 | 注入入口 |
-|------|---------|---------|---------|
-| `session.MessageHook` | `session/security_hook.go` | `security/sessionhook.SecurityHook` | `session.WithSecurityHook(hook)` |
-| `agent.OutputSecurityHook` | `orchestrator/agent/security_hook.go` | `security/agenthook.OutputInjectionHook` | `agent.WithOutputSecurityHook(hook)` |
-| `agent.PIIMasker` | `orchestrator/agent/agent.go` | `security/agenthook.PIIMasker`（适配 `pii.Masker`） | `agent.WithPIIMasker(m)` |
-
-依赖方向严格单向：`security/sessionhook → session`，`security/agenthook → orchestrator/agent`。不注入即零开销。
-
-### 3. 编译配置决策树
-
-```
-是否需要沙箱执行？
-├── 是 → go build -tags with_sandbox ./...
-└── 否 → go build ./...（默认，体积更小）
-
-是否需要安全特性（PII/注入检测）？
-├── 是 → 在 orchestrator 层注入 sessionhook/agenthook
-└── 否 → 不注入，零开销
-```
-
-### 4. 快速开始
-
-#### 默认模式（无沙箱、无安全钩子）
-
-```go
-ag := agent.New(sess, actExt, llm,
-    agent.WithMaxRounds(10),
-)
-resp, err := ag.Run(ctx, "Hello", nil)
-```
-
 #### 启用安全特性（接口注入，无需特殊编译）
-
 ```go
 import (
     "github.com/inferglow/security/sessionhook"
@@ -136,14 +212,10 @@ import (
     promptinjection "github.com/inferglow/security/prompt_injection"
 )
 
-// 输入侧：注入检测钩子注入到 Session
 secHook := sessionhook.NewSecurityHook(promptinjection.NewDefaultConfig())
 sess := session.NewSessionWithOptions("id", 4000, session.WithSecurityHook(secHook))
 
-// 输出侧：注入检测钩子注入到 Agent
 outHook := agenthook.NewOutputInjectionHook(promptinjection.NewDefaultConfig())
-
-// PII 脱敏：通过适配器把 *pii.Masker 包装成 agent.PIIMasker
 piiMasker := agenthook.NewPIIMasker(pii.NewMasker(pii.MaskConfig{}))
 
 ag := agent.New(sess, actExt, llm,
@@ -152,28 +224,39 @@ ag := agent.New(sess, actExt, llm,
 )
 ```
 
-#### 启用沙箱执行（需 `with_sandbox` 标签）
+> 完整可运行示例见 [`examples/example_pluggable.go`](./examples/example_pluggable.go) 与 [`examples/example_sandbox_enabled.go`](./examples/example_sandbox_enabled.go)。
+
+## 代码库导航
+
+本项目的知识图谱由 [graphify](https://github.com/Graphify-Labs/graphify) 自动生成，可快速查询架构关系。
 
 ```bash
-go build -tags with_sandbox ./...
+# 查看全局架构
+graphify query "What is the overall architecture of inferglow?"
+
+# 查看 Agent 循环
+graphify query "How does the Agent orchestration loop work?"
+
+# 查看模块依赖
+graphify query "What are the dependencies between modules?"
+
+# 查看统计信息
+graphify stats
 ```
 
-```go
-import (
-    "github.com/inferglow/action"
-    "github.com/inferglow/sandbox"
-)
+生成的图谱数据位于 [`graphify-out/graph.json`](./graphify-out/graph.json)（8017 节点，17577 边）。
 
-mgr := sandbox.NewManager()
-_ = mgr.Register(sandbox.NewTrustedLocalProvider())
-exec := action.NewSandboxExecutor(action.SandboxExecutorConfig{
-    Manager:     mgr,
-    DefaultMode: sandbox.ModeTrustedLocal,
-})
-// exec 实现 action.ActionExecutor，可注册为 Action
-```
+### 核心入口速查
 
-> 完整可运行示例见 [`examples/example_pluggable.go`](./examples/example_pluggable.go) 与 [`examples/example_sandbox_enabled.go`](./examples/example_sandbox_enabled.go)。
+| 你的目标 | 起始文件 | 说明 |
+|---------|---------|------|
+| 快速体验完整 Agent | [`examples/example_quickstart.go`](./examples/example_quickstart.go) | 无需 API Key，3 分钟跑通 |
+| 注册自定义工具 | [`action/`](./action/) 模块 | `action.New()` 自动包装函数 |
+| 编排多步骤流程 | [`flow/`](./flow/) 模块 | `flow.NewFlow().AddStep().Build()` |
+| 启动 REST API 服务 | [`server/cmd/inferglow-server/main.go`](./server/cmd/inferglow-server/main.go) | HTTP 托管 Agent |
+| 使用 CLI 终端 | [`cli/cmd/inferglow-cli/main.go`](./cli/cmd/inferglow-cli/main.go) | 交互式 REPL |
+| 调试 Agent 循环 | [`orchestrator/agent/engine.go`](./orchestrator/agent/engine.go) → `executeLoop()` | 核心循环 18 步 |
+| 添加新 LLM Provider | [`model/`](./model/) 模块 | 实现 `ModelRequester` 接口 |
 
 ## 模块列表
 
