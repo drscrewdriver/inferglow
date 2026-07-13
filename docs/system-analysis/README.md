@@ -1,27 +1,37 @@
-# InferGlow 系统分析文档
+# Inferglow 系统分析文档
 
-> 本文档系列对 InferGlow 项目（`github.com/inferglow/*`）进行完整的系统分析，覆盖模块职责、核心类型、函数调用逻辑、模块间调用关系与关键调用链。
-> 所有内容基于实际源码（截至 2026-07-30）梳理，不依赖外部推测。
+> 基于源码分析 + Graphify 知识图谱（8017 节点，17577 边，414 社区）的全面系统分析
+> 生成日期：2026-07-31
 
-## 文档索引
+---
 
-| 编号 | 文档 | 内容 |
-|:----:|------|------|
-| 01 | [架构总览与调用关系图](./01-architecture-overview.md) | 分层架构、模块依赖、全景调用关系图、数据流 |
-| 02 | [model 与 schema 模块](./02-model-and-schema.md) | LLM Provider 抽象、流式传输、Schema 引擎、ContractEngine |
-| 03 | [flow 模块](./03-flow.md) | Flow/TriggerFlow 双引擎、13 种算子、生命周期、Pause/Resume |
-| 04 | [action 与 MCP 模块](./04-action-and-mcp.md) | Action Runtime、三种 Executor、MCP 协议层 |
-| 05 | [session、sandbox 与 audit 模块](./05-session-sandbox-audit.md) | 对话记忆、沙箱框架、链表式审计链 |
-| 06 | [security、observability 与 workspace 模块](./06-security-observability-workspace.md) | PII 脱敏、注入防护、限流、RBAC、OTel、工作区血缘 |
-| 07 | [orchestrator 模块](./07-orchestrator.md) | Agent 入口、PLAN-EXECUTE 引擎、ActionDispatcher、LoopGuard |
-| 08 | [关键调用链](./08-call-chains.md) | 端到端函数调用链追踪（含行号引用） |
-| 09 | [编排层与中间层：历史成因与发展分析](./09-middleware-and-orchestration-history.md) | 两个聚类的演化史、设计动机、消费现状与遗留复杂性 |
+## 文档目录
+
+| 编号 | 文档 | 核心内容 |
+|:----:|------|---------|
+| 01 | [项目概述与设计哲学](./01-overview-and-philosophy.md) | 项目定位、设计哲学、Go 适配策略、架构图 |
+| 02 | [模块架构总览](./02-module-architecture-overview.md) | 四层 23 模块矩阵、依赖关系、模块清单 |
+| 03 | [基础层详解](./03-foundation-layer.md) | 12 个零依赖模块：model/schema/session/sandbox/context/audit/approval/rag/rerank/observability/workspace/resource |
+| 04 | [中间层详解](./04-middle-layer.md) | 5 个模块：flow/action/components/mcpserver/builtins |
+| 05 | [编排层详解](./05-orchestration-layer.md) | 3 个模块：orchestrator/security/eval |
+| 06 | [应用层详解](./06-application-layer.md) | 3 个模块：server/cli/examples |
+| 07 | [横切关注点](./07-cross-cutting-concerns.md) | FlowContext 接口、小接口拆分、暂停信号、Otel 可观测 |
+| 08 | [Graphify 知识图谱分析](./08-graphify-analysis.md) | 8017 节点图谱、God Nodes 排名、社区结构、跨模块桥接 |
+| 09 | [调用链全景分析](./09-call-chains.md) | 端到端 Agent 循环序列图、13 条调用链、错误传播 |
+| 10 | [设计模式与架构决策](./10-design-patterns.md) | 12 种设计模式、8 项关键决策、Go 语言适配对照 |
+| 11 | [可插拔架构](./11-pluggable-architecture.md) | Build Tag 机制、接口注入模式、编译配置决策树 |
+| 12 | [质量属性与演进路线](./12-quality-and-roadmap.md) | 质量属性度量、演进路线、待增强方向、附录 |
 
 ## 阅读建议
 
-- **快速了解全局**：先读 [01-architecture-overview.md](./01-architecture-overview.md)
-- **理解 Agent 主循环**：读 [07-orchestrator.md](./07-orchestrator.md) + [08-call-chains.md](./08-call-chains.md)
-- **深入某一模块**：直接跳转到对应编号文档
+| 目标 | 推荐阅读路径 |
+|------|-------------|
+| 快速了解全局 | [01](./01-overview-and-philosophy.md) → [02](./02-module-architecture-overview.md) |
+| 理解 Agent 主循环 | [05](./05-orchestration-layer.md) → [09](./09-call-chains.md) |
+| 深入 Flow 引擎 | [04](./04-middle-layer.md) → [07](./07-cross-cutting-concerns.md) |
+| 架构健康度评估 | [08](./08-graphify-analysis.md) → [12](./12-quality-and-roadmap.md) |
+| 扩展与定制 | [10](./10-design-patterns.md) → [11](./11-pluggable-architecture.md) |
+| 完整系统理解 | 按 01→12 顺序阅读 |
 
 ## 面向新开发者
 
@@ -64,50 +74,69 @@ go run example_quickstart.go
 
 ## 模块速查表
 
-22 个独立 Go module，按依赖深度分为三层。
+### 基础层 — 12 个模块，零内部依赖
 
-### 基础层 — 13 个模块，零内部依赖
-
-| 模块 | 路径 | 职责 | 依赖 |
-|------|------|------|------|
-| `model` | `github.com/inferglow/model` | LLM Provider 统一抽象 (~8000 LOC) | 无 |
-| `schema` | `github.com/inferglow/schema` | 契约优先 Schema 引擎 (~2800 LOC) | 无 |
-| `session` | `github.com/inferglow/session` | 对话记忆管理 (~1800 LOC) | 无 |
-| `sandbox` | `github.com/inferglow/sandbox` | 沙箱执行框架 · 8 种后端 (~6300 LOC) | 无 |
-| `context` | `github.com/inferglow/context` | 上下文管理引擎 · 三区压缩+缓存预算 (~6300 LOC) | 无 |
-| `audit` | `github.com/inferglow/audit` | 链表式审计链 (~1100 LOC) | 无 |
-| `approval` | `github.com/inferglow/approval` | HITL 审批 (~700 LOC) | 无 |
-| `rag` | `github.com/inferglow/rag` | RAG 管道 · 6 种加载器 (~1500 LOC) | 无 |
-| `rerank` | `github.com/inferglow/rerank` | 重排序 · Cohere/LLM/Fallback (~500 LOC) | 无 |
-| `observability` | `github.com/inferglow/observability` | OpenTelemetry 集成 (~700 LOC) | 无 |
-| `workspace` | `github.com/inferglow/workspace` | 工作区文件操作 (~1200 LOC) | 无 |
-| `resource` | `github.com/inferglow/resource` | 资源管理 (~750 LOC) | 无 |
-| `server` | `github.com/inferglow/server` | REST API 服务 (~700 LOC) | 无 |
+| 模块 | 路径 | 代码量 | 核心职责 |
+|------|------|--------|---------|
+| `model` | `github.com/inferglow/model` | ~8000 LOC | LLM Provider 统一抽象 |
+| `schema` | `github.com/inferglow/schema` | ~2800 LOC | 契约优先 Schema 引擎 |
+| `session` | `github.com/inferglow/session` | ~1800 LOC | 对话记忆管理 |
+| `sandbox` | `github.com/inferglow/sandbox` | ~6300 LOC | 8 种沙箱后端 |
+| `context` | `github.com/inferglow/context` | ~6300 LOC | 三区压缩上下文管理 |
+| `audit` | `github.com/inferglow/audit` | ~1100 LOC | 链表式审计链 |
+| `approval` | `github.com/inferglow/approval` | ~700 LOC | HITL 审批 |
+| `rag` | `github.com/inferglow/rag` | ~1500 LOC | RAG 管道 |
+| `rerank` | `github.com/inferglow/rerank` | ~500 LOC | 重排序 |
+| `observability` | `github.com/inferglow/observability` | ~700 LOC | OpenTelemetry |
+| `workspace` | `github.com/inferglow/workspace` | ~1200 LOC | 工作区文件操作 |
+| `resource` | `github.com/inferglow/resource` | ~750 LOC | 资源管理 |
 
 ### 中间层 — 5 个模块，依赖基础层
 
-| 模块 | 路径 | 职责 | 依赖 |
-|------|------|------|------|
-| `components` | `github.com/inferglow/components` | Prompt/Tool 通用接口 (~400 LOC) | `model` |
-| `flow` | `github.com/inferglow/flow` | DAG 编排引擎 (~6100 LOC) | `schema` |
-| `action` | `github.com/inferglow/action` | Action Runtime (~2900 LOC) | `approval`, `sandbox` |
-| `mcpserver` | `github.com/inferglow/mcpserver` | MCP 协议服务 · 三传输 (~850 LOC) | `action` |
-| `builtins` | `github.com/inferglow/builtins` | 内置 Action/Policy/Tool (~2200 LOC) | `action` |
+| 模块 | 路径 | 代码量 | 依赖 | 核心职责 |
+|------|------|--------|------|---------|
+| `flow` | `github.com/inferglow/flow` | ~7400 LOC | `schema` | DAG 编排引擎 |
+| `action` | `github.com/inferglow/action` | ~2900 LOC | `approval`, `sandbox` | Action Runtime |
+| `components` | `github.com/inferglow/components` | ~400 LOC | `model` | Prompt/Tool 接口 |
+| `mcpserver` | `github.com/inferglow/mcpserver` | ~850 LOC | `action` | MCP 协议服务 |
+| `builtins` | `github.com/inferglow/builtins` | ~2200 LOC | `action` | 内置 Action |
 
-### 编排层 — 4 个模块，聚合中间层+基础层
+### 编排层 — 3 个模块，聚合中间层+基础层
 
-| 模块 | 路径 | 职责 | 依赖 |
-|------|------|------|------|
-| `orchestrator` | `github.com/inferglow/orchestrator` | Agent 编排层 · 用户入口 (~7700 LOC) | `action` `audit` `flow` `model` `observability` `session` |
-| `security` | `github.com/inferglow/security` | PII / 注入 / 限流 / RBAC (~2000 LOC) | `session` `orchestrator`（接口注入） |
-| `eval` | `github.com/inferglow/eval` | 离线评估框架 (~750 LOC) | `model` `session` `action` `orchestrator` |
-| `examples` | `github.com/inferglow/examples` | 示例代码 (~2800 LOC) | 多模块 |
+| 模块 | 路径 | 代码量 | 核心依赖 | 核心职责 |
+|------|------|--------|---------|---------|
+| `orchestrator` | `github.com/inferglow/orchestrator` | ~7700 LOC | action/audit/flow/model/observability/session | Agent 编排引擎 |
+| `security` | `github.com/inferglow/security` | ~2000 LOC | session/orchestrator（接口注入） | PII/注入/限流/RBAC |
+| `eval` | `github.com/inferglow/eval` | ~750 LOC | model/session/action/orchestrator | 离线评估框架 |
+
+### 应用层 — 3 个模块
+
+| 模块 | 路径 | 代码量 | 依赖 | 核心职责 |
+|------|------|--------|------|---------|
+| `server` | `github.com/inferglow/server` | ~3100 LOC | flow/orchestrator | REST API 服务 |
+| `cli` | `github.com/inferglow/cli` | ~1200 LOC | orchestrator/action/builtins/context | 终端 REPL |
+| `examples` | `github.com/inferglow/examples` | ~2800 LOC | 多模块 | 示例代码 |
 
 ## 术语约定
 
-- **Provider**：LLM 供应商适配器（OpenAI / Anthropic / Ollama）
-- **Action**：可被 Agent 调用的工具单元
-- **Executor**：Action 的执行后端（Local / Sandbox / MCP）
-- **Decision**：LLM 每轮返回的规划决策（`execute` 或 `response`）
-- **审计链**：基于 SHA-256 哈希指针的不可篡改日志
-- **LoopGuard**：Agent 死循环检测器
+| 术语 | 说明 |
+|------|------|
+| Provider | LLM 供应商适配器（OpenAI / Anthropic / Ollama） |
+| Action | 可被 Agent 调用的工具单元 |
+| Executor | Action 的执行后端（Local / Sandbox / MCP） |
+| Decision | LLM 每轮返回的规划决策（`execute` 或 `response`） |
+| 审计链 | 基于 SHA-256 哈希指针的不可篡改日志 |
+| LoopGuard | Agent 死循环检测器 |
+| FlowContext | 横切关注点注入接口（flow 包定义，orchestrator 实现） |
+| Checkpoint | Flow 执行快照（Pause/Resume 机制） |
+| God Node | Graphify 识别的架构枢纽节点（最高连接度） |
+| Community | Graphify 聚类社区（模块级聚合） |
+
+## 相关文档索引
+
+| 文档 | 位置 | 内容 |
+|------|------|------|
+| 架构深度分析 | [ARCHITECTURE.md](../../ARCHITECTURE.md) | 12 章完整架构分析 |
+| 扩展机制 | [EXTENDING.md](../../docs/EXTENDING.md) | 7 种扩展机制 |
+| 上游缺口 | [upstream-gaps.md](../../docs/upstream-gaps.md) | inferglow 待完善能力清单 |
+| README | [README.md](../../README.md) | 项目快速入门 |
