@@ -35,10 +35,17 @@ Phase 5 (V8+): 上层产品化
 
 | 方向 | 优先级 | 说明 |
 |------|--------|------|
-| Multi-Agent 协作 | P1 | Host-Specialist 路由 + 任务委派 |
+| Streaming/SSE 输出 | P0 | 实时流式聊天输出，支持 SSE 和 WebSocket，为前端面板提供实时交互 |
+| Multi-Agent 协作 | P0 | Host-Specialist 路由 + 任务委派（已部分实现：`orchestrator/team/coordinator.go`） |
+| A2A Protocol | P1 | Agent-to-Agent 跨进程/跨网络通信协议，基于 MCP 扩展 |
 | 向量检索 | P1 | Embedding-based 语义检索 |
+| Prompt 管理 | P1 | Prompt 版本控制、模板仓库、动态组合 |
+| Eval 框架 | P1 | Agent 离线评估自动化（已实现：`eval` 模块 ~750 LOC，需示例和文档） |
 | IM Bridge | P2 | Telegram/飞书/QQ/微信 |
 | 桌面端 | P2 | Tauri/Wails 桌面壳 |
+| Tool Result Cache | P2 | 工具调用结果缓存，支持 TTL 和 LRU 淘汰 |
+| 知识图谱记忆 | P2 | 结构化长期记忆，突破纯文本上下文窗口限制 |
+| 可观测性面板 | P2 | 内置 Agent 运行仪表盘（成功率/延迟/Token 用量），基于 OpenTelemetry 数据 |
 | 插件系统 | P3 | 约定优先插件 + 两级权限 |
 
 ## 四、附录：模块 LOC 统计

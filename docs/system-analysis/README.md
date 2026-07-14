@@ -52,14 +52,14 @@ go run example_quickstart.go
 
 | 概念 | 对应文档 | 示例代码 | 一句话说明 |
 |------|---------|---------|-----------|
-| **Agent** | [07-orchestrator.md](./07-orchestrator.md) | `example_orchestrator.go` | 编排层的入口，负责调度 LLM 和 Action 的交互循环 |
-| **Action** | [04-action-and-mcp.md](./04-action-and-mcp.md) | `example_action.go` | 将 Go 函数包装为 LLM 可调用的工具 |
-| **Session** | [05-session-sandbox-audit.md](./05-session-sandbox-audit.md) | `example_session.go` | 对话记忆管理器，维护上下文窗口 |
-| **Flow** | [03-flow.md](./03-flow.md) | `example_flow.go` | 步骤编排引擎，支持线性/条件/并行执行 |
-| **Schema** | [02-model-and-schema.md](./02-model-and-schema.md) | `example_schema.go` | 契约优先的 LLM 输出格式校验 |
-| **Model** | [02-model-and-schema.md](./02-model-and-schema.md) | `example_model.go` | LLM Provider 统一抽象（OpenAI/Anthropic/Ollama） |
-| **Audit** | [05-session-sandbox-audit.md](./05-session-sandbox-audit.md) | `example_audit.go` | 基于 SHA-256 哈希链的不可篡改审计日志 |
-| **LoopGuard** | [07-orchestrator.md](./07-orchestrator.md) | `example_orchestrator.go` | Agent 死循环检测器 |
+| **Agent** | [05-orchestration-layer.md](./05-orchestration-layer.md) | `example_orchestrator.go` | 编排层的入口，负责调度 LLM 和 Action 的交互循环 |
+| **Action** | [04-middle-layer.md](./04-middle-layer.md) | `example_action.go` | 将 Go 函数包装为 LLM 可调用的工具 |
+| **Session** | [03-foundation-layer.md](./03-foundation-layer.md) | `example_session.go` | 对话记忆管理器，维护上下文窗口 |
+| **Flow** | [04-middle-layer.md](./04-middle-layer.md) | `example_flow.go` | 步骤编排引擎，支持线性/条件/并行执行 |
+| **Schema** | [03-foundation-layer.md](./03-foundation-layer.md) | `example_schema.go` | 契约优先的 LLM 输出格式校验 |
+| **Model** | [03-foundation-layer.md](./03-foundation-layer.md) | `example_model.go` | LLM Provider 统一抽象（OpenAI/Anthropic/Ollama） |
+| **Audit** | [03-foundation-layer.md](./03-foundation-layer.md) | `example_audit.go` | 基于 SHA-256 哈希链的不可篡改审计日志 |
+| **LoopGuard** | [05-orchestration-layer.md](./05-orchestration-layer.md) | `example_orchestrator.go` | Agent 死循环检测器 |
 
 ### 3. 理解模块依赖关系
 

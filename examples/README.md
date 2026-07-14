@@ -18,6 +18,10 @@
 | `example_pluggable.go` | [📄](example_pluggable.md) | 可插拔安全 | 安全特性注入 |
 | `example_sandbox_enabled.go` | [📄](example_sandbox_enabled.md) | 沙箱 | 沙箱执行 (需 `with_sandbox`) |
 | `example_server_comprehensive.go` | [📄](example_server_comprehensive.md) | 综合 (server) | 完整系统能力串联 |
+| `example_team.go` | [📄](example_team.md) | team | Multi-Agent 协作 |
+| `example_flow_pause.go` | [📄](example_flow_pause.md) | flow | Pause/Resume/Checkpoint |
+| `example_middleware.go` | [📄](example_middleware.md) | middleware | 洋葱模型中间件 |
+| `example_flowdef.go` | [📄](example_flowdef.md) | flowdef+stage | 声明式 Flow 定义 |
 
 ## 编译模式
 
@@ -49,6 +53,10 @@ go build -o NUL .\example_orchestrator.go && echo "orchestrator: OK"
 go build -o NUL .\example_workspace.go && echo "workspace: OK"
 go build -o NUL .\example_pluggable.go && echo "pluggable: OK"
 go build -o NUL .\example_server_comprehensive.go && echo "server_comprehensive: OK"
+go build -o NUL .\example_team.go && echo "team: OK"
+go build -o NUL .\example_flow_pause.go && echo "flow_pause: OK"
+go build -o NUL .\example_middleware.go && echo "middleware: OK"
+go build -o NUL .\example_flowdef.go && echo "flowdef: OK"
 
 # 沙箱模式（需要 -tags with_sandbox）
 go build -o NUL -tags with_sandbox .\example_sandbox_enabled.go && echo "sandbox_enabled: OK"
@@ -65,6 +73,10 @@ go run example_orchestrator.go
 go run example_workspace.go
 go run example_pluggable.go
 go run example_server_comprehensive.go
+go run example_team.go
+go run example_flow_pause.go
+go run example_middleware.go
+go run example_flowdef.go
 go run -tags with_sandbox example_sandbox_enabled.go
 ```
 
@@ -89,7 +101,11 @@ go run -tags with_sandbox example_sandbox_enabled.go
 | | 8 | `example_workspace.go` | 安全文件操作 | 5 min |
 | **高级特性** | 9 | `example_pluggable.go` | 接口注入安全特性（PII/注入检测） | 10 min |
 | | 10 | `example_sandbox_enabled.go` | 沙箱执行（需 `with_sandbox` build tag） | 10 min |
-| **综合** | 11 | `example_server_comprehensive.go` | 完整系统能力串联（server/模型/审计/沙箱） | 15 min |
+| | 11 | `example_flowdef.go` | 声明式 Flow 定义（FlowDef + Stage 注册表） | 10 min |
+| | 12 | `example_flow_pause.go` | Flow 暂停/恢复/检查点持久化 | 10 min |
+| | 13 | `example_middleware.go` | 洋葱模型中间件链（日志/计时/元数据） | 10 min |
+| | 14 | `example_team.go` | Multi-Agent 协作（Host-Specialist 路由） | 10 min |
+| **综合** | 15 | `example_server_comprehensive.go` | 完整系统能力串联（server/模型/审计/沙箱） | 15 min |
 
 > **推荐路径**：先跑 `example_quickstart.go` 感受全貌，再按顺序学习 1→7→8→9→10。
 
