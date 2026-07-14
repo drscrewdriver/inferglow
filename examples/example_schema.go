@@ -18,7 +18,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// go:build ignore
 //go:build ignore
 
 // 示例：如何使用 schema 模块推导和验证结构化输出

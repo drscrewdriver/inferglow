@@ -18,7 +18,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// go:build ignore
 //go:build ignore
 
 // 示例：如何使用 flow 模块编排步骤
@@ -117,27 +116,28 @@ func main() {
 	}
 	fmt.Println()
 
-	// --- 示例 3: 带 Schema 校验的步骤 ---
-	fmt.Println("=== Example 3: Flow with Output Schema ===")
+	// --- 示例 3: 带选项的流程 ---
+	fmt.Println("=== Example 3: Flow with Options ===")
 
-	type WeatherResult struct {
-		City     string  `json:"city"`
-		Temp     float64 `json:"temp"`
-		Humidity int     `json:"humidity,omitempty"`
-	}
-
-	wrapperStep := flow.NewStep("weather_wrapper", func(ctx context.Context, input any) (any, error) {
-		// 模拟返回 WeatherResult
-		return WeatherResult{
-			City:     "Beijing",
-			Temp:     25.5,
-			Humidity: 60,
-		}, nil
+	stepA := flow.NewStep("step_a", func(ctx context.Context, input any) (any, error) {
+		return "Result from A", nil
 	}).Build()
 
-	wrapExe := wrapperStep
-	_ = wrapExe
-	fmt.Printf("Step with Schema created (Schema field available for validation)\n")
+	stepB := flow.NewStep("step_b", func(ctx context.Context, input any) (any, error) {
+		return "Result from B", nil
+	}).Build()
+
+	optFlow := flow.NewFlow().
+		AddStep(stepA).
+		To(stepB).
+		WithOptions().
+		Build()
+
+	optExe := optFlow.Execute(ctx, nil)
+	fmt.Printf("Status: %s\n", optExe.State.Status)
+	for _, entry := range optExe.State.StepLog {
+		fmt.Printf("  - %s: %v\n", entry.StepName, entry.Output)
+	}
 
 	fmt.Println("\n=== All examples completed ===")
 }
