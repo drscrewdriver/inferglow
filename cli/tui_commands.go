@@ -59,6 +59,8 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 		m.commitLine(dim("  /resume [id]       List/resume previous sessions"))
 		m.commitLine(dim("  /sandbox [mode]    Show/switch sandbox mode"))
 		m.commitLine(dim("  /config            Show config path and settings"))
+		m.commitLine(dim("  /showbackground    Show current project background context"))
+		m.commitLine(dim("  /rebackground      Have AI analyze and rewrite project background"))
 		m.commitLine(dim("  /quit              End session and exit"))
 		return nil, false
 
@@ -115,6 +117,14 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 
 	case "config":
 		m.tuiHandleConfig(args)
+		return nil, false
+
+	case "showbackground":
+		m.tuiHandleShowBackground(args)
+		return nil, false
+
+	case "rebackground":
+		m.tuiHandleRebackground(args)
 		return nil, false
 
 	default:

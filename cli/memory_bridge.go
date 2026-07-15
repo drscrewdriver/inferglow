@@ -261,6 +261,11 @@ func (b *MemoryBridge) SkillStore() *skill.Store {
 	return b.skillStore
 }
 
+// ProjectRoot returns the project root directory used for meta-memory scanning.
+func (b *MemoryBridge) ProjectRoot() string {
+	return b.projectRoot
+}
+
 // BuildSystemPrompt assembles the complete system prompt with memory layers.
 // Order: base prompt + semantic memory + skills index + project instructions.
 func (b *MemoryBridge) BuildSystemPrompt(base, query string) string {
