@@ -52,15 +52,21 @@ type LoopGuardConfig struct {
 	OutputSimilarityThreshold float64       // default 0.9
 	TimeBudget                time.Duration // default 5*time.Minute
 	TokenBudget               int           // default 100000
+	// ReasoningPrefixLen is the number of leading characters used for
+	// reasoning stagnation prefix matching. When reasoning output at round
+	// N equals N+1, and N+2 starts with the same prefix, the guard breaks.
+	// Default 80.
+	ReasoningPrefixLen int
 }
 
 // LoopGuardState is the per-round state passed to Check.
 type LoopGuardState struct {
-	Round       int
-	ActionCalls []actionruntime.ActionCall
-	LastOutput  string
-	TotalTokens int
-	StartedAt   time.Time
+	Round         int
+	ActionCalls   []actionruntime.ActionCall
+	LastOutput    string
+	LastReasoning string // reasoning/thinking content from the latest LLM round
+	TotalTokens   int
+	StartedAt     time.Time
 }
 
 // LoopGuardVerdict is the result of Check.
@@ -77,6 +83,11 @@ type LoopGuard struct {
 	outputWindow []string
 	startedAt    time.Time
 	totalTokens  int
+
+	// Reasoning stagnation tracking: prevReasoning holds round N-1 reasoning,
+	// reasoningEqualStreak counts consecutive rounds where reasoning == prev.
+	prevReasoning        string
+	reasoningEqualStreak int
 }
 
 // ErrLoopDetected is the sentinel error returned by Engine.executeLoop when
@@ -102,13 +113,16 @@ func NewLoopGuard(cfg LoopGuardConfig) *LoopGuard {
 	if cfg.TokenBudget <= 0 {
 		cfg.TokenBudget = 100000
 	}
+	if cfg.ReasoningPrefixLen <= 0 {
+		cfg.ReasoningPrefixLen = 80
+	}
 	return &LoopGuard{cfg: cfg}
 }
 
 // Check inspects the current round state and returns a verdict recommending
 // continue, break, or degrade. Checks run in a fixed priority order:
-// RepeatAction → OutputStagnation → TimeBudget → TokenBudget. The first
-// matching check wins.
+// RepeatAction → OutputStagnation → ReasoningStagnation → TimeBudget →
+// TokenBudget. The first matching check wins.
 func (g *LoopGuard) Check(state LoopGuardState) (*LoopGuardVerdict, error) {
 	if g.cfg.Disabled {
 		return &LoopGuardVerdict{Action: VerdictContinue}, nil
@@ -179,7 +193,46 @@ func (g *LoopGuard) Check(state LoopGuardState) (*LoopGuardVerdict, error) {
 		}
 	}
 
-	// 3. TimeBudget: total elapsed time exceeded.
+	// 3. ReasoningStagnation: detect thinking loops via head-prefix matching.
+	// N == N+1 → silently record streak (no action); N+2 prefix matches → break.
+	// Effective truncation at ~2.5 rounds of identical reasoning.
+	if state.LastReasoning != "" && g.prevReasoning != "" {
+		if state.LastReasoning == g.prevReasoning {
+			// Exact match: increment streak silently.
+			g.reasoningEqualStreak++
+		} else if g.reasoningEqualStreak >= 1 {
+			// Not exact, but streak active: check head-prefix match (N+2 case).
+			prefixLen := g.cfg.ReasoningPrefixLen
+			if prefixLen > len(g.prevReasoning) {
+				prefixLen = len(g.prevReasoning)
+			}
+			prefix := g.prevReasoning[:prefixLen]
+			if strings.HasPrefix(state.LastReasoning, prefix) {
+				return &LoopGuardVerdict{
+					Action: VerdictBreak,
+					Reason: fmt.Sprintf("reasoning stagnation: %d rounds identical + prefix match", g.reasoningEqualStreak+1),
+				}, nil
+			}
+			// Prefix didn't match either — reset.
+			g.reasoningEqualStreak = 0
+		} else {
+			g.reasoningEqualStreak = 0
+		}
+		g.prevReasoning = state.LastReasoning
+
+		// Exact-match streak reached 2+ (N, N+1, N+2 all identical): hard break.
+		if g.reasoningEqualStreak >= 2 {
+			return &LoopGuardVerdict{
+				Action: VerdictBreak,
+				Reason: fmt.Sprintf("reasoning stagnation: %d consecutive identical thinking outputs", g.reasoningEqualStreak+1),
+			}, nil
+		}
+	} else if state.LastReasoning != "" {
+		// First round with reasoning — just record.
+		g.prevReasoning = state.LastReasoning
+	}
+
+	// 4. TimeBudget: total elapsed time exceeded.
 	if !g.startedAt.IsZero() && time.Since(g.startedAt) > g.cfg.TimeBudget {
 		return &LoopGuardVerdict{
 			Action: VerdictBreak,
@@ -187,7 +240,7 @@ func (g *LoopGuard) Check(state LoopGuardState) (*LoopGuardVerdict, error) {
 		}, nil
 	}
 
-	// 4. TokenBudget: cumulative tokens exceeded.
+	// 5. TokenBudget: cumulative tokens exceeded.
 	if g.totalTokens > g.cfg.TokenBudget {
 		return &LoopGuardVerdict{
 			Action: VerdictBreak,
@@ -204,6 +257,8 @@ func (g *LoopGuard) Reset() {
 	g.outputWindow = nil
 	g.startedAt = time.Time{}
 	g.totalTokens = 0
+	g.prevReasoning = ""
+	g.reasoningEqualStreak = 0
 }
 
 // jaccardSimilarity computes the Jaccard similarity between two strings' token

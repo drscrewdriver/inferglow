@@ -348,6 +348,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 	var totalTokens int
 	var prevDecision *actionruntime.Decision
 	var prevOutput string
+	var prevReasoning string // tracks last round's reasoning for LoopGuard
 
 	round := 0
 	toolCallRounds := 0
@@ -376,11 +377,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				prevCalls = prevDecision.ActionCalls
 			}
 			state := LoopGuardState{
-				Round:       round,
-				ActionCalls: prevCalls,
-				LastOutput:  prevOutput,
-				TotalTokens: totalTokens,
-				StartedAt:   runStart,
+				Round:         round,
+				ActionCalls:   prevCalls,
+				LastOutput:    prevOutput,
+				LastReasoning: prevReasoning,
+				TotalTokens:   totalTokens,
+				StartedAt:     runStart,
 			}
 			verdict, _ := e.loopGuard.Check(state)
 			if verdict != nil {
@@ -705,6 +707,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 
 		prevDecision = decision
 		prevOutput = content.String()
+		prevReasoning = reasoning.String()
 
 		// Check if we should continue
 		if !actionruntime.ShouldContinue(*decision, round, maxRounds) {
@@ -728,6 +731,30 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// is not selected on here.
 		if e.turnLoop != nil {
 			preemptCh = e.turnLoop.EnterActive()
+		}
+
+		// Tool-call dedup (pre-execution): detect when the model is stuck
+		// calling the same tool with the same arguments. On the 3rd
+		// consecutive identical batch, refuse to execute and break.
+		if len(decision.ActionCalls) > 0 {
+			var sigParts []string
+			for _, ac := range decision.ActionCalls {
+				paramJSON, _ := json.Marshal(ac.Params)
+				sigParts = append(sigParts, ac.Name+":"+string(paramJSON))
+			}
+			curSig := strings.Join(sigParts, "|")
+			if curSig == lastToolSig {
+				staleCount++
+			} else {
+				staleCount = 1
+				lastToolSig = curSig
+			}
+			if staleCount >= toolCallStaleThreshold {
+				log.Printf("[agent] stale tool-call hard stop: %d consecutive identical calls (tool=%s); refusing execution",
+					staleCount, decision.ActionCalls[0].Name)
+				return nil, fmt.Errorf("%w: tool %q called identically %d times, execution refused",
+					ErrLoopDetected, decision.ActionCalls[0].Name, staleCount)
+			}
 		}
 
 		// Execute actions. We always use NewActionDispatcherWithAudit so the
@@ -809,45 +836,8 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 
-		// Tool-call dedup: detect when the model is stuck calling the same
-		// tool with the same arguments. Build a signature from the current
-		// batch and compare with the previous one.
-		if len(decision.ActionCalls) > 0 {
-			var sigParts []string
-			for _, ac := range decision.ActionCalls {
-				paramJSON, _ := json.Marshal(ac.Params)
-				sigParts = append(sigParts, ac.Name+":"+string(paramJSON))
-			}
-			curSig := strings.Join(sigParts, "|")
-			if curSig == lastToolSig {
-				staleCount++
-			} else {
-				staleCount = 1
-				lastToolSig = curSig
-			}
-			if staleCount == toolCallStaleThreshold {
-				nudge := fmt.Sprintf(
-					"[system nudge] You have called the same tool with the same arguments %d times in a row. "+
-						"This is likely unproductive. Please change your approach: either use different tools, "+
-						"different arguments, or provide your final response/summary now.",
-					staleCount,
-				)
-				log.Printf("[agent] stale tool-call detected (%d consecutive identical calls); injecting nudge", staleCount)
-				// Use user message instead of system to avoid "System message must be at the beginning" API error.
-				e.session.AddUserMessage(nudge)
-			}
-			if staleCount > 0 && staleCount%toolCallStaleThreshold == 0 && staleCount > toolCallStaleThreshold {
-				// Escalating nudge for persistent loops
-				nudge := fmt.Sprintf(
-					"[system nudge] WARNING: You are stuck in a loop. You have made %d identical tool-call rounds. "+
-						"STOP calling tools and provide your FINAL RESPONSE now based on what you already know.",
-					staleCount,
-				)
-				log.Printf("[agent] persistent stale loop (%d rounds); injecting escalation", staleCount)
-				// Use user message instead of system to avoid "System message must be at the beginning" API error.
-				e.session.AddUserMessage(nudge)
-			}
-		}
+		// Tool-call stale tracking is now handled pre-execution above.
+		// (Post-execution nudge logic removed: 3rd identical call is a hard stop.)
 
 		// Halfway warning: when tool-call rounds reach 50%% of the hard cap,
 		// inject a system message encouraging the model to wrap up.
