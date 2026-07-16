@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/inferglow/model"
 )
@@ -49,6 +50,9 @@ type Action struct {
 	Schema      map[string]any
 	Executor    ActionExecutor
 	Tags        []string
+	// CacheTTL enables result caching for this action (OT-11).
+	// Zero value means no caching. Only effective for non-write actions.
+	CacheTTL time.Duration
 }
 
 // ActionExecutor is the runtime contract every Action must satisfy.
