@@ -32,6 +32,9 @@ type LongMemPromoter struct {
 	cfg       LongMemConfig
 	sessionID string
 	memCounter int32
+	// GraphHook is an optional callback invoked after each successful promotion (OT-12).
+	// It receives the promoted record for entity/relation extraction.
+	GraphHook func(mem LongMemRecord)
 }
 
 // NewLongMemPromoter creates a long-term memory promoter.
@@ -77,6 +80,11 @@ func (p *LongMemPromoter) EvaluateAndPromote(ctx context.Context) error {
 
 		if err := p.store.UpsertLongMem(mem); err != nil {
 			continue
+		}
+
+		// OT-12: invoke graph extraction hook if configured.
+		if p.GraphHook != nil {
+			p.GraphHook(mem)
 		}
 	}
 

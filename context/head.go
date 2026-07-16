@@ -41,11 +41,27 @@ func (h *HybridManager) RewriteHeadBuffer(newContent []RenderedBlock, newVersion
 	h.headBufferVer = newVersion
 }
 
+// IsHeadBufferEmpty reports whether Zone 1 (head buffer) has been populated.
+func (h *HybridManager) IsHeadBufferEmpty() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.headBuffer) == 0
+}
+
 // GetArchivedHeads returns the list of archived head buffers.
 func (h *HybridManager) GetArchivedHeads() []ArchivedHead {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := make([]ArchivedHead, len(h.archivedHeads))
 	copy(out, h.archivedHeads)
+	return out
+}
+
+// HeadBlocks returns a copy of the current Zone 1 head buffer blocks.
+func (h *HybridManager) HeadBlocks() []RenderedBlock {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]RenderedBlock, len(h.headBuffer))
+	copy(out, h.headBuffer)
 	return out
 }

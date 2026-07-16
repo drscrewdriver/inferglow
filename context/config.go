@@ -65,6 +65,14 @@ type Config struct {
 	// ToleranceDecayRate is the per-step decay rate for sweet-spot
 	// tolerance after a high-reference burst. Default: 0.98.
 	ToleranceDecayRate float64 `json:"tolerance_decay_rate"`
+
+	// DriftCheckInterval is the number of steps between semantic drift
+	// checks (CM-4). 0 or negative disables drift detection. Default: 5.
+	DriftCheckInterval int `json:"drift_check_interval"`
+
+	// DriftThreshold is the Jaccard overlap ratio below which the current
+	// step content is considered drifted from Zone 1 background. Default: 0.15.
+	DriftThreshold float64 `json:"drift_threshold"`
 }
 
 // ThresholdConfig holds compression level thresholds.
@@ -173,5 +181,7 @@ func DefaultConfig() Config {
 		SweetSpotTokens:    0, // disabled by default
 		WarmupRatio:        0.8,
 		ToleranceDecayRate: 0.98,
+		DriftCheckInterval: 5,
+		DriftThreshold:     0.15,
 	}
 }

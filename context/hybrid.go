@@ -61,6 +61,9 @@ type HybridManager struct {
 
 	// --- Phase 0: head buffer archive ---
 	archivedHeads []ArchivedHead
+
+	// --- CM-4: semantic drift detection ---
+	drift *DriftDetector
 }
 
 // ArchivedHead is a previous head buffer kept for audit/rollback.
@@ -80,6 +83,7 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 		sweetSpotOriginal:  cfg.SweetSpotTokens,
 		sweetSpotTolerance: 1.0,
 		recentRefCounts:    make([]int, 10), // sliding window of 10
+		drift:              NewDriftDetector(cfg.DriftCheckInterval, cfg.DriftThreshold),
 	}
 	if cfg.WarmupRatio <= 0 {
 		h.cfg.WarmupRatio = 0.8
@@ -135,6 +139,11 @@ func (h *HybridManager) Ingest(step StepRecord) error {
 
 	// Warmup pre-compression: async pre-compress old steps when approaching sweet spot
 	h.maybeWarmup()
+
+	// CM-4: semantic drift detection
+	if h.drift != nil && h.drift.MaybeCheck(int32(sid), step.Content, h.headKeywords()) {
+		h.drift.SetHint()
+	}
 
 	// Decay tolerance back toward 1.0
 	h.decayTolerance()
@@ -385,11 +394,32 @@ func (h *HybridManager) buildHintBlock(activeSteps int) RenderedBlock {
 	}
 	content := fmt.Sprintf("[hint] 上下文压力: %.0f%% | 当前任务组: #%d | 活跃 steps: %d | tail: %d steps",
 		pressure*100, h.taskGroupID, activeSteps, h.cfg.TailKeepSteps)
+	// CM-4: append drift warning if active
+	if h.drift != nil && h.drift.HintActive() {
+		content += " | ⚠ 背景可能已过时，建议 /rebackground"
+		h.drift.ClearHint()
+	}
 	return RenderedBlock{
 		StepID:  -1,
 		Level:   0,
 		Content: content,
 	}
+}
+
+// headKeywords extracts keywords from the current Zone 1 head buffer for drift detection.
+func (h *HybridManager) headKeywords() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.headBuffer) == 0 {
+		return nil
+	}
+	// Concatenate all head buffer content and extract top keywords.
+	var sb strings.Builder
+	for _, b := range h.headBuffer {
+		sb.WriteString(b.Content)
+		sb.WriteString(" ")
+	}
+	return ExtractKeywords(sb.String(), 30)
 }
 
 // fitToWindow trims blocks to fit within windowTokens by upgrading compression
