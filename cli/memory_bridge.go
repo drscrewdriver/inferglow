@@ -23,12 +23,15 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	contextmgr "github.com/inferglow/context"
+	"github.com/inferglow/context/compress"
 	"github.com/inferglow/context/retrieval"
 	"github.com/inferglow/context/store/jsonl"
+	"github.com/inferglow/builtins/actions"
 	"github.com/inferglow/memory"
 	"github.com/inferglow/skill"
 )
@@ -50,9 +53,21 @@ type MemoryBridge struct {
 	stepSeq   int
 	sessionID string
 
+	// Auto-background trigger state (CM-2).
+	autoBgThreshold int  // fire after this many steps (0 = disabled)
+	autoBgTriggered bool // once-only flag
+
 	// Optional injected backends (nil = use defaults).
 	externalStore   StepStoreInjector
 	vectorBackend   VectorBackendInjector
+
+	// MC-2: compression model chain (nil = no dedicated compress model).
+	compressChain *compress.CompressModelChain
+
+	// Task tracker store (T1).
+	taskStore *actions.TaskStore
+	// BM25 index persistence path (B4).
+	bm25File string
 }
 
 // NewMemoryBridge creates a fully wired memory bridge for the given session.
@@ -65,21 +80,44 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 		return nil, fmt.Errorf("memory bridge: create store: %w", err)
 	}
 
-	// 2. Hybrid context manager — compression engine.
+	// 2. Context manager — selected by cfg.ContextMode.
 	ctxCfg := contextmgr.DefaultConfig()
 	ctxCfg.WindowTokens = cfg.WindowTokens
 	ctxCfg.LongMem.Enabled = true
 
-	mgr, err := contextmgr.NewHybridManager(ctxCfg, store)
+	var mgr contextmgr.ContextManager
+	switch cfg.ContextMode {
+	case "passthrough":
+		mgr, err = contextmgr.NewPassthroughManager(ctxCfg, store)
+	case "three_zone":
+		mgr, err = contextmgr.NewThreeZoneAdapter(ctxCfg, store)
+	case "summary":
+		// Summary mode requires RewritableSession + Summarizer; fallback to hybrid.
+		fmt.Fprintln(os.Stderr, "Warning: summary mode not yet supported, using hybrid")
+		mgr, err = contextmgr.NewHybridManager(ctxCfg, store)
+	default: // "hybrid" or empty
+		mgr, err = contextmgr.NewHybridManager(ctxCfg, store)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("memory bridge: create hybrid manager: %w", err)
+		return nil, fmt.Errorf("memory bridge: create context manager: %w", err)
 	}
 
-	// Keep concrete type for AppendConstitutional.
+	// Keep concrete type for Zone 1 operations (nil for non-hybrid modes).
 	hybrid, _ := mgr.(*contextmgr.HybridManager)
 
-	// 3. BM25 keyword index.
+	// CM-3: inject meta-operation instructions into Zone 0.5.
+	if cfg.Features.Constitutional && cfg.Features.MetaInstructions && hybrid != nil {
+		entries := contextmgr.MetaInstructionEntries(ctxCfg)
+		hybrid.AppendConstitutional(entries)
+	}
+
+	// 3. BM25 keyword index (with persistence restore).
 	bm25 := retrieval.NewBM25Index()
+	bm25File := dataDir + "/" + sessionID + ".bm25.json"
+	if f, err := os.Open(bm25File); err == nil {
+		_ = bm25.Load(f)
+		f.Close()
+	}
 
 	// 4. Fusion retriever — degrades to BM25 + recency (no semantic).
 	fusion := retrieval.NewFusionRetriever(nil, bm25, nil, &retrieval.NoopEmbedder{})
@@ -95,6 +133,20 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 	globalSkillDir := cfg.DataDir + "/skills/global"
 	skillStore := skill.NewStore(skillDir, globalSkillDir)
 
+	// 8. MC-2: build compress model chain if configured.
+	var compressChain *compress.CompressModelChain
+	if cfg.CompressModel != nil {
+		smallClient, _ := buildCompressModelClient(cfg.CompressModel)
+		mainClient, _ := buildCompressModelClient(&cfg.LLM)
+		if smallClient != nil || mainClient != nil {
+			compressChain = compress.NewCompressModelChain(smallClient, mainClient, 5*time.Second, 1)
+		}
+	}
+
+	// 9. Task tracker store.
+	taskFile := dataDir + "/" + sessionID + ".tasks.json"
+	taskStore := actions.NewTaskStore(taskFile)
+
 	return &MemoryBridge{
 		mgr:        mgr,
 		hybrid:     hybrid,
@@ -107,6 +159,10 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 		projectRoot: ".",
 		topK:       cfg.TopK,
 		sessionID:  sessionID,
+		autoBgThreshold: 3, // auto-trigger after 3 steps if Zone 1 is empty
+		compressChain:   compressChain,
+		taskStore:       taskStore,
+		bm25File:        bm25File,
 	}, nil
 }
 
@@ -219,6 +275,16 @@ func (b *MemoryBridge) Compact(ctx context.Context) error {
 	return err
 }
 
+// ForceAsyncCompress triggers forced compression, bypassing sweet-spot threshold.
+// This is used by /async-compress TUI command for manual intervention.
+func (b *MemoryBridge) ForceAsyncCompress(ctx context.Context) (*contextmgr.CompressResult, error) {
+	opts := contextmgr.CompressOpts{
+		Force:       true,
+		TargetLevel: 2, // compress to L2 (fact retention)
+	}
+	return b.mgr.TriggerCompression(ctx, opts)
+}
+
 // SearchMemory searches long-term memory.
 func (b *MemoryBridge) SearchMemory(ctx context.Context, query string) ([]contextmgr.LongMemRecord, error) {
 	return b.mgr.SearchLongMem(ctx, query, "", b.topK*2)
@@ -227,6 +293,13 @@ func (b *MemoryBridge) SearchMemory(ctx context.Context, query string) ([]contex
 // OnSessionEnd performs end-of-session cleanup: final promotion + close store.
 func (b *MemoryBridge) OnSessionEnd(ctx context.Context) {
 	_ = b.promoter.OnSessionEnd(ctx)
+	// Persist BM25 index.
+	if b.bm25File != "" {
+		if f, err := os.Create(b.bm25File); err == nil {
+			_ = b.bm25.Save(f)
+			f.Close()
+		}
+	}
 	_ = b.store.Close()
 }
 
@@ -261,6 +334,19 @@ func (b *MemoryBridge) SkillStore() *skill.Store {
 	return b.skillStore
 }
 
+// TaskStore returns the task tracker store.
+func (b *MemoryBridge) TaskStore() *actions.TaskStore {
+	return b.taskStore
+}
+
+// TaskSummary returns the current task progress summary for context injection.
+func (b *MemoryBridge) TaskSummary() string {
+	if b.taskStore == nil {
+		return ""
+	}
+	return b.taskStore.Summary()
+}
+
 // ProjectRoot returns the project root directory used for meta-memory scanning.
 func (b *MemoryBridge) ProjectRoot() string {
 	return b.projectRoot
@@ -288,6 +374,13 @@ func (b *MemoryBridge) BuildSystemPrompt(base, query string) string {
 		}
 	}
 
+	// Task progress injection
+	if b.taskStore != nil {
+		if summary := b.taskStore.Summary(); summary != "" {
+			prompt += "\n\n<task_progress>\n" + summary + "\n</task_progress>"
+		}
+	}
+
 	return prompt
 }
 
@@ -296,6 +389,109 @@ func (b *MemoryBridge) AppendConstitutional(entries []string) {
 	if b.hybrid != nil {
 		b.hybrid.AppendConstitutional(entries)
 	}
+}
+
+// RewriteHeadBuffer replaces the Zone 1 head buffer with new content.
+// This is the correct target for /rebackground (replaces AppendConstitutional).
+func (b *MemoryBridge) RewriteHeadBuffer(blocks []contextmgr.RenderedBlock, version string) {
+	if b.hybrid != nil {
+		b.hybrid.RewriteHeadBuffer(blocks, version)
+	}
+}
+
+// IsHeadBufferEmpty reports whether Zone 1 (head buffer) has been populated.
+func (b *MemoryBridge) IsHeadBufferEmpty() bool {
+	if b.hybrid == nil {
+		return true
+	}
+	return b.hybrid.IsHeadBufferEmpty()
+}
+
+// NeedsAutoBackground returns true if the session has passed threshold steps
+// but Zone 1 (head buffer) is still empty — signaling that auto-rebackground
+// should fire.
+func (b *MemoryBridge) NeedsAutoBackground(threshold int) bool {
+	if b.hybrid == nil {
+		return false
+	}
+	// Use CurrentStepAtomic from introspect.go for the step counter.
+	step := contextmgr.CurrentStepAtomic(b.hybrid)
+	return int(step) >= threshold && b.hybrid.IsHeadBufferEmpty()
+}
+
+// CheckAutoBackground is a once-only check that returns true when the session
+// has passed the auto-background threshold and Zone 1 is still empty.
+// Callers (TUI submitTurn, REPL chatOnce) should trigger rebackground when
+// this returns true. Subsequent calls return false.
+func (b *MemoryBridge) CheckAutoBackground() bool {
+	if b.autoBgTriggered || b.autoBgThreshold <= 0 {
+		return false
+	}
+	if !b.NeedsAutoBackground(b.autoBgThreshold) {
+		return false
+	}
+	b.autoBgTriggered = true
+	return true
+}
+
+// AppendPlanToHeadBuffer appends a plan summary block to Zone 1 (CM-5).
+// The plan block uses pseudo-step -6 and is appended alongside existing
+// background blocks rather than replacing them.
+func (b *MemoryBridge) AppendPlanToHeadBuffer(title, summary string) {
+	if b.hybrid == nil {
+		return
+	}
+	block := contextmgr.PlanSummaryBlock(title, summary)
+	existing := b.hybrid.HeadBlocks()
+	existing = append(existing, block)
+	b.hybrid.RewriteHeadBuffer(existing, "plan-"+title)
+}
+
+// CurrentMode returns the active context management mode name (MC-3).
+func (b *MemoryBridge) CurrentMode() string {
+	if b.mgr == nil {
+		return "none"
+	}
+	return string(b.mgr.Mode())
+}
+
+// SwitchMode performs a runtime context mode switch (MC-3).
+// Uses contextmgr.Registry.SwitchMode to share the underlying StepStore.
+func (b *MemoryBridge) SwitchMode(mode string) error {
+	targetMode := contextmgr.Mode(mode)
+	currentMode := b.mgr.Mode()
+	if currentMode == targetMode {
+		return nil // already in target mode
+	}
+
+	// Build a registry with all mode factories.
+	reg := contextmgr.NewRegistry()
+	reg.Register(contextmgr.ModePassthrough, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
+		return contextmgr.NewPassthroughManager(cfg, store)
+	})
+	reg.Register(contextmgr.ModeThreeZone, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
+		return contextmgr.NewThreeZoneAdapter(cfg, store)
+	})
+	reg.Register(contextmgr.ModeHybrid, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
+		return contextmgr.NewHybridManager(cfg, store)
+	})
+	// summary mode falls back to hybrid (not yet fully supported).
+	reg.Register(contextmgr.ModeSummary, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
+		return contextmgr.NewHybridManager(cfg, store)
+	})
+
+	// Get the config and store from the current manager.
+	cfg := contextmgr.DefaultConfig()
+	store := b.store
+
+	newMgr, err := reg.SwitchMode(currentMode, targetMode, cfg, store)
+	if err != nil {
+		return fmt.Errorf("switch mode to %s: %w", mode, err)
+	}
+
+	b.mgr = newMgr
+	b.hybrid, _ = newMgr.(*contextmgr.HybridManager)
+	return nil
 }
 
 // StepStoreInjector is an optional external step store (e.g. Postgres)
