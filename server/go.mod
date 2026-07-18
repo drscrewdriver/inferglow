@@ -44,6 +44,7 @@ require (
 	github.com/inferglow/approval v0.0.0 // indirect
 	github.com/inferglow/audit v0.0.0 // indirect
 	github.com/inferglow/model v0.0.0 // indirect
+	github.com/inferglow/observability v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/inferglow/session v0.0.0 // indirect

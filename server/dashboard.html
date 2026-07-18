@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InferGlow Observability</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 24px; }
+h1 { color: #7c3aed; margin-bottom: 16px; font-size: 1.5rem; }
+h2 { color: #a78bfa; margin: 20px 0 10px; font-size: 1.1rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: #16213e; border-radius: 8px; padding: 16px; border: 1px solid #0f3460; }
+.card .value { font-size: 1.8rem; font-weight: bold; color: #7c3aed; }
+.card .label { font-size: 0.8rem; color: #888; margin-top: 4px; }
+table { width: 100%; border-collapse: collapse; background: #16213e; border-radius: 8px; overflow: hidden; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #0f3460; font-size: 0.85rem; }
+th { background: #0f3460; color: #a78bfa; }
+tr:hover { background: #1a1a3e; }
+.error { color: #ef4444; }
+.ok { color: #22c55e; }
+.refresh { background: #7c3aed; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-bottom: 16px; }
+.refresh:hover { background: #6d28d9; }
+#status { font-size: 0.75rem; color: #666; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>InferGlow Observability Dashboard</h1>
+<button class="refresh" onclick="refresh()">Refresh</button>
+
+<h2>Overview</h2>
+<div class="grid" id="stats-grid"></div>
+
+<h2>Per-Kind Statistics</h2>
+<table id="kind-table">
+<thead><tr><th>Kind</th><th>Count</th><th>P50</th><th>P95</th><th>Avg</th><th>Errors</th></tr></thead>
+<tbody></tbody>
+</table>
+
+<h2>Recent Spans</h2>
+<table id="span-table">
+<thead><tr><th>Name</th><th>Kind</th><th>Duration</th><th>Time</th><th>Status</th></tr></thead>
+<tbody></tbody>
+</table>
+
+<div id="status">Loading...</div>
+
+<script>
+function fmtDuration(ns) {
+  if (ns < 1000) return ns + 'ns';
+  if (ns < 1000000) return (ns/1000).toFixed(1) + '\u00b5s';
+  if (ns < 1000000000) return (ns/1000000).toFixed(1) + 'ms';
+  return (ns/1000000000).toFixed(2) + 's';
+}
+
+async function refresh() {
+  try {
+    const [statsRes, spansRes] = await Promise.all([
+      fetch('/v1/observability/stats'),
+      fetch('/v1/observability/spans?limit=50')
+    ]);
+    const stats = await statsRes.json();
+    const spans = await spansRes.json();
+
+    // Stats grid
+    document.getElementById('stats-grid').innerHTML = `
+      <div class="card"><div class="value">${stats.total_spans}</div><div class="label">Total Spans</div></div>
+      <div class="card"><div class="value ${stats.recent_errors > 0 ? 'error' : 'ok'}">${stats.recent_errors}</div><div class="label">Errors</div></div>
+      <div class="card"><div class="value">${Object.keys(stats.by_kind || {}).length}</div><div class="label">Span Kinds</div></div>
+    `;
+
+    // Kind table
+    const kindBody = document.querySelector('#kind-table tbody');
+    kindBody.innerHTML = Object.entries(stats.by_kind || {}).map(([kind, ks]) =>
+      `<tr><td>${kind}</td><td>${ks.count}</td><td>${fmtDuration(ks.p50_ns)}</td><td>${fmtDuration(ks.p95_ns)}</td><td>${fmtDuration(ks.avg_ns)}</td><td class="${ks.errors > 0 ? 'error' : 'ok'}">${ks.errors}</td></tr>`
+    ).join('');
+
+    // Span table
+    const spanBody = document.querySelector('#span-table tbody');
+    spanBody.innerHTML = (spans || []).reverse().map(s =>
+      `<tr><td>${s.name}</td><td>${s.kind}</td><td>${fmtDuration(s.duration_ns)}</td><td>${new Date(s.end_time).toLocaleTimeString()}</td><td class="${s.has_error ? 'error' : 'ok'}">${s.has_error ? 'ERROR' : 'OK'}</td></tr>`
+    ).join('');
+
+    document.getElementById('status').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('status').textContent = 'Error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

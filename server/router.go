@@ -32,6 +32,9 @@ func (s *Server) registerRoutes() {
 	// Health check (no auth)
 	s.mux.HandleFunc("GET /health", handler.Health)
 
+	// Dashboard (OT-13, no auth for dev convenience)
+	s.mux.HandleFunc("GET /dashboard", s.handleDashboard)
+
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
 
@@ -110,6 +113,10 @@ func (s *Server) registerRoutes() {
 	// Audit chain verification and entry retrieval
 	api.HandleFunc("GET /v1/audit/verify", s.handleAuditVerify)
 	api.HandleFunc("GET /v1/audit/entries", s.handleAuditEntries)
+
+	// Observability (OT-13)
+	api.HandleFunc("GET /v1/observability/spans", s.handleObservabilitySpans)
+	api.HandleFunc("GET /v1/observability/stats", s.handleObservabilityStats)
 
 	// OpenAPI spec
 	api.HandleFunc("GET /openapi.json", handler.OpenAPISpec)

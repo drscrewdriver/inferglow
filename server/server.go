@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/inferglow/flow/stage"
+	"github.com/inferglow/observability"
 	"github.com/inferglow/server/trigger"
 )
 
@@ -65,6 +66,7 @@ type Server struct {
 	teamStore  *TeamStore
 	teamRunner *TeamRunner
 	ctxProvider ContextProvider
+	spanCollector *observability.SpanCollector // OT-13
 }
 
 // MemoryRecord represents a persistent memory entry.
