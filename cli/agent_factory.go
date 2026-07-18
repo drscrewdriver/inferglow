@@ -99,6 +99,18 @@ func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.A
 	})
 	actExt.Register(wrapWithIngest(runSkill, bridge))
 
+	// Task tracker tools (T1-T4)
+	ts := bridge.TaskStore()
+	taskCfg := actions.TaskTrackerConfig{Store: ts}
+	taskAdd := actions.NewTaskAddAction(taskCfg)
+	actExt.Register(wrapWithIngest(taskAdd, bridge))
+	taskUpdate := actions.NewTaskUpdateAction(taskCfg)
+	actExt.Register(wrapWithIngest(taskUpdate, bridge))
+	taskList := actions.NewTaskListAction(taskCfg)
+	actExt.Register(taskList) // read-only, no ingest wrapping
+	taskDelete := actions.NewTaskDeleteAction(taskCfg)
+	actExt.Register(wrapWithIngest(taskDelete, bridge))
+
 	// Context tools: bridge context tools to agent tool system so LLM can see them.
 	registerContextTools(actExt, bridge)
 

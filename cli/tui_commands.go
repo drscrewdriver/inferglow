@@ -41,6 +41,13 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 		args = strings.Join(parts[1:], " ")
 	}
 
+	// OT-14: try registry first, fallback to legacy switch.
+	if m.cmdRegistry != nil {
+		if c, q, found := m.cmdRegistry.Dispatch(m, cmdName, args); found {
+			return c, q
+		}
+	}
+
 	switch cmdName {
 	case "quit", "exit":
 		return tea.Quit, true
@@ -52,6 +59,7 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 		m.commitLine(dim("  /memory search <q> Search memory for a query"))
 		m.commitLine(dim("  /memory stats      Show memory statistics"))
 		m.commitLine(dim("  /compact           Manually trigger context compression"))
+		m.commitLine(dim("  /async-compress    Force async compression (bypass sweet-spot)"))
 		m.commitLine(dim("  /clear             Clear the transcript"))
 		m.commitLine(dim("  /verbose           Toggle reasoning display"))
 		m.commitLine(dim("  /receipt           Show last turn receipt"))
@@ -91,6 +99,10 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 			}
 			m.transcriptDirty = true
 		}()
+		return nil, false
+
+	case "async-compress":
+		m.tuiHandleAsyncCompress(args)
 		return nil, false
 
 	case "memory":
@@ -180,4 +192,80 @@ func (m *chatTUI) tuiHandleMemory(args string) {
 		m.commitLine("")
 		m.commitLine(errorText(fmt.Sprintf("Unknown memory subcommand: %s", parts[0])))
 	}
+}
+
+// tuiHandleAsyncCompress triggers forced async compression,
+// bypassing the sweet-spot threshold check.
+func (m *chatTUI) tuiHandleAsyncCompress(args string) {
+	m.commitLine("")
+	m.commitLine(accent("Async compression started…"))
+	m.commitLine(dim("  Forcing compression regardless of sweet-spot threshold."))
+
+	go func() {
+		result, err := m.bridge.ForceAsyncCompress(context.Background())
+		if err != nil {
+			m.commitLine(errorText(fmt.Sprintf("Async compress error: %v", err)))
+			return
+		}
+		m.commitLine("")
+		m.commitLine(successText(fmt.Sprintf("Async compression complete: %d steps compressed.",
+			result.StepsCompressed)))
+		if result.TokensSaved > 0 {
+			m.commitLine(dim(fmt.Sprintf("  Estimated tokens saved: ~%d", result.TokensSaved)))
+		}
+		m.transcriptDirty = true
+	}()
+}
+
+// buildSlashRegistry creates the OT-14 command registry with new commands
+// that are not in the legacy switch. Legacy commands remain in the switch
+// and are migrated incrementally.
+func buildSlashRegistry(cfg CLIConfig) *SlashRegistry {
+	r := NewSlashRegistry()
+
+	// MC-3: /mode command for runtime context mode switching.
+	if cfg.Features.RuntimeModeSwitch {
+		r.Register(&SlashCommand{
+			Name:        "mode",
+			Description: "Show or switch context management mode",
+			Usage:       "[hybrid|passthrough|three_zone|summary]",
+			Handler:     tuiHandleMode,
+		})
+	}
+
+	return r
+}
+
+// tuiHandleMode handles the /mode slash command (MC-3).
+func tuiHandleMode(m *chatTUI, args string) (tea.Cmd, bool) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		// Show current mode.
+		current := m.bridge.CurrentMode()
+		m.commitLine("")
+		m.commitLine(accent("Context mode: " + current))
+		m.commitLine(dim("  Available: hybrid, passthrough, three_zone, summary"))
+		m.commitLine(dim("  Usage: /mode <mode>"))
+		return nil, false
+	}
+
+	// Validate mode.
+	valid := map[string]bool{"hybrid": true, "passthrough": true, "three_zone": true, "summary": true}
+	if !valid[args] {
+		m.commitLine("")
+		m.commitLine(errorText(fmt.Sprintf("Unknown mode: %s. Available: hybrid, passthrough, three_zone, summary", args)))
+		return nil, false
+	}
+
+	// Switch mode.
+	if err := m.bridge.SwitchMode(args); err != nil {
+		m.commitLine("")
+		m.commitLine(errorText(fmt.Sprintf("Mode switch failed: %v", err)))
+		return nil, false
+	}
+
+	m.commitLine("")
+	m.commitLine(successText("Context mode switched to: " + args))
+	m.transcriptDirty = true
+	return nil, false
 }

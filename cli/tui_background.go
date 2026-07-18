@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	contextmgr "github.com/inferglow/context"
 	"github.com/inferglow/orchestrator/agent"
 )
 
@@ -105,12 +106,12 @@ func (m *chatTUI) tuiHandleShowBackground(args string) {
 
 // tuiHandleRebackground triggers the AI agent to analyze the project
 // context and generate/update a concise background summary. The result
-// is stored in the constitutional zone as persistent project background.
+// is stored in Zone 1 (head buffer) as persistent project background.
 func (m *chatTUI) tuiHandleRebackground(args string) {
 	m.commitLine("")
 	m.commitLine(accent("Rebackgrounding..."))
 	m.commitLine(dim("  The AI will analyze your project and generate a background summary."))
-	m.commitLine(dim("  This will be added to the constitutional zone as persistent context."))
+	m.commitLine(dim("  This will be stored in Zone 1 (head buffer) as persistent context."))
 	m.commitLine("")
 
 	// Build a prompt that asks the agent to analyze the project.
@@ -166,13 +167,29 @@ Current workspace: ` + m.cfg.WorkspaceDir
 			return
 		}
 
-		// Add the background to the constitutional zone for persistence.
-		m.bridge.AppendConstitutional([]string{
-			"## Project Background\n\n" + background,
+		// Write the background to Zone 1 (head buffer) instead of Zone 0.5.
+		// Zone 1 = Background (task background) + Skill lightweight index.
+		version := fmt.Sprintf("rebg-%d", time.Now().Unix())
+		var zone1Blocks []contextmgr.RenderedBlock
+		zone1Blocks = append(zone1Blocks, contextmgr.RenderedBlock{
+			StepID:  -4, // background pseudo-step
+			Level:   0,
+			Content: "## Project Background\n\n" + background,
 		})
+		// Append skill lightweight index if available.
+		if m.bridge.SkillStore() != nil {
+			if idx := m.bridge.SkillStore().IndexBlock(); idx != "" {
+				zone1Blocks = append(zone1Blocks, contextmgr.RenderedBlock{
+					StepID:  -5, // skill index pseudo-step
+					Level:   0,
+					Content: idx,
+				})
+			}
+		}
+		m.bridge.RewriteHeadBuffer(zone1Blocks, version)
 
 		m.commitLine("")
-		m.commitLine(successText("Background updated and saved to constitutional zone."))
+		m.commitLine(successText("Background updated and saved to Zone 1 (head buffer)."))
 		m.commitLine(dim("Use /showbackground to view the current background."))
 	}()
 }

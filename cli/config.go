@@ -22,6 +22,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -37,6 +38,18 @@ type CLIConfig struct {
 	UnsafeMode   bool         `json:"unsafe_mode"`
 	SandboxMode  string       `json:"sandbox_mode,omitempty"` // "trusted_local", "local", "docker", "gvisor", "auto"
 	Features     FeatureFlags `json:"features"`
+	TUI          TUIConfig    `json:"tui,omitempty"`
+	// MC-1: context management mode (passthrough/three_zone/summary/hybrid).
+	ContextMode string `json:"context_mode,omitempty"`
+	// MC-2: dedicated compression model; nil = fallback to main LLM.
+	CompressModel *LLMConfig `json:"compress_model,omitempty"`
+}
+
+// TUIConfig holds TUI-specific display and behavior settings.
+type TUIConfig struct {
+	Theme         string `json:"theme,omitempty"`          // "dark", "light", "auto"
+	ShowReasoning bool   `json:"show_reasoning"`           // display LLM reasoning steps
+	MaxScrollback int    `json:"max_scrollback,omitempty"` // max transcript lines (0=unlimited)
 }
 
 // LLMConfig holds LLM endpoint configuration.
@@ -52,8 +65,10 @@ type FeatureFlags struct {
 	MemoryInjection  bool   `json:"memory_injection"`  // Per-turn auto recall
 	MemoryStorage    bool   `json:"memory_storage"`    // Tool result auto-ingest
 	Constitutional   bool   `json:"constitutional"`    // Load constitutional zone
+	MetaInstructions bool   `json:"meta_instructions"` // CM-3: inject tool/background/compression guidance into Zone 0.5
 	Compression      bool   `json:"compression"`       // Auto compression
 	ProactiveRecall  bool   `json:"proactive_recall"`  // Auto recall on session start
+	RuntimeModeSwitch bool  `json:"runtime_mode_switch"` // MC-3: enable /mode TUI command
 	TUIMode          bool   `json:"tui_mode"`          // Enable full-screen TUI mode
 	OutputMode       string `json:"output_mode"`       // "tui", "cli", or "oneshot"; mirrors CLI flag dispatch
 }
@@ -61,17 +76,27 @@ type FeatureFlags struct {
 // DefaultCLIConfig returns a CLIConfig with sensible defaults.
 func DefaultCLIConfig() CLIConfig {
 	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".inferglow")
 	return CLIConfig{
-		DataDir:      filepath.Join(home, ".inferglow"),
+		DataDir:      dataDir,
 		WorkspaceDir: ".",
 		WindowTokens: 32000,
 		TopK:         5,
 		SandboxMode:  "trusted_local",
+		Constitutional: filepath.Join(dataDir, "constitutional", "rules.md"),
 		Features: FeatureFlags{
-			MemoryInjection: true,
-			MemoryStorage:   true,
-			Compression:     true,
-			TUIMode:         true,
+			MemoryInjection:   true,
+			MemoryStorage:     true,
+			Compression:       true,
+			Constitutional:    true,
+			MetaInstructions:  true,
+			RuntimeModeSwitch: true,
+			TUIMode:           true,
+		},
+		ContextMode:  "hybrid",
+		TUI: TUIConfig{
+			Theme:         "dark",
+			ShowReasoning: false,
 		},
 	}
 }
@@ -134,6 +159,39 @@ func LoadOrDefaultConfig(explicitPath string) (CLIConfig, string, error) {
 	return cfg, defaultPath, nil
 }
 
+// EnsureDataDirs creates the full directory structure under DataDir.
+// Called once at startup to guarantee all required subdirectories exist.
+//
+// Directory layout:
+//
+//	~/.inferglow/
+//	├── config.json                  # long-term config (auto-created by SaveConfig)
+//	├── constitutional/              # Zone 0.5 rules & meta-instructions
+//	│   └── rules.md
+//	├── sessions/                    # session JSONL files (L0 + refs)
+//	│   └── index.jsonl              # session index
+//	├── memory/                      # long-term memory store
+//	├── skills/                      # global skill store
+//	│   └── global/
+//	└── projects/                    # per-project data
+//	    └── default/
+//	        └── skills/
+func EnsureDataDirs(dataDir string) error {
+	dirs := []string{
+		filepath.Join(dataDir, "constitutional"),
+		filepath.Join(dataDir, "sessions"),
+		filepath.Join(dataDir, "memory"),
+		filepath.Join(dataDir, "skills", "global"),
+		filepath.Join(dataDir, "projects", "default", "skills"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return fmt.Errorf("ensure data dir %s: %w", d, err)
+		}
+	}
+	return nil
+}
+
 // ApplyEnvOverrides applies environment variable overrides to the config.
 // Supported environment variables:
 //   - LLM_ENDPOINT: API endpoint
@@ -152,5 +210,12 @@ func ApplyEnvOverrides(cfg *CLIConfig) {
 	}
 	if v := os.Getenv("LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
+	}
+	// MC-2: dedicated compression model override.
+	if v := os.Getenv("COMPRESS_MODEL"); v != "" {
+		if cfg.CompressModel == nil {
+			cfg.CompressModel = &LLMConfig{}
+		}
+		cfg.CompressModel.Model = v
 	}
 }

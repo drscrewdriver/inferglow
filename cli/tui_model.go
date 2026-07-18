@@ -127,7 +127,10 @@ type chatTUI struct {
 	selectionMode bool
 	selectionStart int
 	selectionEnd   int
-	
+
+	// OT-14: slash command registry.
+	cmdRegistry *SlashRegistry
+
 	// Quit control.
 	lastCtrlCAt time.Time
 	quit        bool
@@ -217,6 +220,7 @@ func newChatTUI(ag *agent.Agent, bridge *MemoryBridge, cfg CLIConfig, sessionID 
 		reasoning:   &strings.Builder{},
 		answerIdx:   -1,
 		nextPasteID: 1,
+		cmdRegistry: buildSlashRegistry(cfg),
 	}
 }
 
@@ -459,6 +463,26 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			return m, tea.Batch(cmds...)
 
+		case "tab":
+			// OT-14: slash command auto-completion.
+			if m.cmdRegistry != nil && m.state == tuiIdle {
+				val := m.input.Value()
+				if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
+					prefix := strings.TrimPrefix(val, "/")
+					matches := m.cmdRegistry.Complete(prefix)
+					if len(matches) == 1 {
+						// Single match: auto-complete.
+						m.input.SetValue("/" + matches[0] + " ")
+						return m, tea.Batch(cmds...)
+					} else if len(matches) > 1 {
+						// Multiple matches: show candidates.
+						m.commitLine("")
+						m.commitLine(dim("  Completions: /" + strings.Join(matches, " /")))
+						return m, tea.Batch(cmds...)
+					}
+				}
+			}
+
 		case "enter":
 			if m.state != tuiIdle {
 				return m, tea.Batch(cmds...)
@@ -668,6 +692,12 @@ func (m *chatTUI) submitTurn(message string) {
 			agent.WithSystemPrompt(sysPrompt),
 			agent.WithCallbacks(mergedCB),
 		)
+
+		// CM-2: auto-trigger rebackground if Zone 1 is still empty
+		// after the agent turn completes.
+		if m.bridge.CheckAutoBackground() {
+			m.tuiHandleRebackground("")
+		}
 	}()
 }
 
@@ -720,6 +750,12 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 			sideEffect = e.Metadata["sideEffectLevel"]
 		}
 		m.commitToolCardEx(e.ToolName, status, sandboxMode, sideEffect, "")
+		// T5: show task progress on task tool completion.
+		if isTaskTool(e.ToolName) && e.Err == nil {
+			if summary := m.bridge.TaskSummary(); summary != "" {
+				m.commitSystemNote("task progress: " + summary)
+			}
+		}
 
 	case agent.EventApproval:
 		recordID := ""
@@ -753,6 +789,14 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 		if e.Err != nil {
 			m.commitLine("")
 			m.commitLine(errorText(fmt.Sprintf("Error: %v", e.Err)))
+		}
+		// CM-5: detect plan completion and inherit into Zone 1.
+		if e.Metadata != nil {
+			if planTitle := e.Metadata["plan_title"]; planTitle != "" {
+				planSummary := e.Metadata["plan_summary"]
+				m.bridge.AppendPlanToHeadBuffer(planTitle, planSummary)
+				m.commitSystemNote("plan inherited to background: " + planTitle)
+			}
 		}
 
 	case agent.EventError:
@@ -1023,4 +1067,9 @@ func shouldFoldPastedText(s string) bool {
 
 func renderFoldedPasteBlock(block pastedBlock) string {
 	return fmt.Sprintf("%s\n\n--- Begin %s ---\n%s\n--- End %s ---", block.label, block.label, block.text, block.label)
+}
+
+// isTaskTool reports whether the tool name is a task tracker action.
+func isTaskTool(name string) bool {
+	return name == "task_add" || name == "task_update" || name == "task_delete"
 }

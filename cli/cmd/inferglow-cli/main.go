@@ -37,6 +37,12 @@ func main() {
 	// If the first positional arg is a known subcommand, dispatch and return.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "init":
+			if err := cli.RunInitWizard(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "team":
 			cfg, _, err := cli.LoadOrDefaultConfig("")
 			if err != nil {
@@ -82,6 +88,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: could not load config: %v (using defaults)\n", err)
 	}
 	_ = loadedPath // available for future /config reload
+
+	// Ensure all required data directories exist.
+	if err := cli.EnsureDataDirs(cfg.DataDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create data dirs: %v\n", err)
+	}
 
 	// Apply environment variable overrides.
 	cli.ApplyEnvOverrides(&cfg)
