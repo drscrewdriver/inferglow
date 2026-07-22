@@ -47,6 +47,10 @@ const (
 	ModeSummary Mode = "summary"
 	// ModeHybrid uses full compression with L0-L4 levels.
 	ModeHybrid Mode = "hybrid"
+	// ModeAssembly is the 9-layer context assembly engine (线A / C轨).
+	// It wires the Retrieval/Render/Decay layers via a new Manager + Registry
+	// mechanism; see docs/plans/00-integrated-master-spec.md 线A.
+	ModeAssembly Mode = "assembly"
 )
 
 // ContextManager is the main interface for context management.
