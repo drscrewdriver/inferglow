@@ -73,6 +73,52 @@ type Config struct {
 	// DriftThreshold is the Jaccard overlap ratio below which the current
 	// step content is considered drifted from Zone 1 background. Default: 0.15.
 	DriftThreshold float64 `json:"drift_threshold"`
+
+	// Decay holds all effective-decay coefficients (A-5/A-6/A-13).
+	Decay DecayConfig `json:"decay"`
+}
+
+// DecayConfig externalises every effective-decay coefficient so the decay
+// pipeline is observable and tunable without code changes (A-6).
+type DecayConfig struct {
+	// RawDecayBase is the baseline multiplier on the raw token count. Default: 1.0.
+	RawDecayBase float64 `json:"raw_decay_base"`
+	// RefModWeight scales the reference-count discount. Default: 0.2.
+	RefModWeight float64 `json:"ref_mod_weight"`
+	// FileModWeight is the file-mod factor when a related file is actively edited. Default: 0.3.
+	FileModWeight float64 `json:"file_mod_weight"`
+	// StrengthDivisor normalises the accumulated access strength. Default: 1.0.
+	StrengthDivisor float64 `json:"strength_divisor"`
+	// Group holds cross-group aging modulation coefficients (A-5).
+	Group GroupModConfig `json:"group"`
+	// Heat holds heat-dimension (H-axis) modulation coefficients (A-13).
+	Heat HeatModConfig `json:"heat"`
+}
+
+// GroupModConfig holds cross-group aging modulation coefficients (A-5).
+type GroupModConfig struct {
+	// Enabled toggles cross-group modulation. When false, groupMod is always 1.0.
+	Enabled bool `json:"enabled"`
+	// DistanceW is the distance weight per task-group step. Default: 0.3.
+	DistanceW float64 `json:"distance_w"`
+	// CrossRefW dampens cross-group modulation per cross-group reference. Default: 0.2.
+	CrossRefW float64 `json:"cross_ref_w"`
+}
+
+// HeatModConfig holds heat-dimension (H-axis) modulation coefficients (A-13).
+type HeatModConfig struct {
+	// Enabled toggles the heat dimension. When false (or heat==0), heatMod is 1.0.
+	Enabled bool `json:"enabled"`
+	// RecallBoost is the heat increment per successful recall/citation. Default: 20.
+	RecallBoost int `json:"recall_boost"`
+	// SigZoneMin is the lower bound of the significant zone (>= SigZoneMin). Default: 70.
+	SigZoneMin int `json:"sig_zone_min"`
+	// UnsettledMin is the lower bound of the unsettled zone (>= UnsettledMin). Default: 40.
+	UnsettledMin int `json:"unsettled_min"`
+	// SigMod slows decay in the significant zone. Default: 0.7.
+	SigMod float64 `json:"sig_mod"`
+	// DecayMod accelerates decay in the decay zone (< UnsettledMin). Default: 1.3.
+	DecayMod float64 `json:"decay_mod"`
 }
 
 // ThresholdConfig holds compression level thresholds.
@@ -183,5 +229,30 @@ func DefaultConfig() Config {
 		ToleranceDecayRate: 0.98,
 		DriftCheckInterval: 5,
 		DriftThreshold:     0.15,
+		Decay:              DefaultDecayConfig(),
+	}
+}
+
+// DefaultDecayConfig returns the default decay coefficients, replicating the
+// historical magic numbers so behaviour is unchanged unless explicitly tuned.
+func DefaultDecayConfig() DecayConfig {
+	return DecayConfig{
+		RawDecayBase:    1.0,
+		RefModWeight:    0.2,
+		FileModWeight:   0.3,
+		StrengthDivisor: 1.0,
+		Group: GroupModConfig{
+			Enabled:   true,
+			DistanceW: 0.3,
+			CrossRefW: 0.2,
+		},
+		Heat: HeatModConfig{
+			Enabled:      true,
+			RecallBoost:  20,
+			SigZoneMin:   70,
+			UnsettledMin: 40,
+			SigMod:       0.7,
+			DecayMod:     1.3,
+		},
 	}
 }

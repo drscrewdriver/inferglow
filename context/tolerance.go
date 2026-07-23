@@ -55,6 +55,7 @@ func (h *HybridManager) ProcessCitationsWithTolerance(output string) {
 		ref.RefCount++
 		ref.LastRefAtStep = &currentStep
 		ref.Strength += 0.1
+		applyRecallBoost(ref, int(h.taskGroupID), h.cfg.Decay)
 		_ = h.store.UpsertRef(*ref)
 	}
 

@@ -182,8 +182,9 @@ func (h *HybridManager) perStepDecay(currentStep int) error {
 		}
 		rawDecay := h.sumTokens(lastRef+1, currentStep)
 
-		decay := EffectiveDecay(*ref, rawDecay, false, false)
+		decay, trace := ComputeDecay(*ref, rawDecay, false, int(h.taskGroupID), h.cfg.Decay)
 		target := TargetLevel(decay, h.stepType(id), h.cfg.Thresholds)
+		trace.TargetLevel = target
 		maxLvl := MaxLevelForType(h.stepType(id))
 		if target > maxLvl {
 			target = maxLvl
@@ -480,8 +481,9 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 
 		// Compute decay
 		rawDecay := h.sumTokens(0, int(atomic.LoadInt32(&h.currentStep)))
-		decay := EffectiveDecay(*ref, rawDecay, false, false)
+		decay, trace := ComputeDecay(*ref, rawDecay, false, int(h.taskGroupID), h.cfg.Decay)
 		target := TargetLevel(decay, h.stepType(id), h.cfg.Thresholds)
+		trace.TargetLevel = target
 		if target > maxLvl {
 			target = maxLvl
 		}
@@ -766,6 +768,7 @@ func (h *HybridManager) ProcessCitations(output string) {
 		ref.RefCount++
 		ref.LastRefAtStep = &currentStep
 		ref.Strength += 0.1
+		applyRecallBoost(ref, int(h.taskGroupID), h.cfg.Decay)
 		_ = h.store.UpsertRef(*ref)
 	}
 }

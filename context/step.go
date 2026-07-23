@@ -53,6 +53,15 @@ type RefRecord struct {
 	SemanticHold  bool     `json:"semantic_hold"`            // Redis semantic safety-net hold
 	PendingL4     bool     `json:"pending_l4"`               // idle consolidation pre-mark for L4
 	RelatedFiles  []string `json:"related_files,omitempty"`  // associated files (active edit → file_mod=0.3)
+
+	// CrossGroupRefs is the number of cross-group citations (A-5 跨组引用计数).
+	// JSONL persists automatically; SQL backends currently leave it at zero
+	// (column migration is deferred to a later wp).
+	CrossGroupRefs int `json:"cross_group_refs"`
+	// Heat is the heat/access-temperature signal (A-13, 0-100).
+	// JSONL persists automatically; SQL backends currently leave it at zero
+	// (column migration is deferred to a later wp). 0 acts as "no heat data".
+	Heat int `json:"heat"`
 }
 
 // L1Record is the simple compression (denoised summary) stored in {uuid}.l1.jsonl.
