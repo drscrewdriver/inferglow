@@ -28,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/inferglow/context/retrieval"
 )
 
 // HybridManager implements ModeHybrid with full L0-L4 compression.
@@ -64,6 +66,14 @@ type HybridManager struct {
 
 	// --- CM-4: semantic drift detection ---
 	drift *DriftDetector
+
+	// --- A-7: three-way fusion retrieval ---
+	fusion       *retrieval.FusionRetriever
+	vsIndex      *retrieval.VectorStore
+	bm25Index    *retrieval.BM25Index
+	recencyIndex *retrieval.RecencyIndex
+	fusionMu     sync.Mutex // serializes reindex; guards fusionDirty
+	fusionDirty  bool
 }
 
 // ArchivedHead is a previous head buffer kept for audit/rollback.
@@ -91,7 +101,34 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 	if cfg.ToleranceDecayRate <= 0 {
 		h.cfg.ToleranceDecayRate = 0.98
 	}
+	if cfg.Retrieval.EnableFusion {
+		h.enableFusionRetrieval(cfg.Retrieval)
+	}
 	return h, nil
+}
+
+// enableFusionRetrieval wires the three-way fusion retriever into the manager.
+// The semantic path uses NoopEmbedder this wp (real embeddings arrive with
+// OT-4); keyword + recency paths are fully active. Zero-valued weights/threshold
+// fall back to the fusion defaults so a partially-specified config stays safe.
+func (h *HybridManager) enableFusionRetrieval(rcfg RetrievalConfig) {
+	if rcfg.Weights == [3]float64{0, 0, 0} {
+		rcfg.Weights = [3]float64{0.50, 0.30, 0.20}
+	}
+	if rcfg.Threshold <= 0 {
+		rcfg.Threshold = 0.35
+	}
+	vs := retrieval.NewVectorStore()
+	bm25 := retrieval.NewBM25Index()
+	recency := retrieval.NewRecencyIndexWithWeights(rcfg.RecencyW, rcfg.StrengthW)
+	fusion := retrieval.NewFusionRetriever(vs, bm25, recency, &retrieval.NoopEmbedder{})
+	fusion.Weights = rcfg.Weights
+	fusion.Threshold = rcfg.Threshold
+	h.vsIndex = vs
+	h.bm25Index = bm25
+	h.recencyIndex = recency
+	h.fusion = fusion
+	h.fusionDirty = true
 }
 
 func (h *HybridManager) Mode() Mode { return ModeHybrid }
@@ -128,6 +165,7 @@ func (h *HybridManager) Ingest(step StepRecord) error {
 	if err := h.store.UpsertRef(ref); err != nil {
 		return fmt.Errorf("hybrid ingest: upsert ref: %w", err)
 	}
+	h.markFusionDirty()
 
 	// Reset idle counter
 	atomic.StoreInt32(&h.idleCount, 0)
@@ -503,6 +541,12 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 
 // Search performs RAG search across context history.
 func (h *HybridManager) Search(ctx context.Context, query SearchQuery) ([]SearchHit, error) {
+	// A-7: three-way fusion path (gated). The legacy naive keyword search below
+	// is retained as the 保壳 fallback when fusion is disabled or not built.
+	if h.fusion != nil && h.cfg.Retrieval.EnableFusion {
+		return h.fusionSearch(ctx, query)
+	}
+
 	// Simple keyword search (full RAG in retrieval/ package)
 	ids, err := h.store.AllActiveStepIDs()
 	if err != nil {
@@ -548,6 +592,83 @@ func (h *HybridManager) Search(ctx context.Context, query SearchQuery) ([]Search
 		}
 	}
 	return hits, nil
+}
+
+// fusionSearch runs the three-way fusion retriever, lazily rebuilding the
+// indexes from the store when dirty, and maps results onto SearchHit.
+func (h *HybridManager) fusionSearch(ctx context.Context, query SearchQuery) ([]SearchHit, error) {
+	h.fusionMu.Lock()
+	if h.fusionDirty {
+		h.reindex(ctx)
+		h.fusionDirty = false
+	}
+	h.fusionMu.Unlock()
+
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	results, err := h.fusion.Search(ctx, query.Query, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]SearchHit, 0, len(results))
+	for _, r := range results {
+		level := 0
+		if ref, rerr := h.store.GetRef(r.StepID); rerr == nil {
+			level = ref.Level
+			if query.LevelMax > 0 && level > query.LevelMax {
+				continue
+			}
+		}
+		hits = append(hits, SearchHit{
+			StepID:  r.StepID,
+			Level:   level,
+			Score:   r.Score,
+			Snippet: r.Text,
+			Type:    h.stepType(r.StepID),
+		})
+	}
+	return hits, nil
+}
+
+// reindex rebuilds the keyword and recency indexes from the store (idempotent:
+// indexes are reset first). The semantic index stays empty this wp (NoopEmbedder;
+// real embeddings arrive with OT-4). Caller must hold h.fusionMu.
+func (h *HybridManager) reindex(ctx context.Context) {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return
+	}
+	h.bm25Index.Reset()
+	h.recencyIndex.Reset()
+	for _, id := range ids {
+		ref, rerr := h.store.GetRef(id)
+		if rerr != nil {
+			continue
+		}
+		content, cerr := h.renderStepContent(id, ref.Level)
+		if cerr != nil {
+			continue
+		}
+		lastRef := 0
+		if ref.LastRefAtStep != nil {
+			lastRef = *ref.LastRefAtStep
+		}
+		h.bm25Index.Add(id, content)
+		h.recencyIndex.Add(id, lastRef, ref.Strength, content)
+	}
+}
+
+// markFusionDirty flags the fusion indexes stale after a corpus mutation.
+func (h *HybridManager) markFusionDirty() {
+	if h.fusion == nil {
+		return
+	}
+	h.fusionMu.Lock()
+	h.fusionDirty = true
+	h.fusionMu.Unlock()
 }
 
 // SearchLongMem searches long-term memory.
@@ -770,6 +891,9 @@ func (h *HybridManager) ProcessCitations(output string) {
 		ref.Strength += 0.1
 		applyRecallBoost(ref, int(h.taskGroupID), h.cfg.Decay)
 		_ = h.store.UpsertRef(*ref)
+	}
+	if len(matches) > 0 {
+		h.markFusionDirty()
 	}
 }
 

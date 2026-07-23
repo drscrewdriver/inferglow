@@ -2,6 +2,7 @@ package contextmgr
 
 import (
 	"context"
+	"sort"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func (f *fakeStore) GetRef(id int) (*RefRecord, error) {
 	r, ok := f.refs[id]; if !ok { return nil, &sErr{id} }; return &r, nil
 }
 func (f *fakeStore) AllActiveStepIDs() ([]int, error) {
-	var ids []int; for id := range f.refs { ids = append(ids, id) }; return ids, nil
+	var ids []int; for id := range f.refs { ids = append(ids, id) }; sort.Ints(ids); return ids, nil
 }
 func (f *fakeStore) RemoveRef(id int) error { delete(f.refs, id); return nil }
 func (f *fakeStore) AppendL1(r L1Record) error { f.l1[r.StepID] = r; return nil }

@@ -57,6 +57,19 @@ func NewBM25Index() *BM25Index {
 	}
 }
 
+// Reset clears all documents, the inverted index, and length caches. Used to
+// make a full re-index idempotent (re-adding docs would otherwise inflate
+// docCount and skew avgDL).
+func (idx *BM25Index) Reset() {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.docs = make(map[int]string)
+	idx.docCount = 0
+	idx.inverted = make(map[string]map[int]int)
+	idx.docLens = make(map[int]int)
+	idx.avgDL = 1
+}
+
 // Add adds a document to the index, updating the inverted index and caches.
 func (idx *BM25Index) Add(stepID int, text string) {
 	idx.mu.Lock()

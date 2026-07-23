@@ -76,6 +76,40 @@ type Config struct {
 
 	// Decay holds all effective-decay coefficients (A-5/A-6/A-13).
 	Decay DecayConfig `json:"decay"`
+
+	// Retrieval holds three-way fusion retrieval settings (A-7).
+	Retrieval RetrievalConfig `json:"retrieval"`
+}
+
+// RetrievalConfig holds three-way fusion retrieval settings (A-7). The zero
+// value keeps fusion disabled (legacy naive search); use DefaultRetrievalConfig
+// for the enabled defaults.
+type RetrievalConfig struct {
+	// EnableFusion toggles fusion-based Search in the main assembly path.
+	// When false (or fusion not built), HybridManager.Search falls back to the
+	// legacy naive keyword path (保壳兜底).
+	EnableFusion bool `json:"enable_fusion"`
+	// Weights are the fusion weights for [semantic, keyword, recency].
+	Weights [3]float64 `json:"weights"`
+	// Threshold is the minimum fused score to keep a result.
+	Threshold float64 `json:"threshold"`
+	// RecencyW is the recency-term weight inside the recency score. Default: 0.6.
+	RecencyW float64 `json:"recency_w"`
+	// StrengthW is the strength-term weight inside the recency score. Default: 0.4.
+	StrengthW float64 `json:"strength_w"`
+}
+
+// DefaultRetrievalConfig returns the enabled retrieval defaults. EnableFusion
+// defaults to true (test phase, no production debt); flip to false to fall back
+// to the legacy naive search path.
+func DefaultRetrievalConfig() RetrievalConfig {
+	return RetrievalConfig{
+		EnableFusion: true,
+		Weights:      [3]float64{0.50, 0.30, 0.20},
+		Threshold:    0.35,
+		RecencyW:     0.6,
+		StrengthW:    0.4,
+	}
 }
 
 // DecayConfig externalises every effective-decay coefficient so the decay
@@ -230,6 +264,7 @@ func DefaultConfig() Config {
 		DriftCheckInterval: 5,
 		DriftThreshold:     0.15,
 		Decay:              DefaultDecayConfig(),
+		Retrieval:          DefaultRetrievalConfig(),
 	}
 }
 
