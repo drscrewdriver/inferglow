@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -289,41 +290,59 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 	// Zone 1: head_buffer (never compressed)
 	blocks = append(blocks, h.headBuffer...)
 
-	// Zone 2: hot facts injection (from .l2.jsonl with ref_count≥3, strength≥1.3)
+	// Zone 2: hot facts injection — ranked by strength descending (A-8 数值隔离)
 	hotFacts, err := h.store.HotFacts(h.cfg.HotFacts.MinRefCount, h.cfg.HotFacts.MinStrength)
-	if err == nil {
+	if err == nil && len(hotFacts) > 0 {
+		type rankedFact struct {
+			L2Record
+			strength float64
+		}
+		ranked := make([]rankedFact, 0, len(hotFacts))
 		for _, f := range hotFacts {
-			content := "[facts | session | sources: step_" + fmt.Sprint(f.StepID) + "]\n"
-			for _, fact := range f.Facts {
-				content += "  • " + fact + "\n"
+			ref, refErr := h.store.GetRef(f.StepID)
+			if refErr != nil {
+				continue
+			}
+			ranked = append(ranked, rankedFact{L2Record: f, strength: ref.Strength})
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].strength > ranked[j].strength })
+		if len(ranked) > 0 {
+			content := "[facts | session | ranked by strength]\n"
+			rank := 0
+			for _, rf := range ranked {
+				for _, fact := range rf.Facts {
+					rank++
+					content += fmt.Sprintf("  #%d (strength: %.1f) %s\n", rank, rf.strength, fact)
+				}
 			}
 			content += "[/facts]"
-			blocks = append(blocks, RenderedBlock{
-				StepID:  f.StepID,
-				Level:   2,
-				Content: content,
-			})
+			blocks = append(blocks, RenderedBlock{StepID: -4, Level: 2, Content: content})
 		}
 	}
 
-	// Zone 2 extended: long-term memory facts (confidence ≥ 0.7) (§8C.4)
+	// Zone 2 extended: long-term memory facts — ranked by confidence descending (A-8)
 	if h.cfg.LongMem.Enabled {
 		longMems, err := h.store.SearchLongMem("", "", 20)
 		if err == nil {
+			// Filter and sort by confidence descending.
+			filtered := make([]LongMemRecord, 0, len(longMems))
 			for _, mem := range longMems {
-				if mem.Confidence < 0.7 {
-					continue
+				if mem.Confidence >= 0.7 {
+					filtered = append(filtered, mem)
 				}
-				content := fmt.Sprintf("[facts | longterm | mem:%s | conf:%.2f]\n", mem.MemID, mem.Confidence)
-				for _, fact := range mem.Facts {
-					content += "  • " + fact + " (跨 session 验证)\n"
+			}
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Confidence > filtered[j].Confidence })
+			if len(filtered) > 0 {
+				content := "[facts | longterm | ranked by confidence]\n"
+				rank := 0
+				for _, mem := range filtered {
+					for _, fact := range mem.Facts {
+						rank++
+						content += fmt.Sprintf("  #%d (confidence: %.2f) %s (跨 session 验证)\n", rank, mem.Confidence, fact)
+					}
 				}
 				content += "[/facts]"
-				blocks = append(blocks, RenderedBlock{
-					StepID:  -2, // longmem pseudo-step
-					Level:   2,
-					Content: content,
-				})
+				blocks = append(blocks, RenderedBlock{StepID: -2, Level: 2, Content: content})
 			}
 		}
 	}
@@ -340,12 +359,16 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 	}
 
 	for i, id := range allIDs {
+		step, err := h.store.GetStep(id)
+		if err != nil {
+			continue
+		}
+		// A-12: skip transient steps (tool call fragments)
+		if step.Transient {
+			continue
+		}
 		if i >= tailStart {
-			// Zone 4: tail original (L0)
-			step, err := h.store.GetStep(id)
-			if err != nil {
-				continue
-			}
+			// Zone 4: tail original (L0) — reuse step
 			blocks = append(blocks, renderBlock(id, 0, step.Content, step.Type))
 		} else {
 			// Zone 3: compressed history（经 RenderStepWithCache 走缓存）
@@ -824,6 +847,43 @@ func (h *HybridManager) UpdateCacheBudget(cachedTokens int) {
 // Close releases resources.
 func (h *HybridManager) Close() error {
 	return nil
+}
+
+// --- A-12: C-track transient step management ---
+
+// MarkTransient marks a step as transient (excluded from BuildContext).
+// Additive-only method; ContextManager interface unchanged.
+func (h *HybridManager) MarkTransient(stepID int, scope string, round int) error {
+	step, err := h.store.GetStep(stepID)
+	if err != nil {
+		return err
+	}
+	step.Transient = true
+	step.TransientScope = scope
+	step.TransientRound = round
+	return h.store.AppendStep(*step)
+}
+
+// ClearStaleTransients removes transient steps from the active set.
+// Returns the number of steps removed.
+func (h *HybridManager) ClearStaleTransients(currentRound int) (int, error) {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		step, err := h.store.GetStep(id)
+		if err != nil || !step.Transient {
+			continue
+		}
+		if currentRound-step.TransientRound < 1 {
+			continue // still fresh
+		}
+		_ = h.store.RemoveRef(id)
+		count++
+	}
+	return count, nil
 }
 
 // --- Citation processing (§4.7.3) ---

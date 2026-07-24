@@ -38,6 +38,11 @@ type StepRecord struct {
 	FilesModified []string `json:"files_modified,omitempty"` // files modified in this step
 	DependsOn     []int    `json:"depends_on,omitempty"`     // dependent step IDs
 	TaskGroup     string   `json:"task_group,omitempty"`     // task group identifier
+
+	// C-track Phase 1: transient step (tool call fragments, auto-excluded)
+	Transient      bool   `json:"transient,omitempty"`
+	TransientScope string `json:"transient_scope,omitempty"` // "tool_call" | "subtask" | "scratch"
+	TransientRound int    `json:"transient_round,omitempty"` // creation round
 }
 
 // RefRecord tracks the current compression state and access statistics
