@@ -44,6 +44,9 @@ type HybridManager struct {
 	taskGroupID   int32
 	idleCount     int32
 
+	// --- Phase 0: rendered-block cache (A-4) ---
+	renderCache *RenderedCache
+
 	// --- Phase 0: sweet-spot passthrough ---
 	sweetSpotTokens   int     // effective value (may be adjusted by tolerance)
 	sweetSpotOriginal int     // original config value (immutable after init)
@@ -89,6 +92,7 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 		cfg:                cfg,
 		store:              store,
 		headBufferVer:      "h_v1",
+		renderCache:        NewRenderedCache(),
 		sweetSpotTokens:    cfg.SweetSpotTokens,
 		sweetSpotOriginal:  cfg.SweetSpotTokens,
 		sweetSpotTolerance: 1.0,
@@ -344,21 +348,16 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 			}
 			blocks = append(blocks, renderBlock(id, 0, step.Content, step.Type))
 		} else {
-			// Zone 3: compressed history
+			// Zone 3: compressed history（经 RenderStepWithCache 走缓存）
 			ref, err := h.store.GetRef(id)
 			if err != nil {
 				continue
 			}
-			content, err := h.renderStepContent(id, ref.Level)
+			block, err := RenderStepWithCache(id, *ref, h.renderCache, h.store)
 			if err != nil {
 				continue
 			}
-			step, _ := h.store.GetStep(id)
-			typ := "reasoning"
-			if step != nil {
-				typ = step.Type
-			}
-			blocks = append(blocks, renderBlock(id, ref.Level, content, typ))
+			blocks = append(blocks, block)
 		}
 	}
 
@@ -371,48 +370,9 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 }
 
 // renderStepContent reads the appropriate .lN content for a step.
+// It delegates to renderFromStore, the single canonical render implementation.
 func (h *HybridManager) renderStepContent(stepID, level int) (string, error) {
-	switch level {
-	case 0:
-		step, err := h.store.GetStep(stepID)
-		if err != nil {
-			return "", err
-		}
-		return step.Content, nil
-	case 1:
-		rec, err := h.store.GetL1(stepID)
-		if err != nil {
-			// Fallback to L0
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return rec.Content, nil
-	case 2:
-		rec, err := h.store.GetL2(stepID)
-		if err != nil {
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return strings.Join(rec.Facts, "\n"), nil
-	case 3:
-		rec, err := h.store.GetL3(stepID)
-		if err != nil {
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return rec.Mask, nil
-	default:
-		return "", fmt.Errorf("unknown level %d", level)
-	}
+	return renderFromStore(stepID, level, h.store)
 }
 
 // renderBlock creates a RenderedBlock with the ⟨§N·type·Lx⟩ marker (§4.7).

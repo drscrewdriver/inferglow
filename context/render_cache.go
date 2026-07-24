@@ -23,6 +23,7 @@ package contextmgr
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -48,6 +49,15 @@ func NewRenderedCache() *RenderedCache {
 }
 
 // Get retrieves a cached rendered block if the level matches.
+//
+// The cache is keyed by (stepID, level): when a step's compression level
+// changes, Get returns nil so the entry is naturally invalidated without an
+// explicit Invalidate call. All in-code level mutation points only raise level
+// (perStepDecay / TriggerCompression / warmupCompress / Reorganize Q3 /
+// EmergencyIntrospection), so this level-key covers every current write path.
+// NOTE: if a future path rewrites a step's .lN content at the *same* level
+// (content changes while level stays), the caller MUST call Invalidate(stepID)
+// at that write site or this cache could serve a stale rendered block.
 func (c *RenderedCache) Get(stepID int, currentLevel int) *RenderedCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -161,14 +171,7 @@ func renderFromStore(stepID, level int, store StepStoreLike) (string, error) {
 			}
 			return step.Content, nil
 		}
-		result := ""
-		for i, f := range rec.Facts {
-			if i > 0 {
-				result += "\n"
-			}
-			result += "• " + f
-		}
-		return result, nil
+		return strings.Join(rec.Facts, "\n"), nil
 	case 3:
 		rec, err := store.GetL3(stepID)
 		if err != nil {
