@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/inferglow/messagebus"
 	"github.com/inferglow/server"
 )
 
@@ -53,6 +54,20 @@ func main() {
 	}
 
 	srv := server.NewServer(cfg, nil) // TODO: wire real AgentStore
+
+	// C-3: demo wiring of the in-memory message bus (out-of-the-box).
+	srv.SetMessageBus(messagebus.NewInMemoryMessageBus())
+
+	// C-4~C-7: default in-memory wiring for the management backend, zero-config.
+	srv.SetSessionStore(server.NewSessionStore())
+	srv.SetScheduleStore(server.NewScheduleStore())
+	srv.SetCredentialStore(server.NewCredentialStore())
+	srv.SetWorkspaceProvider(server.NewWorkspaceProvider())
+
+	// C-10: Skill Hub store (backed by action.ActionRegistry). Skills are
+	// installed by Go-side registration via SkillStore.Install; see the
+	// server tests for an example.
+	srv.SetSkillStore(server.NewSkillStore())
 
 	// Graceful shutdown on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
