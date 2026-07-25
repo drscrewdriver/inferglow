@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/inferglow/storage"
 )
 
 // TeamConfig defines a team of agents for coordinated execution.
@@ -43,16 +45,17 @@ type TeamMemberConfig struct {
 }
 
 // TeamStore is an in-memory store for team definitions.
+// The backing KV storage is provided by the generic storage.Map primitive.
 type TeamStore struct {
-	mu     sync.RWMutex
-	teams  map[string]*TeamConfig
+	*storage.Map[string, *TeamConfig]
+	metaMu sync.RWMutex // guards nextID + the id-assembly critical section
 	nextID int
 }
 
 // NewTeamStore creates an empty TeamStore.
 func NewTeamStore() *TeamStore {
 	return &TeamStore{
-		teams: make(map[string]*TeamConfig),
+		Map: storage.NewMap[string, *TeamConfig](),
 	}
 }
 
@@ -65,8 +68,8 @@ func (ts *TeamStore) Create(cfg TeamConfig) (string, error) {
 		return "", fmt.Errorf("at least one member is required")
 	}
 
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
+	ts.metaMu.Lock()
+	defer ts.metaMu.Unlock()
 
 	ts.nextID++
 	id := fmt.Sprintf("team-%d", ts.nextID)
@@ -76,35 +79,26 @@ func (ts *TeamStore) Create(cfg TeamConfig) (string, error) {
 		cfg.MaxRounds = 3
 	}
 
-	ts.teams[id] = &cfg
+	ts.Map.Set(id, &cfg)
 	return id, nil
 }
 
 // Get returns a team by ID, or nil if not found.
 func (ts *TeamStore) Get(id string) *TeamConfig {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.teams[id]
+	v, _ := ts.Map.Get(id)
+	return v
 }
 
 // List returns all team definitions.
 func (ts *TeamStore) List() []*TeamConfig {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	out := make([]*TeamConfig, 0, len(ts.teams))
-	for _, t := range ts.teams {
-		out = append(out, t)
-	}
-	return out
+	return ts.Map.Values()
 }
 
 // Delete removes a team by ID.
 func (ts *TeamStore) Delete(id string) error {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	if _, ok := ts.teams[id]; !ok {
+	if _, ok := ts.Map.Get(id); !ok {
 		return fmt.Errorf("team %q not found", id)
 	}
-	delete(ts.teams, id)
+	ts.Map.Delete(id)
 	return nil
 }

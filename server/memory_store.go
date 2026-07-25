@@ -5,45 +5,37 @@ package server
 import (
 	"fmt"
 	"strings"
-	"sync"
+
+	"github.com/inferglow/storage"
 )
 
 // InMemoryStore is a simple in-memory MemoryStore for testing and development.
+// The backing KV storage is provided by the generic storage.Map primitive.
 type InMemoryStore struct {
-	mu      sync.RWMutex
-	records map[string]MemoryRecord
+	*storage.Map[string, MemoryRecord]
 }
 
 // NewInMemoryStore creates a new in-memory memory store.
 func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{
-		records: make(map[string]MemoryRecord),
-	}
+	return &InMemoryStore{Map: storage.NewMap[string, MemoryRecord]()}
 }
 
 func (s *InMemoryStore) UpsertMemory(rec MemoryRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records[rec.ID] = rec
+	s.Map.Set(rec.ID, rec)
 	return nil
 }
 
 func (s *InMemoryStore) GetMemory(id string) (*MemoryRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rec, ok := s.records[id]
+	rec, ok := s.Map.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("memory %q not found", id)
 	}
-	return &rec, nil
+	return &rec, nil // return a copy, preserving existing semantics
 }
 
 func (s *InMemoryStore) SearchMemory(query string, category string, limit int) ([]MemoryRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var results []MemoryRecord
-	for _, rec := range s.records {
+	for _, rec := range s.Map.Values() {
 		if category != "" && rec.Category != category {
 			continue
 		}
@@ -68,12 +60,14 @@ func (s *InMemoryStore) SearchMemory(query string, category string, limit int) (
 	return results, nil
 }
 
+// Compile-time assertion that InMemoryStore still satisfies the MemoryStore
+// interface injected by the server.
+var _ MemoryStore = (*InMemoryStore)(nil)
+
 func (s *InMemoryStore) DeleteMemory(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.records[id]; !ok {
+	if _, ok := s.Map.Get(id); !ok {
 		return fmt.Errorf("memory %q not found", id)
 	}
-	delete(s.records, id)
+	s.Map.Delete(id)
 	return nil
 }

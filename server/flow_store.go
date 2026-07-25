@@ -22,18 +22,18 @@ package server
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/inferglow/flow/flowdef"
 	"github.com/inferglow/flow/stage"
+	"github.com/inferglow/storage"
 )
 
 // FlowStore is a thread-safe registry of declarative flow definitions.
 // It supports hot-loading: flows can be registered, listed, and retrieved
 // at runtime without restarting the server.
+// The backing KV storage is provided by the generic storage.Map primitive.
 type FlowStore struct {
-	mu      sync.RWMutex
-	flows   map[string]*flowdef.FlowDef
+	*storage.Map[string, *flowdef.FlowDef]
 	stages  *stage.Registry
 	adapter *flowdef.Adapter
 }
@@ -41,7 +41,7 @@ type FlowStore struct {
 // NewFlowStore creates a FlowStore backed by the given stage registry.
 func NewFlowStore(stages *stage.Registry) *FlowStore {
 	return &FlowStore{
-		flows:   make(map[string]*flowdef.FlowDef),
+		Map:     storage.NewMap[string, *flowdef.FlowDef](),
 		stages:  stages,
 		adapter: flowdef.NewAdapter(stages),
 	}
@@ -53,29 +53,18 @@ func (fs *FlowStore) Register(def *flowdef.FlowDef) error {
 	if err := flowdef.Validate(def); err != nil {
 		return fmt.Errorf("flow store: validate: %w", err)
 	}
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.flows[def.Metadata.Name] = def
+	fs.Map.Set(def.Metadata.Name, def) // concurrency handled by the underlying Map
 	return nil
 }
 
 // Get returns the flow definition for the given name, or nil if not found.
 func (fs *FlowStore) Get(name string) (*flowdef.FlowDef, bool) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	def, ok := fs.flows[name]
-	return def, ok
+	return fs.Map.Get(name)
 }
 
 // List returns the names of all registered flows.
 func (fs *FlowStore) List() []string {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	names := make([]string, 0, len(fs.flows))
-	for name := range fs.flows {
-		names = append(names, name)
-	}
-	return names
+	return fs.Map.Keys()
 }
 
 // Adapter returns the flowdef.Adapter for compiling FlowDefs into executable
