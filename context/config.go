@@ -79,6 +79,9 @@ type Config struct {
 
 	// Retrieval holds three-way fusion retrieval settings (A-7).
 	Retrieval RetrievalConfig `json:"retrieval"`
+
+	// Backtrack controls same-group backtrack injection (A-9).
+	Backtrack BacktrackConfig `json:"backtrack"`
 }
 
 // RetrievalConfig holds three-way fusion retrieval settings (A-7). The zero
@@ -265,6 +268,7 @@ func DefaultConfig() Config {
 		DriftThreshold:     0.15,
 		Decay:              DefaultDecayConfig(),
 		Retrieval:          DefaultRetrievalConfig(),
+		Backtrack:          DefaultBacktrackConfig(),
 	}
 }
 
@@ -289,5 +293,25 @@ func DefaultDecayConfig() DecayConfig {
 			SigMod:       0.7,
 			DecayMod:     1.3,
 		},
+	}
+}
+
+// BacktrackConfig controls same-group backtrack injection (A-9).
+type BacktrackConfig struct {
+	Enabled         bool    `json:"enabled"`
+	TopK            int     `json:"top_k"`
+	MaxCharsPerStep int     `json:"max_chars_per_step"`
+	RecencyW        float64 `json:"recency_w"`
+	StrengthW       float64 `json:"strength_w"`
+}
+
+// DefaultBacktrackConfig returns the default backtrack settings (disabled).
+func DefaultBacktrackConfig() BacktrackConfig {
+	return BacktrackConfig{
+		Enabled:         false,
+		TopK:            5,
+		MaxCharsPerStep: 500,
+		RecencyW:        0.6,
+		StrengthW:       0.4,
 	}
 }

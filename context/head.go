@@ -20,7 +20,10 @@
 
 package contextmgr
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RewriteHeadBuffer replaces the Zone 1 head buffer and archives the
 // previous version for audit/rollback purposes.
@@ -28,12 +31,14 @@ func (h *HybridManager) RewriteHeadBuffer(newContent []RenderedBlock, newVersion
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Archive old head
+	// Archive old head with monotonic sequence number (A-3 version chain).
 	if len(h.headBuffer) > 0 {
+		h.headSeq++
 		h.archivedHeads = append(h.archivedHeads, ArchivedHead{
 			Content:    h.headBuffer,
 			Version:    h.headBufferVer,
 			ArchivedAt: time.Now(),
+			Seq:        h.headSeq,
 		})
 	}
 
@@ -64,4 +69,51 @@ func (h *HybridManager) HeadBlocks() []RenderedBlock {
 	out := make([]RenderedBlock, len(h.headBuffer))
 	copy(out, h.headBuffer)
 	return out
+}
+
+// --- A-3: Rebackground semantic narrowing + version chain ---
+
+// GetLayerVersion retrieves a historical head buffer version by sequence number.
+// Only layer 4 (task background) is tracked currently.
+func (h *HybridManager) GetLayerVersion(layer int, seq int) (ArchivedHead, bool) {
+	if layer != 4 {
+		return ArchivedHead{}, false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for i := len(h.archivedHeads) - 1; i >= 0; i-- {
+		if h.archivedHeads[i].Seq == seq {
+			return h.archivedHeads[i], true
+		}
+	}
+	return ArchivedHead{}, false
+}
+
+// RebackgroundRequest specifies what to recompute (A-3).
+type RebackgroundRequest struct {
+	NewTaskDescription     string
+	NewProhibitions        []string
+	CheckProhibitionChange bool
+}
+
+// Rebackground narrows the rebuild to L4 (head buffer) only.
+// L1/L2/L3 are never touched. L5 (constitutional) is recomputed
+// only when CheckProhibitionChange=true.
+// Additive-only method; ContextManager interface unchanged.
+func (h *HybridManager) Rebackground(req RebackgroundRequest) {
+	// L4: rebuild task background block
+	blocks := []RenderedBlock{{
+		StepID:  0,
+		Level:   0,
+		Content: req.NewTaskDescription,
+	}}
+	h.RewriteHeadBuffer(blocks, fmt.Sprintf("rebg-%d", h.headSeq+1))
+
+	// L5: conditionally refresh prohibitions
+	if req.CheckProhibitionChange && len(req.NewProhibitions) > 0 {
+		h.constitutionalMu.Lock()
+		h.constitutionalEntries = req.NewProhibitions
+		h.constitutionalMu.Unlock()
+	}
+	// Explicitly: no UpsertRef, no markFusionDirty, no TriggerCompression.
 }

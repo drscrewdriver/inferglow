@@ -67,6 +67,7 @@ type HybridManager struct {
 
 	// --- Phase 0: head buffer archive ---
 	archivedHeads []ArchivedHead
+	headSeq       int // monotonic version counter for head buffer (A-3)
 
 	// --- CM-4: semantic drift detection ---
 	drift *DriftDetector
@@ -85,6 +86,7 @@ type ArchivedHead struct {
 	Content    []RenderedBlock
 	Version    string
 	ArchivedAt time.Time
+	Seq        int // monotonic version sequence (A-3)
 }
 
 // NewHybridManager creates a hybrid context manager.
@@ -381,6 +383,13 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 				continue
 			}
 			blocks = append(blocks, block)
+		}
+	}
+
+	// Zone 4.5: same-group backtrack (A-9, Layer 8 injection)
+	if h.cfg.Backtrack.Enabled {
+		if b, ok := h.buildBacktrackBlock(allIDs); ok {
+			blocks = append(blocks, b)
 		}
 	}
 
