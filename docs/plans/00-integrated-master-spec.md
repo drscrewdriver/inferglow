@@ -611,6 +611,30 @@ type MessageBus interface {
 | Phase 3 | 前端集成 | 5-7 天 |
 | Phase 4 | 融合架构 + 文档 | 2-3 天 |
 
+### C.4 实施状态与挂起任务（G3 追加）
+
+> 本小节由 G3 分支 `feat/g3-server-admin` 追加，记录路线C在 G3 白名单（`server/**`）内的推进进度与跨分支挂起项。
+
+**已完成（G3 内无风险落地）**：
+
+| 编号 | 交付物 | 落地文件 | 状态 |
+|------|--------|---------|------|
+| C-4 | Session 管理 | `server/handlers_session.go` + `server/session_store.go` | ✅ 完成 |
+| C-5 | Scheduler 管理 | `server/handlers_schedule.go` + `server/schedule_store.go` | ✅ 完成 |
+| C-6 | 凭据管理 | `server/handlers_credential.go` + `server/credential_store.go` | ✅ 完成 |
+| C-7 | Workspace 管理 API | `server/handlers_workspace.go` | ✅ 完成 |
+| C-10 | Skill Hub 管理 | `server/handlers_skill_hub.go` + `server/skill_store.go` | ✅ 完成（依赖 action.ActionRegistry，只读复用） |
+
+**挂起任务（有风险，暂缓到 G3 白名单外条件满足）**：
+
+| 编号 | 交付物 | 挂起原因 | 解锁条件 |
+|------|--------|---------|---------|
+| C-8 | Knowledge Base 管理 | 依赖 `rag.Store`，仓库当前缺失该模块（rag 仅含 Loader/Splitter 雏形），需自建适配层 | rag 模块落地 `Store` 后接入，或 G3 内另行实现薄适配层 |
+| C-9 | MCP Hub 管理 | 依赖 `mcpserver`，server 未 require 该模块，且市场（marketplace）浏览/安装语义未定义 | `mcpserver` 模块存在并暴露 Market/Install API 后接线 |
+| C-11 | 前端集成 | 超出 G3 白名单（`server/**` 之外），需前端目录 + embed 构建，跨分支冲突风险高 | 前端目录纳入可写范围，或由持有前端分支的 lane 承接 |
+
+> 说明：C-10 为本次 G3 追加实现。SkillStore 对 action 包保持只读依赖（action 归 G1 领地），删除采用软删除（shadow set）实现，因为 action.ActionRegistry 无 unregister 方法。
+
 ---
 
 ## 线D：长尾独立项
