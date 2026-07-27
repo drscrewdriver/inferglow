@@ -73,6 +73,89 @@ type Config struct {
 	// DriftThreshold is the Jaccard overlap ratio below which the current
 	// step content is considered drifted from Zone 1 background. Default: 0.15.
 	DriftThreshold float64 `json:"drift_threshold"`
+
+	// Decay holds all effective-decay coefficients (A-5/A-6/A-13).
+	Decay DecayConfig `json:"decay"`
+
+	// Retrieval holds three-way fusion retrieval settings (A-7).
+	Retrieval RetrievalConfig `json:"retrieval"`
+
+	// Backtrack controls same-group backtrack injection (A-9).
+	Backtrack BacktrackConfig `json:"backtrack"`
+}
+
+// RetrievalConfig holds three-way fusion retrieval settings (A-7). The zero
+// value keeps fusion disabled (legacy naive search); use DefaultRetrievalConfig
+// for the enabled defaults.
+type RetrievalConfig struct {
+	// EnableFusion toggles fusion-based Search in the main assembly path.
+	// When false (or fusion not built), HybridManager.Search falls back to the
+	// legacy naive keyword path (保壳兜底).
+	EnableFusion bool `json:"enable_fusion"`
+	// Weights are the fusion weights for [semantic, keyword, recency].
+	Weights [3]float64 `json:"weights"`
+	// Threshold is the minimum fused score to keep a result.
+	Threshold float64 `json:"threshold"`
+	// RecencyW is the recency-term weight inside the recency score. Default: 0.6.
+	RecencyW float64 `json:"recency_w"`
+	// StrengthW is the strength-term weight inside the recency score. Default: 0.4.
+	StrengthW float64 `json:"strength_w"`
+}
+
+// DefaultRetrievalConfig returns the enabled retrieval defaults. EnableFusion
+// defaults to true (test phase, no production debt); flip to false to fall back
+// to the legacy naive search path.
+func DefaultRetrievalConfig() RetrievalConfig {
+	return RetrievalConfig{
+		EnableFusion: true,
+		Weights:      [3]float64{0.50, 0.30, 0.20},
+		Threshold:    0.35,
+		RecencyW:     0.6,
+		StrengthW:    0.4,
+	}
+}
+
+// DecayConfig externalises every effective-decay coefficient so the decay
+// pipeline is observable and tunable without code changes (A-6).
+type DecayConfig struct {
+	// RawDecayBase is the baseline multiplier on the raw token count. Default: 1.0.
+	RawDecayBase float64 `json:"raw_decay_base"`
+	// RefModWeight scales the reference-count discount. Default: 0.2.
+	RefModWeight float64 `json:"ref_mod_weight"`
+	// FileModWeight is the file-mod factor when a related file is actively edited. Default: 0.3.
+	FileModWeight float64 `json:"file_mod_weight"`
+	// StrengthDivisor normalises the accumulated access strength. Default: 1.0.
+	StrengthDivisor float64 `json:"strength_divisor"`
+	// Group holds cross-group aging modulation coefficients (A-5).
+	Group GroupModConfig `json:"group"`
+	// Heat holds heat-dimension (H-axis) modulation coefficients (A-13).
+	Heat HeatModConfig `json:"heat"`
+}
+
+// GroupModConfig holds cross-group aging modulation coefficients (A-5).
+type GroupModConfig struct {
+	// Enabled toggles cross-group modulation. When false, groupMod is always 1.0.
+	Enabled bool `json:"enabled"`
+	// DistanceW is the distance weight per task-group step. Default: 0.3.
+	DistanceW float64 `json:"distance_w"`
+	// CrossRefW dampens cross-group modulation per cross-group reference. Default: 0.2.
+	CrossRefW float64 `json:"cross_ref_w"`
+}
+
+// HeatModConfig holds heat-dimension (H-axis) modulation coefficients (A-13).
+type HeatModConfig struct {
+	// Enabled toggles the heat dimension. When false (or heat==0), heatMod is 1.0.
+	Enabled bool `json:"enabled"`
+	// RecallBoost is the heat increment per successful recall/citation. Default: 20.
+	RecallBoost int `json:"recall_boost"`
+	// SigZoneMin is the lower bound of the significant zone (>= SigZoneMin). Default: 70.
+	SigZoneMin int `json:"sig_zone_min"`
+	// UnsettledMin is the lower bound of the unsettled zone (>= UnsettledMin). Default: 40.
+	UnsettledMin int `json:"unsettled_min"`
+	// SigMod slows decay in the significant zone. Default: 0.7.
+	SigMod float64 `json:"sig_mod"`
+	// DecayMod accelerates decay in the decay zone (< UnsettledMin). Default: 1.3.
+	DecayMod float64 `json:"decay_mod"`
 }
 
 // ThresholdConfig holds compression level thresholds.
@@ -183,5 +266,52 @@ func DefaultConfig() Config {
 		ToleranceDecayRate: 0.98,
 		DriftCheckInterval: 5,
 		DriftThreshold:     0.15,
+		Decay:              DefaultDecayConfig(),
+		Retrieval:          DefaultRetrievalConfig(),
+		Backtrack:          DefaultBacktrackConfig(),
+	}
+}
+
+// DefaultDecayConfig returns the default decay coefficients, replicating the
+// historical magic numbers so behaviour is unchanged unless explicitly tuned.
+func DefaultDecayConfig() DecayConfig {
+	return DecayConfig{
+		RawDecayBase:    1.0,
+		RefModWeight:    0.2,
+		FileModWeight:   0.3,
+		StrengthDivisor: 1.0,
+		Group: GroupModConfig{
+			Enabled:   true,
+			DistanceW: 0.3,
+			CrossRefW: 0.2,
+		},
+		Heat: HeatModConfig{
+			Enabled:      true,
+			RecallBoost:  20,
+			SigZoneMin:   70,
+			UnsettledMin: 40,
+			SigMod:       0.7,
+			DecayMod:     1.3,
+		},
+	}
+}
+
+// BacktrackConfig controls same-group backtrack injection (A-9).
+type BacktrackConfig struct {
+	Enabled         bool    `json:"enabled"`
+	TopK            int     `json:"top_k"`
+	MaxCharsPerStep int     `json:"max_chars_per_step"`
+	RecencyW        float64 `json:"recency_w"`
+	StrengthW       float64 `json:"strength_w"`
+}
+
+// DefaultBacktrackConfig returns the default backtrack settings (disabled).
+func DefaultBacktrackConfig() BacktrackConfig {
+	return BacktrackConfig{
+		Enabled:         false,
+		TopK:            5,
+		MaxCharsPerStep: 500,
+		RecencyW:        0.6,
+		StrengthW:       0.4,
 	}
 }

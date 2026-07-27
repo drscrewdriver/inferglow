@@ -24,10 +24,13 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/inferglow/context/retrieval"
 )
 
 // HybridManager implements ModeHybrid with full L0-L4 compression.
@@ -41,6 +44,9 @@ type HybridManager struct {
 	headBufferVer string
 	taskGroupID   int32
 	idleCount     int32
+
+	// --- Phase 0: rendered-block cache (A-4) ---
+	renderCache *RenderedCache
 
 	// --- Phase 0: sweet-spot passthrough ---
 	sweetSpotTokens   int     // effective value (may be adjusted by tolerance)
@@ -61,9 +67,18 @@ type HybridManager struct {
 
 	// --- Phase 0: head buffer archive ---
 	archivedHeads []ArchivedHead
+	headSeq       int // monotonic version counter for head buffer (A-3)
 
 	// --- CM-4: semantic drift detection ---
 	drift *DriftDetector
+
+	// --- A-7: three-way fusion retrieval ---
+	fusion       *retrieval.FusionRetriever
+	vsIndex      *retrieval.VectorStore
+	bm25Index    *retrieval.BM25Index
+	recencyIndex *retrieval.RecencyIndex
+	fusionMu     sync.Mutex // serializes reindex; guards fusionDirty
+	fusionDirty  bool
 }
 
 // ArchivedHead is a previous head buffer kept for audit/rollback.
@@ -71,6 +86,7 @@ type ArchivedHead struct {
 	Content    []RenderedBlock
 	Version    string
 	ArchivedAt time.Time
+	Seq        int // monotonic version sequence (A-3)
 }
 
 // NewHybridManager creates a hybrid context manager.
@@ -79,6 +95,7 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 		cfg:                cfg,
 		store:              store,
 		headBufferVer:      "h_v1",
+		renderCache:        NewRenderedCache(),
 		sweetSpotTokens:    cfg.SweetSpotTokens,
 		sweetSpotOriginal:  cfg.SweetSpotTokens,
 		sweetSpotTolerance: 1.0,
@@ -91,7 +108,34 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 	if cfg.ToleranceDecayRate <= 0 {
 		h.cfg.ToleranceDecayRate = 0.98
 	}
+	if cfg.Retrieval.EnableFusion {
+		h.enableFusionRetrieval(cfg.Retrieval)
+	}
 	return h, nil
+}
+
+// enableFusionRetrieval wires the three-way fusion retriever into the manager.
+// The semantic path uses NoopEmbedder this wp (real embeddings arrive with
+// OT-4); keyword + recency paths are fully active. Zero-valued weights/threshold
+// fall back to the fusion defaults so a partially-specified config stays safe.
+func (h *HybridManager) enableFusionRetrieval(rcfg RetrievalConfig) {
+	if rcfg.Weights == [3]float64{0, 0, 0} {
+		rcfg.Weights = [3]float64{0.50, 0.30, 0.20}
+	}
+	if rcfg.Threshold <= 0 {
+		rcfg.Threshold = 0.35
+	}
+	vs := retrieval.NewVectorStore()
+	bm25 := retrieval.NewBM25Index()
+	recency := retrieval.NewRecencyIndexWithWeights(rcfg.RecencyW, rcfg.StrengthW)
+	fusion := retrieval.NewFusionRetriever(vs, bm25, recency, &retrieval.NoopEmbedder{})
+	fusion.Weights = rcfg.Weights
+	fusion.Threshold = rcfg.Threshold
+	h.vsIndex = vs
+	h.bm25Index = bm25
+	h.recencyIndex = recency
+	h.fusion = fusion
+	h.fusionDirty = true
 }
 
 func (h *HybridManager) Mode() Mode { return ModeHybrid }
@@ -128,6 +172,7 @@ func (h *HybridManager) Ingest(step StepRecord) error {
 	if err := h.store.UpsertRef(ref); err != nil {
 		return fmt.Errorf("hybrid ingest: upsert ref: %w", err)
 	}
+	h.markFusionDirty()
 
 	// Reset idle counter
 	atomic.StoreInt32(&h.idleCount, 0)
@@ -182,8 +227,9 @@ func (h *HybridManager) perStepDecay(currentStep int) error {
 		}
 		rawDecay := h.sumTokens(lastRef+1, currentStep)
 
-		decay := EffectiveDecay(*ref, rawDecay, false, false)
+		decay, trace := ComputeDecay(*ref, rawDecay, false, int(h.taskGroupID), h.cfg.Decay)
 		target := TargetLevel(decay, h.stepType(id), h.cfg.Thresholds)
+		trace.TargetLevel = target
 		maxLvl := MaxLevelForType(h.stepType(id))
 		if target > maxLvl {
 			target = maxLvl
@@ -246,41 +292,59 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 	// Zone 1: head_buffer (never compressed)
 	blocks = append(blocks, h.headBuffer...)
 
-	// Zone 2: hot facts injection (from .l2.jsonl with ref_count≥3, strength≥1.3)
+	// Zone 2: hot facts injection — ranked by strength descending (A-8 数值隔离)
 	hotFacts, err := h.store.HotFacts(h.cfg.HotFacts.MinRefCount, h.cfg.HotFacts.MinStrength)
-	if err == nil {
+	if err == nil && len(hotFacts) > 0 {
+		type rankedFact struct {
+			L2Record
+			strength float64
+		}
+		ranked := make([]rankedFact, 0, len(hotFacts))
 		for _, f := range hotFacts {
-			content := "[facts | session | sources: step_" + fmt.Sprint(f.StepID) + "]\n"
-			for _, fact := range f.Facts {
-				content += "  • " + fact + "\n"
+			ref, refErr := h.store.GetRef(f.StepID)
+			if refErr != nil {
+				continue
+			}
+			ranked = append(ranked, rankedFact{L2Record: f, strength: ref.Strength})
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].strength > ranked[j].strength })
+		if len(ranked) > 0 {
+			content := "[facts | session | ranked by strength]\n"
+			rank := 0
+			for _, rf := range ranked {
+				for _, fact := range rf.Facts {
+					rank++
+					content += fmt.Sprintf("  #%d (strength: %.1f) %s\n", rank, rf.strength, fact)
+				}
 			}
 			content += "[/facts]"
-			blocks = append(blocks, RenderedBlock{
-				StepID:  f.StepID,
-				Level:   2,
-				Content: content,
-			})
+			blocks = append(blocks, RenderedBlock{StepID: -4, Level: 2, Content: content})
 		}
 	}
 
-	// Zone 2 extended: long-term memory facts (confidence ≥ 0.7) (§8C.4)
+	// Zone 2 extended: long-term memory facts — ranked by confidence descending (A-8)
 	if h.cfg.LongMem.Enabled {
 		longMems, err := h.store.SearchLongMem("", "", 20)
 		if err == nil {
+			// Filter and sort by confidence descending.
+			filtered := make([]LongMemRecord, 0, len(longMems))
 			for _, mem := range longMems {
-				if mem.Confidence < 0.7 {
-					continue
+				if mem.Confidence >= 0.7 {
+					filtered = append(filtered, mem)
 				}
-				content := fmt.Sprintf("[facts | longterm | mem:%s | conf:%.2f]\n", mem.MemID, mem.Confidence)
-				for _, fact := range mem.Facts {
-					content += "  • " + fact + " (跨 session 验证)\n"
+			}
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Confidence > filtered[j].Confidence })
+			if len(filtered) > 0 {
+				content := "[facts | longterm | ranked by confidence]\n"
+				rank := 0
+				for _, mem := range filtered {
+					for _, fact := range mem.Facts {
+						rank++
+						content += fmt.Sprintf("  #%d (confidence: %.2f) %s (跨 session 验证)\n", rank, mem.Confidence, fact)
+					}
 				}
 				content += "[/facts]"
-				blocks = append(blocks, RenderedBlock{
-					StepID:  -2, // longmem pseudo-step
-					Level:   2,
-					Content: content,
-				})
+				blocks = append(blocks, RenderedBlock{StepID: -2, Level: 2, Content: content})
 			}
 		}
 	}
@@ -297,29 +361,35 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 	}
 
 	for i, id := range allIDs {
+		step, err := h.store.GetStep(id)
+		if err != nil {
+			continue
+		}
+		// A-12: skip transient steps (tool call fragments)
+		if step.Transient {
+			continue
+		}
 		if i >= tailStart {
-			// Zone 4: tail original (L0)
-			step, err := h.store.GetStep(id)
-			if err != nil {
-				continue
-			}
+			// Zone 4: tail original (L0) — reuse step
 			blocks = append(blocks, renderBlock(id, 0, step.Content, step.Type))
 		} else {
-			// Zone 3: compressed history
+			// Zone 3: compressed history（经 RenderStepWithCache 走缓存）
 			ref, err := h.store.GetRef(id)
 			if err != nil {
 				continue
 			}
-			content, err := h.renderStepContent(id, ref.Level)
+			block, err := RenderStepWithCache(id, *ref, h.renderCache, h.store)
 			if err != nil {
 				continue
 			}
-			step, _ := h.store.GetStep(id)
-			typ := "reasoning"
-			if step != nil {
-				typ = step.Type
-			}
-			blocks = append(blocks, renderBlock(id, ref.Level, content, typ))
+			blocks = append(blocks, block)
+		}
+	}
+
+	// Zone 4.5: same-group backtrack (A-9, Layer 8 injection)
+	if h.cfg.Backtrack.Enabled {
+		if b, ok := h.buildBacktrackBlock(allIDs); ok {
+			blocks = append(blocks, b)
 		}
 	}
 
@@ -332,48 +402,9 @@ func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]R
 }
 
 // renderStepContent reads the appropriate .lN content for a step.
+// It delegates to renderFromStore, the single canonical render implementation.
 func (h *HybridManager) renderStepContent(stepID, level int) (string, error) {
-	switch level {
-	case 0:
-		step, err := h.store.GetStep(stepID)
-		if err != nil {
-			return "", err
-		}
-		return step.Content, nil
-	case 1:
-		rec, err := h.store.GetL1(stepID)
-		if err != nil {
-			// Fallback to L0
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return rec.Content, nil
-	case 2:
-		rec, err := h.store.GetL2(stepID)
-		if err != nil {
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return strings.Join(rec.Facts, "\n"), nil
-	case 3:
-		rec, err := h.store.GetL3(stepID)
-		if err != nil {
-			step, err2 := h.store.GetStep(stepID)
-			if err2 != nil {
-				return "", err
-			}
-			return step.Content, nil
-		}
-		return rec.Mask, nil
-	default:
-		return "", fmt.Errorf("unknown level %d", level)
-	}
+	return renderFromStore(stepID, level, h.store)
 }
 
 // renderBlock creates a RenderedBlock with the ⟨§N·type·Lx⟩ marker (§4.7).
@@ -480,8 +511,9 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 
 		// Compute decay
 		rawDecay := h.sumTokens(0, int(atomic.LoadInt32(&h.currentStep)))
-		decay := EffectiveDecay(*ref, rawDecay, false, false)
+		decay, trace := ComputeDecay(*ref, rawDecay, false, int(h.taskGroupID), h.cfg.Decay)
 		target := TargetLevel(decay, h.stepType(id), h.cfg.Thresholds)
+		trace.TargetLevel = target
 		if target > maxLvl {
 			target = maxLvl
 		}
@@ -501,6 +533,12 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 
 // Search performs RAG search across context history.
 func (h *HybridManager) Search(ctx context.Context, query SearchQuery) ([]SearchHit, error) {
+	// A-7: three-way fusion path (gated). The legacy naive keyword search below
+	// is retained as the 保壳 fallback when fusion is disabled or not built.
+	if h.fusion != nil && h.cfg.Retrieval.EnableFusion {
+		return h.fusionSearch(ctx, query)
+	}
+
 	// Simple keyword search (full RAG in retrieval/ package)
 	ids, err := h.store.AllActiveStepIDs()
 	if err != nil {
@@ -546,6 +584,83 @@ func (h *HybridManager) Search(ctx context.Context, query SearchQuery) ([]Search
 		}
 	}
 	return hits, nil
+}
+
+// fusionSearch runs the three-way fusion retriever, lazily rebuilding the
+// indexes from the store when dirty, and maps results onto SearchHit.
+func (h *HybridManager) fusionSearch(ctx context.Context, query SearchQuery) ([]SearchHit, error) {
+	h.fusionMu.Lock()
+	if h.fusionDirty {
+		h.reindex(ctx)
+		h.fusionDirty = false
+	}
+	h.fusionMu.Unlock()
+
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	results, err := h.fusion.Search(ctx, query.Query, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]SearchHit, 0, len(results))
+	for _, r := range results {
+		level := 0
+		if ref, rerr := h.store.GetRef(r.StepID); rerr == nil {
+			level = ref.Level
+			if query.LevelMax > 0 && level > query.LevelMax {
+				continue
+			}
+		}
+		hits = append(hits, SearchHit{
+			StepID:  r.StepID,
+			Level:   level,
+			Score:   r.Score,
+			Snippet: r.Text,
+			Type:    h.stepType(r.StepID),
+		})
+	}
+	return hits, nil
+}
+
+// reindex rebuilds the keyword and recency indexes from the store (idempotent:
+// indexes are reset first). The semantic index stays empty this wp (NoopEmbedder;
+// real embeddings arrive with OT-4). Caller must hold h.fusionMu.
+func (h *HybridManager) reindex(ctx context.Context) {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return
+	}
+	h.bm25Index.Reset()
+	h.recencyIndex.Reset()
+	for _, id := range ids {
+		ref, rerr := h.store.GetRef(id)
+		if rerr != nil {
+			continue
+		}
+		content, cerr := h.renderStepContent(id, ref.Level)
+		if cerr != nil {
+			continue
+		}
+		lastRef := 0
+		if ref.LastRefAtStep != nil {
+			lastRef = *ref.LastRefAtStep
+		}
+		h.bm25Index.Add(id, content)
+		h.recencyIndex.Add(id, lastRef, ref.Strength, content)
+	}
+}
+
+// markFusionDirty flags the fusion indexes stale after a corpus mutation.
+func (h *HybridManager) markFusionDirty() {
+	if h.fusion == nil {
+		return
+	}
+	h.fusionMu.Lock()
+	h.fusionDirty = true
+	h.fusionMu.Unlock()
 }
 
 // SearchLongMem searches long-term memory.
@@ -743,6 +858,43 @@ func (h *HybridManager) Close() error {
 	return nil
 }
 
+// --- A-12: C-track transient step management ---
+
+// MarkTransient marks a step as transient (excluded from BuildContext).
+// Additive-only method; ContextManager interface unchanged.
+func (h *HybridManager) MarkTransient(stepID int, scope string, round int) error {
+	step, err := h.store.GetStep(stepID)
+	if err != nil {
+		return err
+	}
+	step.Transient = true
+	step.TransientScope = scope
+	step.TransientRound = round
+	return h.store.AppendStep(*step)
+}
+
+// ClearStaleTransients removes transient steps from the active set.
+// Returns the number of steps removed.
+func (h *HybridManager) ClearStaleTransients(currentRound int) (int, error) {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		step, err := h.store.GetStep(id)
+		if err != nil || !step.Transient {
+			continue
+		}
+		if currentRound-step.TransientRound < 1 {
+			continue // still fresh
+		}
+		_ = h.store.RemoveRef(id)
+		count++
+	}
+	return count, nil
+}
+
 // --- Citation processing (§4.7.3) ---
 
 var refCiteRe = regexp.MustCompile(`§(\d+)`)
@@ -766,7 +918,11 @@ func (h *HybridManager) ProcessCitations(output string) {
 		ref.RefCount++
 		ref.LastRefAtStep = &currentStep
 		ref.Strength += 0.1
+		applyRecallBoost(ref, int(h.taskGroupID), h.cfg.Decay)
 		_ = h.store.UpsertRef(*ref)
+	}
+	if len(matches) > 0 {
+		h.markFusionDirty()
 	}
 }
 

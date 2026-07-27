@@ -479,6 +479,10 @@ func (b *MemoryBridge) SwitchMode(mode string) error {
 	reg.Register(contextmgr.ModeSummary, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
 		return contextmgr.NewHybridManager(cfg, store)
 	})
+	// assembly mode (线A/C轨) — hot-switchable via the shared Registry.
+	reg.Register(contextmgr.ModeAssembly, func(cfg contextmgr.Config, store contextmgr.StepStoreLike) (contextmgr.ContextManager, error) {
+		return contextmgr.NewAssemblyManager(cfg, store)
+	})
 
 	// Get the config and store from the current manager.
 	cfg := contextmgr.DefaultConfig()

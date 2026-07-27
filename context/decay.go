@@ -20,36 +20,179 @@
 
 package contextmgr
 
-// EffectiveDecay computes the compression pressure for a given step.
+// EffectiveDecay computes the compression pressure for a given step, expressed
+// as a plain float64.
+//
+// This is a thin compatibility shell over ComputeDecay preserving the historical
+// signature. It passes a zero-valued DecayConfig (whose zero values fall back to
+// the historical magic numbers) and treats the ref's own group as the current
+// group, so cross-group and heat modulation are neutral here.
+//
+// Deprecated: groupCompleted is ignored and retained only for call-site
+// compatibility; no active caller passes true. New code should call
+// ComputeDecay to get cross-group modulation, heat modulation, and a full trace.
+func EffectiveDecay(ref RefRecord, rawDecay int, fileActive bool, groupCompleted bool) float64 {
+	d, _ := ComputeDecay(ref, rawDecay, fileActive, ref.TaskGroupID, DecayConfig{})
+	return d
+}
+
+// ComputeDecay computes the effective compression pressure for a step with the
+// full modulation chain (A-5 cross-group, A-6 trace + externalised coefficients,
+// A-13 heat). It returns the effective_decay float64 plus a DecayTrace for
+// observability/auditing.
 //
 // Formula (from spec §6.2):
 //
-//	effective_decay = raw_decay × ref_mod × file_mod / strength × task_group_mod
+//	effective_decay = raw_decay × ref_mod × file_mod / strength × group_mod × heat_mod
 //
-//	raw_decay      = Σ token_count from (last_ref_step+1 → current_step)
-//	ref_mod        = 1.0 / (1.0 + ref_count × 0.2)
-//	file_mod       = 0.3 (related file actively edited) | 1.0 (no change)
-//	strength       = accumulated access strength (init 1.0, +0.1/ref)
-//	task_group_mod = 1.5 (completed group) | 1.0 (active group)
-func EffectiveDecay(ref RefRecord, rawDecay int, fileActive bool, groupCompleted bool) float64 {
-	refMod := 1.0 / (1.0 + float64(ref.RefCount)*0.2)
+// Zero-valued fields in cfg fall back to the historical constants, so passing a
+// zero DecayConfig reproduces the pre-refactor behaviour exactly.
+func ComputeDecay(ref RefRecord, rawDecay int, fileActive bool, currentGroupID int, cfg DecayConfig) (float64, DecayTrace) {
+	rawBase := cfg.RawDecayBase
+	if rawBase == 0 {
+		rawBase = 1.0
+	}
+	refW := cfg.RefModWeight
+	if refW == 0 {
+		refW = 0.2
+	}
+	fileW := cfg.FileModWeight
+	if fileW == 0 {
+		fileW = 0.3
+	}
+	strDiv := cfg.StrengthDivisor
+	if strDiv == 0 {
+		strDiv = 1.0
+	}
+
+	refMod := 1.0 / (1.0 + float64(ref.RefCount)*refW)
 
 	fileMod := 1.0
 	if fileActive {
-		fileMod = 0.3
+		fileMod = fileW
 	}
 
-	strength := ref.Strength
+	// Decay of accumulated access strength across many references is amplified by
+	// /strength below; clamp to avoid a division-by-zero blow-up.
+	strength := ref.Strength / strDiv
 	if strength < 0.1 {
-		strength = 0.1 // avoid division by zero
+		strength = 0.1
 	}
 
-	groupMod := 1.0
-	if groupCompleted {
-		groupMod = 1.5
+	groupMod := crossGroupMod(ref.TaskGroupID, currentGroupID, ref.CrossGroupRefs, cfg.Group)
+	heatM := heatMod(ref.Heat, cfg.Heat)
+
+	rawDecayVal := rawBase * float64(rawDecay)
+	effective := rawDecayVal * refMod * fileMod / strength * groupMod * heatM
+
+	trace := DecayTrace{
+		StepID:    ref.StepID,
+		RawDecay:  rawDecay,
+		RefMod:    refMod,
+		FileMod:   fileMod,
+		Strength:  strength,
+		GroupMod:  groupMod,
+		HeatMod:   heatM,
+		Effective: effective,
+	}
+	return effective, trace
+}
+
+// DecayTrace captures every coefficient that contributed to an effective-decay
+// computation, making the decay pipeline transparent and auditable (A-6).
+// TargetLevel is populated by the caller because it needs the step type +
+// thresholds that ComputeDecay does not hold.
+type DecayTrace struct {
+	StepID      int     // step being decayed
+	RawDecay    int     // summed token count since last reference
+	RefMod      float64 // reference-count discount factor
+	FileMod     float64 // related-file edit factor
+	Strength    float64 // normalised accumulated access strength
+	GroupMod    float64 // cross-group aging modulation (A-5)
+	HeatMod     float64 // heat-dimension modulation (A-13)
+	Effective   float64 // final effective_decay
+	TargetLevel int     // compression target level (set by caller)
+	Reason      string  // human-readable reason (audit)
+}
+
+// crossGroupMod replaces the historical binary groupMod (1.0/1.5) with a
+// distance + cross-group-reference modulation (A-5): same group is neutral, and
+// older/uncited groups decay faster.
+//
+//	group_mod = 1.0 + DistanceW × distance / (1.0 + CrossRefW × crossRefs)
+func crossGroupMod(refGroupID, currentGroupID, crossRefs int, g GroupModConfig) float64 {
+	if !g.Enabled || refGroupID == currentGroupID {
+		return 1.0
+	}
+	distance := currentGroupID - refGroupID
+	if distance < 0 {
+		distance = 0
+	}
+	crossW := g.CrossRefW
+	if crossW == 0 {
+		crossW = 0.2
+	}
+	distW := g.DistanceW
+	if distW == 0 {
+		distW = 0.3
+	}
+	return 1.0 + distW*float64(distance)/(1.0+crossW*float64(crossRefs))
+}
+
+// heatMod returns the heat-dimension modulation (A-13). When the heat dimension
+// is disabled, or the record carries no heat data (0), it returns a neutral 1.0
+// so existing records are never decayed faster by default.
+func heatMod(heat int, h HeatModConfig) float64 {
+	if !h.Enabled || heat == 0 {
+		return 1.0
+	}
+	// Resolve zone thresholds against documented defaults.
+	sigMin := h.SigZoneMin
+	if sigMin == 0 {
+		sigMin = 70
+	}
+	sigMod := h.SigMod
+	if sigMod == 0 {
+		sigMod = 0.7
+	}
+	unsettledMin := h.UnsettledMin
+	if unsettledMin == 0 {
+		unsettledMin = 40
+	}
+	decayMod := h.DecayMod
+	if decayMod == 0 {
+		decayMod = 1.3
 	}
 
-	return float64(rawDecay) * refMod * fileMod / strength * groupMod
+	switch {
+	case heat >= sigMin:
+		return sigMod // significant zone: decay slower
+	case heat < unsettledMin:
+		return decayMod // decay zone: decay faster
+	default:
+		return 1.0 // unsettled zone: normal
+	}
+}
+
+// applyRecallBoost mutates a record's heat / cross-group counts when a citation
+// or recall hits (A-13 RecallBoost). It is gated on the heat dimension being
+// enabled; when disabled it returns early leaving the record untouched.
+func applyRecallBoost(ref *RefRecord, currentGroupID int, d DecayConfig) {
+	if !d.Heat.Enabled {
+		return
+	}
+	boost := d.Heat.RecallBoost
+	if boost == 0 {
+		boost = 20
+	}
+	h := ref.Heat + boost
+	if h > 100 {
+		h = 100
+	}
+	ref.Heat = h
+	if ref.TaskGroupID != currentGroupID {
+		ref.CrossGroupRefs++
+	}
 }
 
 // TargetLevel determines the compression level a step should reach
