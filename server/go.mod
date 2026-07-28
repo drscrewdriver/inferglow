@@ -22,10 +22,22 @@ replace github.com/inferglow/schema => ../schema
 
 replace github.com/inferglow/approval => ../approval
 
+replace github.com/inferglow/storage => ../storage
+
+replace github.com/inferglow/messagebus => ../messagebus
+
+replace github.com/inferglow/workspace => ../workspace
+
 require (
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/inferglow/action v0.0.0
+	github.com/inferglow/audit v0.0.0
 	github.com/inferglow/flow v0.0.0-00010101000000-000000000000
+	github.com/inferglow/messagebus v0.0.0-00010101000000-000000000000
+	github.com/inferglow/observability v0.0.0
 	github.com/inferglow/orchestrator v0.0.0-00010101000000-000000000000
+	github.com/inferglow/storage v0.0.0-00010101000000-000000000000
+	github.com/inferglow/workspace v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -40,11 +52,8 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/inferglow/action v0.0.0 // indirect
 	github.com/inferglow/approval v0.0.0 // indirect
-	github.com/inferglow/audit v0.0.0 // indirect
 	github.com/inferglow/model v0.0.0 // indirect
-	github.com/inferglow/observability v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/inferglow/session v0.0.0 // indirect

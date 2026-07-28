@@ -272,15 +272,6 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetSession returns session info (stub).
-func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": id,
-		"status":     "active",
-	})
-}
-
 // handleListTools returns available tools (stub).
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -48,8 +48,12 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("POST /v1/agents/{id}/stream", s.handleStream)
 	api.HandleFunc("POST /v1/agents/{id}/stream-run", s.handleStreamRun)
 
-	// Session
+	// Session management (C-4)
+	api.HandleFunc("POST /v1/sessions", s.handleCreateSession)
+	api.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	api.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
+	api.HandleFunc("DELETE /v1/sessions/{id}", s.handleDeleteSession)
+	api.HandleFunc("GET /v1/sessions/{id}/stream", s.handleSessionStream)
 
 	// Tools
 	api.HandleFunc("GET /v1/tools", s.handleListTools)
@@ -117,6 +121,33 @@ func (s *Server) registerRoutes() {
 	// Observability (OT-13)
 	api.HandleFunc("GET /v1/observability/spans", s.handleObservabilitySpans)
 	api.HandleFunc("GET /v1/observability/stats", s.handleObservabilityStats)
+
+	// Scheduler management (C-5)
+	api.HandleFunc("POST /v1/schedules", s.handleCreateSchedule)
+	api.HandleFunc("GET /v1/schedules", s.handleListSchedules)
+	api.HandleFunc("GET /v1/schedules/{id}", s.handleGetSchedule)
+	api.HandleFunc("DELETE /v1/schedules/{id}", s.handleDeleteSchedule)
+	api.HandleFunc("POST /v1/schedules/{id}/start", s.handleStartSchedule)
+	api.HandleFunc("POST /v1/schedules/{id}/stop", s.handleStopSchedule)
+
+	// Credential management (C-6)
+	api.HandleFunc("POST /v1/credentials", s.handleCreateCredential)
+	api.HandleFunc("GET /v1/credentials", s.handleListCredentials)
+	api.HandleFunc("GET /v1/credentials/{id}", s.handleGetCredential)
+	api.HandleFunc("DELETE /v1/credentials/{id}", s.handleDeleteCredential)
+
+	// Workspace management (C-7)
+	api.HandleFunc("POST /v1/workspaces", s.handleCreateWorkspace)
+	api.HandleFunc("GET /v1/workspaces", s.handleListWorkspaces)
+	api.HandleFunc("GET /v1/workspaces/{id}", s.handleGetWorkspace)
+	api.HandleFunc("DELETE /v1/workspaces/{id}", s.handleDeleteWorkspace)
+	api.HandleFunc("GET /v1/workspaces/{id}/files", s.handleListWorkspaceFiles)
+
+	// Skill Hub management (C-10)
+	api.HandleFunc("GET /v1/skill-hub", s.handleListSkills)
+	api.HandleFunc("GET /v1/skill-hub/{name}", s.handleGetSkill)
+	api.HandleFunc("DELETE /v1/skill-hub/{name}", s.handleDeleteSkill)
+	api.HandleFunc("POST /v1/skill-hub/{name}/execute", s.handleExecuteSkill)
 
 	// OpenAPI spec
 	api.HandleFunc("GET /openapi.json", handler.OpenAPISpec)

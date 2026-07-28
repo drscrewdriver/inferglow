@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/inferglow/flow/stage"
+	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
 	"github.com/inferglow/server/trigger"
 )
@@ -54,19 +55,26 @@ func DefaultConfig() Config {
 
 // Server is the InferGlow REST API server.
 type Server struct {
-	cfg        Config
-	mux        *http.ServeMux
-	httpServer *http.Server
-	agentStore AgentStore
-	tenantMgr  *TenantManager
-	flowStore  *FlowStore
-	runMgr     *RunManager
-	triggerReg *trigger.Registry
-	memStore   MemoryStore
-	teamStore  *TeamStore
-	teamRunner *TeamRunner
-	ctxProvider ContextProvider
-	spanCollector *observability.SpanCollector // OT-13
+	cfg            Config
+	mux            *http.ServeMux
+	httpServer     *http.Server
+	agentStore     AgentStore
+	tenantMgr      *TenantManager
+	flowStore      *FlowStore
+	runMgr         *RunManager
+	triggerReg     *trigger.Registry
+	memStore       MemoryStore
+	teamStore      *TeamStore
+	teamRunner     *TeamRunner
+	ctxProvider    ContextProvider
+	spanCollector  *observability.SpanCollector // OT-13
+	resourcePolicy ResourceAccessPolicy
+	bus            messagebus.MessageBus
+	sessionStore   *SessionStore
+	scheduleStore  *ScheduleStore
+	credStore      *CredentialStore
+	wsProvider     WorkspaceProvider
+	skillStore     *SkillStore
 }
 
 // MemoryRecord represents a persistent memory entry.
@@ -150,6 +158,33 @@ func (tm *TenantManager) Authenticate(apiKey string) (*Tenant, error) {
 		}
 	}
 	return nil, fmt.Errorf("invalid API key")
+}
+
+// UserIdentity is a minimal marker for a resource access principal. It exists
+// so TenantManager establishes *who* a caller is while ResourceAccessPolicy
+// decides *what* that identity may see. The identity model is intentionally
+// left open for later contract extensions (C-4+).
+type UserIdentity interface {
+	ID() string
+}
+
+// ResourceAccessPolicy is the resource-level authorization contract (spec
+// C-2). It decides whether userID may perform action on resource resourceType
+// resourceID. A concrete implementation may bridge the existing
+// security/rbac (roles & permission matrix) and security/pii (redaction)
+// layers; this work package neither builds an RBAC engine nor wires it into the
+// request hot path.
+type ResourceAccessPolicy interface {
+	CanAccess(ctx context.Context, userID, resourceType, resourceID, action string) bool
+}
+
+// DefaultResourceAccessPolicy permits everything. It is the zero-config
+// behaviour when no policy is injected, preserving existing semantics.
+type DefaultResourceAccessPolicy struct{}
+
+// CanAccess always grants access.
+func (DefaultResourceAccessPolicy) CanAccess(_ context.Context, _, _, _, _ string) bool {
+	return true
 }
 
 // NewServer creates a new REST API server.
@@ -258,10 +293,10 @@ type ContextProvider interface {
 
 // ContextHit is a single search result from ContextProvider.
 type ContextHit struct {
-	Content  string  `json:"content"`
-	Score    float64 `json:"score"`
-	Source   string  `json:"source,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Content   string  `json:"content"`
+	Score     float64 `json:"score"`
+	Source    string  `json:"source,omitempty"`
+	SessionID string  `json:"session_id,omitempty"`
 }
 
 // SetTeamCoordinator initializes the team coordination subsystem.
@@ -275,6 +310,53 @@ func (s *Server) SetTeamCoordinator(agentStore AgentStore) {
 // This enables the /v1/context/search and /v1/context/stats endpoints.
 func (s *Server) SetContextProvider(p ContextProvider) {
 	s.ctxProvider = p
+}
+
+// SetResourceAccessPolicy injects the resource-level authorization policy
+// (spec C-2). When no policy is set the server falls back to
+// DefaultResourceAccessPolicy (allow-all), so behaviour is unchanged until a
+// concrete policy is wired in.
+func (s *Server) SetResourceAccessPolicy(p ResourceAccessPolicy) {
+	s.resourcePolicy = p
+}
+
+// SetMessageBus attaches the message bus infrastructure (spec C-3) used for
+// session streaming, live updates and cross-component events. It is an opt-in
+// injection point: nil leaves the server with no active bus until a consumer
+// needs one.
+func (s *Server) SetMessageBus(b messagebus.MessageBus) {
+	s.bus = b
+}
+
+// SetSessionStore attaches the C-4 session management store. When set, the
+// /v1/sessions endpoints use this store for CRUD and SSE streaming.
+func (s *Server) SetSessionStore(st *SessionStore) {
+	s.sessionStore = st
+}
+
+// SetScheduleStore attaches the C-5 scheduler management store. When set, the
+// /v1/schedules endpoints manage persistent and in-memory cron schedules.
+func (s *Server) SetScheduleStore(st *ScheduleStore) {
+	s.scheduleStore = st
+}
+
+// SetCredentialStore attaches the C-6 credential management store. When set,
+// the /v1/credentials endpoints operate on it with secret masking.
+func (s *Server) SetCredentialStore(st *CredentialStore) {
+	s.credStore = st
+}
+
+// SetWorkspaceProvider attaches the C-7 workspace provider. When set, the
+// /v1/workspaces endpoints manage workspace records.
+func (s *Server) SetWorkspaceProvider(p WorkspaceProvider) {
+	s.wsProvider = p
+}
+
+// SetSkillStore attaches the C-10 Skill Hub store. When set, the /v1/skill-hub
+// endpoints list, inspect, remove and execute installed skills (backed by
+// action.ActionRegistry).
+func (s *Server) SetSkillStore(st *SkillStore) {
+	s.skillStore = st
 }
 
 // SemanticMemoryStore is an optional interface that MemoryStore
