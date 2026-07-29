@@ -45,13 +45,21 @@ type Step struct {
 	Name   string
 	Func   StepFunc
 	Schema *schema.OutputSchema
+
+	// InputPorts/OutputPorts declare the step's explicit port interface
+	// (spec B-3). They are optional: when empty, the step degrades to the
+	// legacy any→any path and existing flows are unaffected.
+	InputPorts  []PortDef
+	OutputPorts []PortDef
 }
 
 // StepBuilder builds Step instances with chainable API
 type StepBuilder struct {
-	name   string
-	fn     StepFunc
-	schema *schema.OutputSchema
+	name        string
+	fn          StepFunc
+	schema      *schema.OutputSchema
+	inputPorts  []PortDef
+	outputPorts []PortDef
 }
 
 // NewStep creates a new StepBuilder
@@ -68,11 +76,25 @@ func (b *StepBuilder) WithOutputSchema(s *schema.OutputSchema) *StepBuilder {
 	return b
 }
 
+// WithInputPorts declares the step's explicit input port schema (spec B-3).
+func (b *StepBuilder) WithInputPorts(ports ...PortDef) *StepBuilder {
+	b.inputPorts = ports
+	return b
+}
+
+// WithOutputPorts declares the step's explicit output port schema (spec B-3).
+func (b *StepBuilder) WithOutputPorts(ports ...PortDef) *StepBuilder {
+	b.outputPorts = ports
+	return b
+}
+
 // Build creates the Step
 func (b *StepBuilder) Build() *Step {
 	return &Step{
-		Name:   b.name,
-		Func:   b.fn,
-		Schema: b.schema,
+		Name:        b.name,
+		Func:        b.fn,
+		Schema:      b.schema,
+		InputPorts:  b.inputPorts,
+		OutputPorts: b.outputPorts,
 	}
 }

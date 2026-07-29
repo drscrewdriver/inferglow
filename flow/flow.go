@@ -26,6 +26,11 @@ import "sync"
 type Edge struct {
 	From string
 	To   string
+
+	// PortMappings holds port-level connections between the two steps (spec
+	// B-4). An empty slice degrades to the legacy any→any pass-through, so
+	// existing flows are unaffected.
+	PortMappings []EdgePort
 }
 
 // Flow represents an executable pipeline of Steps
@@ -110,6 +115,37 @@ func (fb *FlowBuilder) To(step *Step) *FlowBuilder {
 	return fb
 }
 
+// Connect adds a port-level mapping between the last added step and the given
+// step, then connects them via To (spec B-4). It is the portized form of To:
+// the mapping records which port of the source step feeds which port of the
+// target step. Calling Connect with no mappings is equivalent to To.
+//
+// Example:
+//
+//	NewFlow().AddStep(a).Connect(b, EdgePort{FromPort: "out", ToPort: "in"}).Build()
+func (fb *FlowBuilder) Connect(next *Step, mappings ...EdgePort) *FlowBuilder {
+	fb.flow.mu.Lock()
+	defer fb.flow.mu.Unlock()
+	if fb.lastStep != nil {
+		// Fill in step names on each mapping so resolver/validation can
+		// trace a mapping back to its endpoints.
+		pm := make([]EdgePort, len(mappings))
+		for i, m := range mappings {
+			m.FromStep = fb.lastStep.Name
+			m.ToStep = next.Name
+			pm[i] = m
+		}
+		fb.flow.edges = append(fb.flow.edges, Edge{
+			From:         fb.lastStep.Name,
+			To:           next.Name,
+			PortMappings: pm,
+		})
+	}
+	fb.flow.steps[next.Name] = next
+	fb.lastStep = next
+	return fb
+}
+
 // If adds a conditional branch: evaluates cond with the output of the last step.
 // If true, executes trueStep; if false, executes falseStep.
 // Both branches connect back to the flow so the caller can chain further steps.
@@ -148,6 +184,18 @@ func (fb *FlowBuilder) WithOptions(opts ...FlowOption) *FlowBuilder {
 // Build creates the Flow
 func (fb *FlowBuilder) Build() *Flow {
 	return fb.flow
+}
+
+// BuildValidated creates the Flow after running the port resolver over its
+// edges (spec B-4). It returns an error when any port mapping is invalid
+// (missing step, missing port, type mismatch, or an unsatisfied Required input
+// port). Flows with no port mappings always pass, so BuildValidated is safe to
+// use for legacy flows too.
+func (fb *FlowBuilder) BuildValidated() (*Flow, error) {
+	if err := NewPortResolver(fb.flow.steps).Validate(fb.flow.edges); err != nil {
+		return nil, err
+	}
+	return fb.flow, nil
 }
 
 // ApplyOptions applies the given FlowOptions to an already-built Flow in
