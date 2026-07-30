@@ -28,7 +28,8 @@ import "github.com/inferglow/context"
 type StepStore interface {
 	// --- L0 original content (.jsonl) ---
 
-	// AppendStep appends a step record to the L0 main file (append-only).
+	// AppendStep persists a step record, upserting by step_id (idempotent).
+	// Existing steps are updated in place; new steps are appended to L0.
 	AppendStep(step contextmgr.StepRecord) error
 	// GetStep retrieves a step record by ID from L0.
 	GetStep(stepID int) (*contextmgr.StepRecord, error)

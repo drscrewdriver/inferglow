@@ -175,3 +175,50 @@ func hasStep(blocks []RenderedBlock, stepID int) bool {
 	}
 	return false
 }
+
+// TestReindexSkipsTransient verifies B1: reindex must exclude transient steps
+// from the retrieval indexes (BM25), matching the BuildContext filter.
+func TestReindexSkipsTransient(t *testing.T) {
+	store := newFakeStore()
+	store.steps[1] = StepRecord{StepID: 1, Type: "tool", Content: "qztransientbody xyz", Transient: true, TransientScope: "tool_call", TransientRound: 1}
+	store.steps[2] = StepRecord{StepID: 2, Type: "reasoning", Content: "qzkeepbody abc"}
+	store.refs[1] = RefRecord{StepID: 1, Level: 0, Strength: 1.0}
+	store.refs[2] = RefRecord{StepID: 2, Level: 0, Strength: 1.0}
+
+	cfg := DefaultConfig()
+	cfg.TailKeepSteps = 5
+	cfg.LongMem.Enabled = false
+	mgr, err := NewHybridManager(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := mgr.(*HybridManager)
+
+	h.reindex(context.Background())
+
+	// Transient step 1 must NOT be indexed.
+	res, err := h.bm25Index.Search(context.Background(), "qztransientbody", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res {
+		if r.StepID == 1 {
+			t.Error("transient step 1 must not appear in the retrieval index")
+		}
+	}
+
+	// Non-transient step 2 MUST be indexed.
+	res2, err := h.bm25Index.Search(context.Background(), "qzkeepbody", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range res2 {
+		if r.StepID == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("non-transient step 2 must appear in the retrieval index")
+	}
+}

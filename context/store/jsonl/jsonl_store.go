@@ -201,15 +201,61 @@ func (s *Store) appendJSONL(path string, v any) error {
 
 // --- L0 original content ---
 
+// AppendStep is an idempotent upsert keyed by step_id: if the step already
+// exists, the whole .jsonl file is rewritten so the on-disk store never holds
+// duplicate rows for the same step_id (mirrors the SQLite/PostgreSQL upsert
+// semantics). New steps take the fast append path.
 func (s *Store) AppendStep(step contextmgr.StepRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if _, exists := s.stepIdx[step.StepID]; exists {
+		s.stepIdx[step.StepID] = &step
+		return s.rewriteSteps()
+	}
 
 	if err := s.appendJSONL(s.path(".jsonl"), step); err != nil {
 		return err
 	}
 	s.stepIdx[step.StepID] = &step
 	return nil
+}
+
+// rewriteSteps rewrites the entire .jsonl file (temp file + rename) in
+// step_id order, mirroring rewriteRefs. Caller must hold s.mu.
+func (s *Store) rewriteSteps() error {
+	// Collect all steps sorted by step_id
+	ids := make([]int, 0, len(s.stepIdx))
+	for id := range s.stepIdx {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	// Write to temp file then rename
+	tmpPath := s.path(".jsonl.tmp")
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	for _, id := range ids {
+		data, err := json.Marshal(s.stepIdx[id])
+		if err != nil {
+			f.Close()
+			return err
+		}
+		data = append(data, '\n')
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return err
+		}
+	}
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, s.path(".jsonl"))
 }
 
 func (s *Store) GetStep(stepID int) (*contextmgr.StepRecord, error) {

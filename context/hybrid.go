@@ -466,26 +466,83 @@ func (h *HybridManager) fitToWindow(blocks []RenderedBlock, windowTokens int) []
 		return blocks
 	}
 
-	// Try upgrading zone 3 blocks from head
-	for i, b := range blocks {
-		if b.StepID > 0 && b.Level < 3 {
-			blocks[i].Level = b.Level + 1
-			// Content would be re-rendered at higher compression
-			// For now, truncate as approximation
-			blocks[i].Content = blocks[i].Content[:len(blocks[i].Content)/2] + "...[compressed]"
+	// Try upgrading zone 3 blocks from head (real re-render at higher level).
+	// Runs in a single O(N) pass, updating the running token total incrementally
+	// (subtract old, add new) to avoid an O(N²) recount per block.
+	for i := range blocks {
+		b := &blocks[i]
+		if b.StepID <= 0 || b.Level >= 3 {
+			continue
+		}
+		oldTokens := len(b.Content) / 4
+
+		// Real re-render at ref.Level+1 via the rendered cache (key: (stepID, level)).
+		// The raised level is a temporary window pad only, NOT persisted — the next
+		// BuildContext re-renders at the actual stored level.
+		ref, err := h.store.GetRef(b.StepID)
+		if err == nil {
+			ref.Level = b.Level + 1
+			if rendered, rerr := RenderStepWithCache(b.StepID, *ref, h.renderCache, h.store); rerr == nil {
+				newTokens := len(rendered.Content) / 4
+				totalTokens += newTokens - oldTokens
+				*b = rendered
+				if totalTokens <= windowTokens {
+					break
+				}
+				continue
+			}
 		}
 
-		// Recount
-		totalTokens = 0
-		for _, bl := range blocks {
-			totalTokens += len(bl.Content) / 4
-		}
+		// Fallback: truncate preserving the ⟨§N·type·Lx⟩ marker.
+		keep := len(b.Content) / 2
+		truncated := truncateRespectingMarker(b.Content, keep)
+		totalTokens += len(truncated)/4 - oldTokens
+		b.Content = truncated
 		if totalTokens <= windowTokens {
 			break
 		}
 	}
 
 	return blocks
+}
+
+// truncateRespectingMarker truncates a rendered block's body while preserving the
+// leading ⟨§N·type·Lx⟩ marker and any trailing structural closing tag
+// (</constitutional> / [/facts]). It returns the original content unchanged when
+// keep <= 0 or the body is already within budget.
+func truncateRespectingMarker(content string, keep int) string {
+	// Locate the marker prefix ⟨§N·type·Lx⟩ at the start.
+	markerEnd := strings.Index(content, "⟩")
+	if markerEnd < 0 {
+		markerEnd = 0
+	} else {
+		markerEnd++ // include the closing ⟩
+		// Skip the separator space following the marker.
+		if markerEnd < len(content) && content[markerEnd] == ' ' {
+			markerEnd++
+		}
+	}
+	marker := content[:markerEnd]
+	body := content[markerEnd:]
+
+	// Detect trailing structural closing tags to re-add after truncation.
+	suffix := ""
+	lower := strings.ToLower(body)
+	switch {
+	case strings.HasSuffix(lower, "</constitutional>"):
+		suffix = "</constitutional>"
+		body = body[:len(body)-len("</constitutional>")]
+	case strings.HasSuffix(lower, "[/facts]"):
+		suffix = "[/facts]"
+		body = body[:len(body)-len("[/facts]")]
+	}
+
+	// Only truncate when keep > 0 and the body exceeds the budget.
+	if keep <= 0 || len(body) <= keep {
+		return marker + body + suffix
+	}
+
+	return marker + body[:keep] + "...[compressed]" + suffix
 }
 
 // TriggerCompression performs batch compression (§6.4 8-step process).
@@ -638,6 +695,15 @@ func (h *HybridManager) reindex(ctx context.Context) {
 	for _, id := range ids {
 		ref, rerr := h.store.GetRef(id)
 		if rerr != nil {
+			continue
+		}
+		// A-12: skip transient steps (tool call fragments) from the indexes, matching
+		// the BuildContext filter.
+		step, serr := h.store.GetStep(id)
+		if serr != nil {
+			continue
+		}
+		if step.Transient {
 			continue
 		}
 		content, cerr := h.renderStepContent(id, ref.Level)
@@ -870,7 +936,12 @@ func (h *HybridManager) MarkTransient(stepID int, scope string, round int) error
 	step.Transient = true
 	step.TransientScope = scope
 	step.TransientRound = round
-	return h.store.AppendStep(*step)
+	if err := h.store.AppendStep(*step); err != nil {
+		return err
+	}
+	// Transient updates the corpus, so the fusion indexes (kw/recency) are stale.
+	h.markFusionDirty()
+	return nil
 }
 
 // ClearStaleTransients removes transient steps from the active set.

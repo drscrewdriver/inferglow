@@ -101,13 +101,16 @@ type RebackgroundRequest struct {
 // only when CheckProhibitionChange=true.
 // Additive-only method; ContextManager interface unchanged.
 func (h *HybridManager) Rebackground(req RebackgroundRequest) {
-	// L4: rebuild task background block
-	blocks := []RenderedBlock{{
-		StepID:  0,
-		Level:   0,
-		Content: req.NewTaskDescription,
-	}}
-	h.RewriteHeadBuffer(blocks, fmt.Sprintf("rebg-%d", h.headSeq+1))
+	// L4: rebuild task background block. An empty description must NOT clobber the
+	// existing L4 head buffer, so the rewrite is skipped entirely when empty.
+	if req.NewTaskDescription != "" {
+		blocks := []RenderedBlock{{
+			StepID:  0,
+			Level:   0,
+			Content: req.NewTaskDescription,
+		}}
+		h.RewriteHeadBuffer(blocks, fmt.Sprintf("rebg-%d", h.headSeq+1))
+	}
 
 	// L5: conditionally refresh prohibitions
 	if req.CheckProhibitionChange && len(req.NewProhibitions) > 0 {

@@ -29,6 +29,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -67,7 +68,10 @@ func (s *Store) initTables(ctx context.Context) error {
 			token_count INTEGER NOT NULL DEFAULT 0,
 			tool_name TEXT DEFAULT '',
 			key_params TEXT DEFAULT '',
-			created_at BIGINT DEFAULT 0
+			created_at BIGINT DEFAULT 0,
+			transient BOOLEAN NOT NULL DEFAULT false,
+			transient_scope TEXT DEFAULT '',
+			transient_round INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS refs (
 			step_id INTEGER PRIMARY KEY,
@@ -116,6 +120,19 @@ func (s *Store) initTables(ctx context.Context) error {
 			return fmt.Errorf("create table: %w", err)
 		}
 	}
+
+	// Idempotent migration for existing databases: add transient columns if
+	// missing. Failures are logged but never block startup.
+	migrations := []string{
+		`ALTER TABLE steps ADD COLUMN IF NOT EXISTS transient BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE steps ADD COLUMN IF NOT EXISTS transient_scope TEXT DEFAULT ''`,
+		`ALTER TABLE steps ADD COLUMN IF NOT EXISTS transient_round INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, m := range migrations {
+		if _, err := s.db.ExecContext(ctx, m); err != nil {
+			log.Printf("postgres store: migrate steps: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -123,10 +140,12 @@ func (s *Store) AppendStep(step contextmgr.StepRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO steps (step_id, type, role, content, token_count, tool_name, key_params, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		 ON CONFLICT (step_id) DO UPDATE SET content=EXCLUDED.content, token_count=EXCLUDED.token_count`,
+		`INSERT INTO steps (step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		 ON CONFLICT (step_id) DO UPDATE SET content=EXCLUDED.content, token_count=EXCLUDED.token_count,
+		 transient=EXCLUDED.transient, transient_scope=EXCLUDED.transient_scope, transient_round=EXCLUDED.transient_round`,
 		step.StepID, step.Type, step.Role, step.Content, step.TokenCount, step.ToolName, step.KeyParams, step.CreatedAt,
+		step.Transient, step.TransientScope, step.TransientRound,
 	)
 	return err
 }
@@ -136,8 +155,8 @@ func (s *Store) GetStep(stepID int) (*contextmgr.StepRecord, error) {
 	defer s.mu.RUnlock()
 	var rec contextmgr.StepRecord
 	err := s.db.QueryRow(
-		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at FROM steps WHERE step_id=$1`, stepID,
-	).Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt)
+		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round FROM steps WHERE step_id=$1`, stepID,
+	).Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt, &rec.Transient, &rec.TransientScope, &rec.TransientRound)
 	if err != nil {
 		return nil, fmt.Errorf("step %d not found: %w", stepID, err)
 	}
@@ -148,7 +167,7 @@ func (s *Store) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
-		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at
+		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round
 		 FROM steps WHERE step_id BETWEEN $1 AND $2 ORDER BY step_id`, from, to,
 	)
 	if err != nil {
@@ -158,7 +177,7 @@ func (s *Store) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) {
 	var result []contextmgr.StepRecord
 	for rows.Next() {
 		var rec contextmgr.StepRecord
-		if err := rows.Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt, &rec.Transient, &rec.TransientScope, &rec.TransientRound); err != nil {
 			return nil, err
 		}
 		result = append(result, rec)

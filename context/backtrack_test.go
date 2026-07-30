@@ -203,3 +203,39 @@ func TestRebackgroundNarrow(t *testing.T) {
 		t.Errorf("prohibitions should NOT change when CheckProhibitionChange=false; got %v", entries2)
 	}
 }
+
+// TestRebackgroundEmptyDescriptionKeepsHead verifies B2: an empty task
+// description must NOT clobber the existing L4 head buffer nor archive a new
+// version, while L5 prohibition changes still apply.
+func TestRebackgroundEmptyDescriptionKeepsHead(t *testing.T) {
+	store := newFakeStore()
+	cfg := DefaultConfig()
+	mgr, _ := NewHybridManager(cfg, store)
+	h := mgr.(*HybridManager)
+
+	h.SetHeadBuffer([]RenderedBlock{{Content: "original L4"}}, "init")
+
+	// Empty description + prohibition change.
+	h.Rebackground(RebackgroundRequest{
+		NewTaskDescription:     "",
+		NewProhibitions:        []string{"no rm"},
+		CheckProhibitionChange: true,
+	})
+
+	// L4 must be preserved as-is.
+	heads := h.HeadBlocks()
+	if len(heads) != 1 || heads[0].Content != "original L4" {
+		t.Errorf("empty description must not overwrite L4; got %v", heads)
+	}
+
+	// No new archive version should be created for an empty rewrite.
+	if a := h.GetArchivedHeads(); len(a) != 0 {
+		t.Errorf("empty description must not archive a version; got %d", len(a))
+	}
+
+	// L5 prohibition change still applies.
+	entries := h.GetConstitutionalContent()
+	if len(entries) != 1 || entries[0] != "no rm" {
+		t.Errorf("L5 prohibition change should still apply; got %v", entries)
+	}
+}

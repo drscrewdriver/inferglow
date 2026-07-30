@@ -28,6 +28,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -61,7 +62,10 @@ func (s *Store) initTables() error {
 		`CREATE TABLE IF NOT EXISTS steps (
 			step_id INTEGER PRIMARY KEY,
 			type TEXT, role TEXT, content TEXT, token_count INTEGER,
-			tool_name TEXT, key_params TEXT, created_at INTEGER
+			tool_name TEXT, key_params TEXT, created_at INTEGER,
+			transient INTEGER DEFAULT 0,
+			transient_scope TEXT DEFAULT '',
+			transient_round INTEGER DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS refs (
 			step_id INTEGER PRIMARY KEY,
@@ -95,7 +99,46 @@ func (s *Store) initTables() error {
 			return fmt.Errorf("create table: %w", err)
 		}
 	}
+	s.migrateSteps()
 	return nil
+}
+
+// migrateSteps ensures the transient columns exist on the steps table for
+// existing databases. Migration is idempotent (columns are probed via
+// PRAGMA table_info first); failures are logged but never block startup.
+func (s *Store) migrateSteps() {
+	cols, err := s.db.Query(`PRAGMA table_info(steps)`)
+	if err != nil {
+		log.Printf("sqlite store: probe steps columns: %v", err)
+		return
+	}
+	defer cols.Close()
+
+	existing := make(map[string]bool)
+	for cols.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt *string
+		if err := cols.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			log.Printf("sqlite store: read steps columns: %v", err)
+			return
+		}
+		existing[name] = true
+	}
+
+	add := []struct{ name, ddl string }{
+		{"transient", `ALTER TABLE steps ADD COLUMN transient INTEGER DEFAULT 0`},
+		{"transient_scope", `ALTER TABLE steps ADD COLUMN transient_scope TEXT DEFAULT ''`},
+		{"transient_round", `ALTER TABLE steps ADD COLUMN transient_round INTEGER DEFAULT 0`},
+	}
+	for _, c := range add {
+		if existing[c.name] {
+			continue
+		}
+		if _, err := s.db.Exec(c.ddl); err != nil {
+			log.Printf("sqlite store: migrate steps: %v", err)
+		}
+	}
 }
 
 func (s *Store) AppendStep(step contextmgr.StepRecord) error {
@@ -103,9 +146,10 @@ func (s *Store) AppendStep(step contextmgr.StepRecord) error {
 	defer s.mu.Unlock()
 
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO steps (step_id, type, role, content, token_count, tool_name, key_params, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO steps (step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		step.StepID, step.Type, step.Role, step.Content, step.TokenCount, step.ToolName, step.KeyParams, step.CreatedAt,
+		step.Transient, step.TransientScope, step.TransientRound,
 	)
 	return err
 }
@@ -116,9 +160,9 @@ func (s *Store) GetStep(stepID int) (*contextmgr.StepRecord, error) {
 
 	var rec contextmgr.StepRecord
 	err := s.db.QueryRow(
-		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at FROM steps WHERE step_id = ?`,
+		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round FROM steps WHERE step_id = ?`,
 		stepID,
-	).Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt)
+	).Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt, &rec.Transient, &rec.TransientScope, &rec.TransientRound)
 	if err != nil {
 		return nil, fmt.Errorf("step %d not found: %w", stepID, err)
 	}
@@ -130,7 +174,7 @@ func (s *Store) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at
+		`SELECT step_id, type, role, content, token_count, tool_name, key_params, created_at, transient, transient_scope, transient_round
 		 FROM steps WHERE step_id BETWEEN ? AND ? ORDER BY step_id`,
 		from, to,
 	)
@@ -142,7 +186,7 @@ func (s *Store) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) {
 	var result []contextmgr.StepRecord
 	for rows.Next() {
 		var rec contextmgr.StepRecord
-		if err := rows.Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.StepID, &rec.Type, &rec.Role, &rec.Content, &rec.TokenCount, &rec.ToolName, &rec.KeyParams, &rec.CreatedAt, &rec.Transient, &rec.TransientScope, &rec.TransientRound); err != nil {
 			return nil, err
 		}
 		result = append(result, rec)
