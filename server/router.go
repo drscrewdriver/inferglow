@@ -149,6 +149,21 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("DELETE /v1/skill-hub/{name}", s.handleDeleteSkill)
 	api.HandleFunc("POST /v1/skill-hub/{name}/execute", s.handleExecuteSkill)
 
+	// Knowledge Base management (C-8)
+	api.HandleFunc("POST /v1/knowledge-bases", s.handleCreateKnowledgeBase)
+	api.HandleFunc("GET /v1/knowledge-bases", s.handleListKnowledgeBases)
+	api.HandleFunc("GET /v1/knowledge-bases/{name}", s.handleGetKnowledgeBase)
+	api.HandleFunc("DELETE /v1/knowledge-bases/{name}", s.handleDeleteKnowledgeBase)
+	api.HandleFunc("POST /v1/knowledge-bases/{name}/ingest", s.handleIngestKnowledgeBase)
+	api.HandleFunc("POST /v1/knowledge-bases/{name}/search", s.handleSearchKnowledgeBase)
+
+	// MCP Hub management (C-9)
+	api.HandleFunc("GET /v1/mcp-hub", s.handleListMCPTools)
+	api.HandleFunc("POST /v1/mcp-hub", s.handleInstallMCPTool)
+	api.HandleFunc("GET /v1/mcp-hub/{name}", s.handleGetMCPTool)
+	api.HandleFunc("DELETE /v1/mcp-hub/{name}", s.handleDeleteMCPTool)
+	api.HandleFunc("POST /v1/mcp-hub/{name}/call", s.handleCallMCPTool)
+
 	// OpenAPI spec
 	api.HandleFunc("GET /openapi.json", handler.OpenAPISpec)
 

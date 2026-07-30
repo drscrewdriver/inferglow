@@ -28,14 +28,20 @@ replace github.com/inferglow/messagebus => ../messagebus
 
 replace github.com/inferglow/workspace => ../workspace
 
+replace github.com/inferglow/rag => ../rag
+
+replace github.com/inferglow/mcpserver => ../mcpserver
+
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/audit v0.0.0
 	github.com/inferglow/flow v0.0.0-00010101000000-000000000000
+	github.com/inferglow/mcpserver v0.0.0
 	github.com/inferglow/messagebus v0.0.0-00010101000000-000000000000
 	github.com/inferglow/observability v0.0.0
 	github.com/inferglow/orchestrator v0.0.0-00010101000000-000000000000
+	github.com/inferglow/rag v0.0.0
 	github.com/inferglow/storage v0.0.0-00010101000000-000000000000
 	github.com/inferglow/workspace v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1

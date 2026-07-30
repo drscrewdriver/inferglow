@@ -75,6 +75,8 @@ type Server struct {
 	credStore      *CredentialStore
 	wsProvider     WorkspaceProvider
 	skillStore     *SkillStore
+	kbStore        *KBStore
+	mcpHubStore    *MCPHubStore
 }
 
 // MemoryRecord represents a persistent memory entry.
@@ -357,6 +359,21 @@ func (s *Server) SetWorkspaceProvider(p WorkspaceProvider) {
 // action.ActionRegistry).
 func (s *Server) SetSkillStore(st *SkillStore) {
 	s.skillStore = st
+}
+
+// SetKBStore attaches the C-8 Knowledge Base store. When set, the
+// /v1/knowledge-bases endpoints create, list, inspect, delete and search
+// knowledge bases (reusing the rag module's Loader/Splitter/Store contracts
+// through a thin in-memory adapter).
+func (s *Server) SetKBStore(st *KBStore) {
+	s.kbStore = st
+}
+
+// SetMCPHubStore attaches the C-9 MCP Hub store. When set, the /v1/mcp-hub
+// endpoints list, install, inspect, remove and call MCP tools (reusing
+// mcpserver's ActionRegistryAdapter for discovery and invocation).
+func (s *Server) SetMCPHubStore(st *MCPHubStore) {
+	s.mcpHubStore = st
 }
 
 // SemanticMemoryStore is an optional interface that MemoryStore
