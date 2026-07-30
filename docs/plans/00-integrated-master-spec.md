@@ -91,7 +91,7 @@ const (
 
 #### A-1: 9层装配模型
 
-**目标文件**：`inferglow/orchestrator/assembly/` 目录（新建）
+**目标文件**：`context/assembly.go` + `context/layer.go`（已落地）
 
 **关键类型**：
 ```go
@@ -121,7 +121,7 @@ type LayerContent struct {
 
 #### A-2: 两步装配
 
-**目标文件**：`inferglow/orchestrator/assembly/manager.go`
+**目标文件**：`context/assembly.go`（已落地）
 
 ```go
 type AssemblyManager interface {
@@ -156,7 +156,7 @@ type AssemblyManager interface {
 
 #### A-4: 前缀缓存策略
 
-**目标文件**：`inferglow/orchestrator/assembly/cache.go`
+**目标文件**：`context/render_cache.go`（已落地）
 
 **三级缓存**：
 ```go
@@ -182,7 +182,7 @@ type CacheConfig struct {
 
 #### A-5: 跨组老化调制
 
-**目标文件**：`inferglow/orchestrator/decay.go`（修改现有文件）
+**目标文件**：`context/decay.go`（已落地）
 
 **替换逻辑**：
 ```go
@@ -207,7 +207,7 @@ func crossGroupMod(ref RefRecord, currentGroupID int) float64 {
 
 #### A-6: DecayTrace
 
-**目标文件**：`inferglow/orchestrator/decay_trace.go`（新建）
+**目标文件**：`context/decay.go`（已落地）
 
 ```go
 type DecayTrace struct {
@@ -228,7 +228,7 @@ type DecayTrace struct {
 
 #### A-7: 检索 2+1
 
-**目标文件**：`inferglow/orchestrator/assembly/retrieval.go`（新建）
+**目标文件**：`context/retrieval/`（已落地）
 
 **三路**：
 1. 语义相似度（embedding cosine）
@@ -263,7 +263,7 @@ Layer 6 注入时按 `Strength` 或 `RefCount` 降序排列，直接输出数字
 
 #### A-10: 快慢系统
 
-**目标文件**：`inferglow/orchestrator/fastslow/` 目录（新建）
+**目标文件**：`context/compress/`（已落地，快慢系统为未来实现）
 
 | 维度 | 慢系统（主LLM） | 快系统（小模型） |
 |------|----------------|-----------------|
@@ -623,14 +623,14 @@ type MessageBus interface {
 | C-5 | Scheduler 管理 | `server/handlers_schedule.go` + `server/schedule_store.go` | ✅ 完成 |
 | C-6 | 凭据管理 | `server/handlers_credential.go` + `server/credential_store.go` | ✅ 完成 |
 | C-7 | Workspace 管理 API | `server/handlers_workspace.go` | ✅ 完成 |
+| C-8 | Knowledge Base 管理 | `server/handlers_kb.go` + `server/kb_store.go` | ✅ 完成 |
+| C-9 | MCP Hub 管理 | `server/handlers_mcphub.go` + `server/mcphub_store.go` | ✅ 完成 |
 | C-10 | Skill Hub 管理 | `server/handlers_skill_hub.go` + `server/skill_store.go` | ✅ 完成（依赖 action.ActionRegistry，只读复用） |
 
 **挂起任务（有风险，暂缓到 G3 白名单外条件满足）**：
 
 | 编号 | 交付物 | 挂起原因 | 解锁条件 |
 |------|--------|---------|---------|
-| C-8 | Knowledge Base 管理 | 依赖 `rag.Store`，仓库当前缺失该模块（rag 仅含 Loader/Splitter 雏形），需自建适配层 | rag 模块落地 `Store` 后接入，或 G3 内另行实现薄适配层 |
-| C-9 | MCP Hub 管理 | 依赖 `mcpserver`，server 未 require 该模块，且市场（marketplace）浏览/安装语义未定义 | `mcpserver` 模块存在并暴露 Market/Install API 后接线 |
 | C-11 | 前端集成 | 超出 G3 白名单（`server/**` 之外），需前端目录 + embed 构建，跨分支冲突风险高 | 前端目录纳入可写范围，或由持有前端分支的 lane 承接 |
 
 > 说明：C-10 为本次 G3 追加实现。SkillStore 对 action 包保持只读依赖（action 归 G1 领地），删除采用软删除（shadow set）实现，因为 action.ActionRegistry 无 unregister 方法。
