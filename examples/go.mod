@@ -3,16 +3,13 @@ module github.com/inferglow/examples
 go 1.25.0
 
 require (
-	github.com/fsnotify/fsnotify v1.10.1
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/audit v0.0.0
+	github.com/inferglow/context v0.0.0
 	github.com/inferglow/model v0.0.0
 	github.com/inferglow/orchestrator v0.0.0
 	github.com/inferglow/sandbox v0.0.0
-	github.com/inferglow/schema v0.0.0
-	github.com/inferglow/server v0.0.0
 	github.com/inferglow/session v0.0.0
-	github.com/inferglow/workspace v0.0.0
 )
 
 require (
@@ -58,6 +55,8 @@ replace github.com/inferglow/session => ./../session
 replace github.com/inferglow/sandbox => ./../sandbox
 
 replace github.com/inferglow/audit => ./../audit
+
+replace github.com/inferglow/context => ./../context
 
 replace github.com/inferglow/orchestrator => ./../orchestrator
 
