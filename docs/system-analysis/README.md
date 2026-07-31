@@ -136,7 +136,10 @@ go run example_quickstart.go
 
 | 文档 | 位置 | 内容 |
 |------|------|------|
+| 能力使用指南 | [docs/guides/](../guides/README.md) | 面向用户的能力使用指南（工具组织与调度、上下文管理） |
 | 架构深度分析 | [ARCHITECTURE.md](../../ARCHITECTURE.md) | 12 章完整架构分析 |
 | 扩展机制 | [EXTENDING.md](../../docs/EXTENDING.md) | 7 种扩展机制 |
 | 上游缺口 | [upstream-gaps.md](../../docs/upstream-gaps.md) | inferglow 待完善能力清单 |
 | README | [README.md](../../README.md) | 项目快速入门 |
+
+> **与 `docs/guides/` 的分层关系**：本目录（`system-analysis/`）面向**源码理解**——讲解模块如何组织、内部如何实现、为何这样设计；`docs/guides/` 面向**能力使用**——告诉你某项能力怎么用（API、代码片段、模式选择）。两者互补不重复：想“怎么用”查 guides，想“怎么实现”查本目录。

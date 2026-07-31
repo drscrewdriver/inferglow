@@ -188,8 +188,10 @@ go run -tags with_sandbox example_sandbox_enabled.go
 | 8 | `example_workspace.go` | 安全文件操作 | 5 min |
 | 9 | `example_pluggable.go` | 接口注入安全特性 | 10 min |
 | 10 | `example_sandbox_enabled.go` | 沙箱执行（需 build tag） | 10 min |
+| 11 | `example_toolgroup.go` | 按组注册/列举/过滤工具（ToolGroup） | 5 min |
+| 12 | `example_context.go` | 上下文管理（Mode/Ingest/渲染/transient） | 5 min |
 
-> **推荐路径**：先跑 `example_quickstart.go` 感受全貌，再按顺序学习 1→7→8→9→10。
+> **推荐路径**：先跑 `example_quickstart.go` 感受全貌，再按顺序学习 1→7→8→9→10；需要工具组织或上下文管理时，可同时查阅 [`docs/guides/`](./docs/guides/README.md) 能力使用指南（工具组织与调度、上下文管理）。
 
 ### 4. 编译配置
 
