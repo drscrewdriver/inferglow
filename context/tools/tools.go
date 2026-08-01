@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/inferglow/context"
 )
@@ -86,8 +87,12 @@ func RegisterContextToolsWithStore(reg Registry, mgr contextmgr.ContextManager, 
 	// context_trace: only if we have a step store
 	if store != nil {
 		reg.Register(&ContextTraceTool{store: store})
+		reg.Register(&ContextLockL0Tool{store: store})
+		reg.Register(&ContextUnlockL0Tool{store: store})
 	} else if sp, ok := mgr.(StepStoreProvider); ok {
 		reg.Register(&ContextTraceTool{store: sp.StepStore()})
+		reg.Register(&ContextLockL0Tool{store: sp.StepStore()})
+		reg.Register(&ContextUnlockL0Tool{store: sp.StepStore()})
 	}
 }
 
@@ -240,7 +245,7 @@ type ContextExpandTool struct {
 }
 
 func (t *ContextExpandTool) Name() string        { return "context_expand" }
-func (t *ContextExpandTool) Description() string  { return "展开某个 step 的原文（从 L0 恢复）" }
+func (t *ContextExpandTool) Description() string  { return "展开某个 step 的内容（默认 L1 精简，full=true 返回 L0 原文）" }
 func (t *ContextExpandTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"step_id":{"type":"integer"},"full":{"type":"boolean"}},"required":["step_id"]}`)
 }
@@ -251,14 +256,19 @@ func (t *ContextExpandTool) Execute(ctx context.Context, input json.RawMessage) 
 		return nil, fmt.Errorf("context_expand: invalid input: %w", err)
 	}
 
-	result, err := t.mgr.Expand(in.StepID)
+	result, err := t.mgr.Expand(in.StepID, in.Full)
 	if err != nil {
 		return nil, fmt.Errorf("context_expand: %w", err)
 	}
 
 	// Append context_tool hint feedback (§8B.5)
 	windowPressure := estimatePressure(t.mgr)
-	hint := fmt.Sprintf("[context_tool] expand §%d → 原文 %d tokens | 当前窗口压力: %.0f%%", in.StepID, result.Tokens, windowPressure*100)
+	levelLabel := map[int]string{0: "L0原文", 1: "L1精简", 2: "L2事实", 3: "L3掩码"}
+	label := levelLabel[result.Level]
+	if _, ok := levelLabel[result.Level]; !ok {
+		label = fmt.Sprintf("L%d", result.Level)
+	}
+	hint := fmt.Sprintf("[context_tool] expand §%d → %s %d tokens | 当前窗口压力: %.0f%%", in.StepID, label, result.Tokens, windowPressure*100)
 
 	return json.Marshal(map[string]interface{}{
 		"step_id":       result.StepID,
@@ -267,6 +277,145 @@ func (t *ContextExpandTool) Execute(ctx context.Context, input json.RawMessage) 
 		"token_count":   result.Tokens,
 		"warning":       result.Warning,
 		"hint":          hint,
+	})
+}
+
+// --- context_lock_l0 (强制锁 L0 + 记录报告) ---
+
+// ContextLockL0Tool implements context_lock_l0.
+// Forces a step to stay at L0 (original), preventing any compression.
+// The action is logged/reported for audit.
+type ContextLockL0Tool struct {
+	store contextmgr.StepStoreLike
+}
+
+func (t *ContextLockL0Tool) Name() string        { return "context_lock_l0" }
+func (t *ContextLockL0Tool) Description() string  { return "强制锁定某 step 在 L0 原文，禁止压缩（需记录报告）" }
+func (t *ContextLockL0Tool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"step_id":{"type":"integer"},"reason":{"type":"string"}},"required":["step_id"]}`)
+}
+
+func (t *ContextLockL0Tool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	var in struct {
+		StepID int    `json:"step_id"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, fmt.Errorf("context_lock_l0: invalid input: %w", err)
+	}
+
+	ref, err := t.store.GetRef(in.StepID)
+	if err != nil {
+		return nil, fmt.Errorf("context_lock_l0: step %d not found: %w", in.StepID, err)
+	}
+
+	if ref.LockL0 {
+		return json.Marshal(map[string]interface{}{
+			"step_id": in.StepID,
+			"locked":  true,
+			"message": fmt.Sprintf("step %d 已锁定在 L0", in.StepID),
+		})
+	}
+
+	now := time.Now().Unix()
+	reason := in.Reason
+	if reason == "" {
+		reason = "未提供原因"
+	}
+
+	// 1. Update ref record — just the lock flag
+	ref.LockL0 = true
+	if err := t.store.UpsertRef(*ref); err != nil {
+		return nil, fmt.Errorf("context_lock_l0: upsert failed: %w", err)
+	}
+
+	// 2. Append audit log (append-only, immutable) — source of truth for when/why
+	audit := contextmgr.AuditRecord{
+		Timestamp: now,
+		Action:    "lock_l0",
+		StepID:    in.StepID,
+		Reason:    reason,
+		Detail:    fmt.Sprintf("refs.jsonl → lock_l0=true"),
+	}
+	_ = t.store.AppendAudit(audit) // best-effort
+
+	// 3. Return report
+	report := fmt.Sprintf("[lock_l0] step %d 已强制锁定在 L0 | 原因: %s", in.StepID, reason)
+	return json.Marshal(map[string]interface{}{
+		"step_id": in.StepID,
+		"locked":  true,
+		"level":   0,
+		"report":  report,
+		"message": fmt.Sprintf("step %d 已锁定在 L0，不再被压缩", in.StepID),
+	})
+}
+
+// --- context_unlock_l0 (对称释放 L0 锁定) ---
+
+// ContextUnlockL0Tool implements context_unlock_l0.
+// Releases a previous L0 lock, allowing the step to be compressed normally.
+// The action is logged/reported for audit.
+type ContextUnlockL0Tool struct {
+	store contextmgr.StepStoreLike
+}
+
+func (t *ContextUnlockL0Tool) Name() string        { return "context_unlock_l0" }
+func (t *ContextUnlockL0Tool) Description() string  { return "释放某 step 的 L0 锁定，允许正常压缩（需记录报告）" }
+func (t *ContextUnlockL0Tool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"step_id":{"type":"integer"},"reason":{"type":"string"}},"required":["step_id"]}`)
+}
+
+func (t *ContextUnlockL0Tool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	var in struct {
+		StepID int    `json:"step_id"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, fmt.Errorf("context_unlock_l0: invalid input: %w", err)
+	}
+
+	ref, err := t.store.GetRef(in.StepID)
+	if err != nil {
+		return nil, fmt.Errorf("context_unlock_l0: step %d not found: %w", in.StepID, err)
+	}
+
+	if !ref.LockL0 {
+		return json.Marshal(map[string]interface{}{
+			"step_id": in.StepID,
+			"locked":  false,
+			"message": fmt.Sprintf("step %d 未锁定", in.StepID),
+		})
+	}
+
+	now := time.Now().Unix()
+	reason := in.Reason
+	if reason == "" {
+		reason = "未提供原因"
+	}
+
+	// 1. Update ref record — clear the lock flag
+	ref.LockL0 = false
+	if err := t.store.UpsertRef(*ref); err != nil {
+		return nil, fmt.Errorf("context_unlock_l0: upsert failed: %w", err)
+	}
+
+	// 2. Append audit log
+	audit := contextmgr.AuditRecord{
+		Timestamp: now,
+		Action:    "unlock_l0",
+		StepID:    in.StepID,
+		Reason:    reason,
+		Detail:    fmt.Sprintf("refs.jsonl → lock_l0=false"),
+	}
+	_ = t.store.AppendAudit(audit) // best-effort
+
+	// 3. Return report
+	report := fmt.Sprintf("[unlock_l0] step %d L0 锁定已释放 | 原因: %s", in.StepID, reason)
+	return json.Marshal(map[string]interface{}{
+		"step_id": in.StepID,
+		"locked":  false,
+		"report":  report,
+		"message": fmt.Sprintf("step %d 已释放 L0 锁定，可被压缩", in.StepID),
 	})
 }
 

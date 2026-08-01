@@ -79,7 +79,7 @@ func (p *PassthroughManager) SearchLongMem(ctx context.Context, query string, ca
 	return nil, nil
 }
 
-func (p *PassthroughManager) Expand(stepID int) (*ExpandResult, error) {
+func (p *PassthroughManager) Expand(stepID int, full bool) (*ExpandResult, error) {
 	step, err := p.store.GetStep(stepID)
 	if err != nil {
 		return nil, err

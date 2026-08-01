@@ -113,6 +113,13 @@ func (s *Store) initTables(ctx context.Context) error {
 			last_validated_step INTEGER NOT NULL DEFAULT 0,
 			confidence REAL NOT NULL DEFAULT 0.8
 		)`,
+		`CREATE TABLE IF NOT EXISTS audit (
+			ts BIGINT NOT NULL,
+			action TEXT NOT NULL,
+			step_id INTEGER NOT NULL,
+			reason TEXT DEFAULT '',
+			detail TEXT DEFAULT ''
+		)`,
 	}
 
 	for _, t := range tables {
@@ -435,4 +442,14 @@ func (s *Store) RemoveLongMem(memID string) error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) AppendAudit(rec contextmgr.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO audit (ts, action, step_id, reason, detail) VALUES ($1, $2, $3, $4, $5)`,
+		rec.Timestamp, rec.Action, rec.StepID, rec.Reason, rec.Detail,
+	)
+	return err
 }

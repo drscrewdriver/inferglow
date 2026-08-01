@@ -113,7 +113,9 @@ func MechanicalL2(content string) string {
 }
 
 // MechanicalL3 generates a structural mask without LLM (§4.4).
+// Format: [掩码 step_N|原X t|tool|params] {工具名称用法} 总token量
 func MechanicalL3(stepID int, toolName, keyParams, content string) string {
 	tokenCount := len(content) / 4
-	return fmt.Sprintf("[掩码 step_%d|原%dt|%s|%s] (机械掩码)", stepID, tokenCount, toolName, keyParams)
+	return fmt.Sprintf("[掩码 step_%d|原%dt|%s|%s] 工具:%s 总%dt",
+		stepID, tokenCount, toolName, keyParams, toolName, tokenCount)
 }

@@ -252,7 +252,7 @@ func (sm *SummaryManager) SearchLongMem(_ context.Context, query string, categor
 }
 
 // Expand retrieves original content for a step.
-func (sm *SummaryManager) Expand(stepID int) (*ExpandResult, error) {
+func (sm *SummaryManager) Expand(stepID int, full bool) (*ExpandResult, error) {
 	step, err := sm.store.GetStep(stepID)
 	if err != nil {
 		return nil, err

@@ -28,7 +28,7 @@ func BuildPrompt(level int, stepID int, toolName, keyParams, content string) str
 	case 1:
 		return buildL1Prompt(content)
 	case 2:
-		return buildL2Prompt(content)
+		return buildL2Prompt(stepID, toolName, keyParams, content)
 	case 3:
 		return buildL3Prompt(stepID, toolName, keyParams, content)
 	default:
@@ -53,18 +53,25 @@ func buildL1Prompt(content string) string {
 }
 
 // buildL2Prompt builds the L2 fact extraction prompt (§4.2).
-func buildL2Prompt(content string) string {
-	return `[System]
+// Output format: first line is mask header, followed by facts.
+func buildL2Prompt(stepID int, toolName, keyParams, content string) string {
+	tokenCount := len(content) / 4
+	return fmt.Sprintf(`[System]
 你是一个事实提取器。从输入内容中提取关键事实：
-- 保留：文件路径、配置键值对、错误消息原文、命令及其关键输出、决策结论
+- 提取：文件路径、配置键值、错误消息原文、决策结论
 - 丢弃：推理过程、尝试性探索、中间计算、已被后续结论覆盖的假设
-- 格式：每行一个事实，前缀 "[事实] "
+- 格式：第一行输出掩码头 "[掩码 step_N|原X t|tool|params]"，后续每行一个事实，前缀 "[事实] "
 - 若内容为工具调用结果，保留 [call] 摘要（工具名+关键参数）+ [result] 关键行
 
-输出提取的事实列表，不要添加解释。
+输出掩码头 + 事实列表，不要添加其他解释。
 
 [User]
-` + content
+step_id: %d
+token_count: %d
+tool_name: %s
+key_params: %s
+content:
+%s`, stepID, tokenCount, toolName, keyParams, content)
 }
 
 // buildL3Prompt builds the L3 mask generation prompt (§4.3).

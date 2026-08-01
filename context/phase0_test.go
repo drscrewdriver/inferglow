@@ -59,6 +59,7 @@ func (f *fakeStore) GetLongMem(id string) (*LongMemRecord, error) {
 }
 func (f *fakeStore) SearchLongMem(string, string, int) ([]LongMemRecord, error) { return nil, nil }
 func (f *fakeStore) RemoveLongMem(string) error { return nil }
+func (f *fakeStore) AppendAudit(AuditRecord) error { return nil }
 func (f *fakeStore) Close() error { return nil }
 
 type sErr struct{ id int }

@@ -563,3 +563,11 @@ func (s *Store) Close() error {
 	s.closed = true
 	return nil
 }
+
+// --- audit (.audit.jsonl) ---
+
+func (s *Store) AppendAudit(rec contextmgr.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendJSONL(s.path(".audit.jsonl"), rec)
+}

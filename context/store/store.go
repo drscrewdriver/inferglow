@@ -83,6 +83,9 @@ type StepStore interface {
 
 	// --- lifecycle ---
 
+	// AppendAudit appends an append-only audit log entry.
+	AppendAudit(rec contextmgr.AuditRecord) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }

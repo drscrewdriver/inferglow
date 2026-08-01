@@ -49,6 +49,8 @@ type StepStoreLike interface {
 	GetLongMem(memID string) (*LongMemRecord, error)
 	SearchLongMem(query string, category string, limit int) ([]LongMemRecord, error)
 	RemoveLongMem(memID string) error
+	// AppendAudit appends an append-only audit log entry.
+	AppendAudit(rec AuditRecord) error
 	Close() error
 }
 

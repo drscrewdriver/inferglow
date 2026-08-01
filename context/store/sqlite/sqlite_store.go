@@ -92,6 +92,10 @@ func (s *Store) initTables() error {
 			last_validated_step INTEGER, confidence REAL
 		)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS steps_fts USING fts5(content, step_id UNINDEXED)`,
+		`CREATE TABLE IF NOT EXISTS audit (
+			ts INTEGER, action TEXT, step_id INTEGER,
+			reason TEXT, detail TEXT
+		)`,
 	}
 
 	for _, t := range tables {
@@ -452,4 +456,14 @@ func (s *Store) RemoveLongMem(memID string) error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) AppendAudit(rec contextmgr.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO audit (ts, action, step_id, reason, detail) VALUES (?, ?, ?, ?, ?)`,
+		rec.Timestamp, rec.Action, rec.StepID, rec.Reason, rec.Detail,
+	)
+	return err
 }

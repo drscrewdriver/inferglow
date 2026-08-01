@@ -76,8 +76,9 @@ type ContextManager interface {
 	// SearchLongMem searches long-term memory.
 	SearchLongMem(ctx context.Context, query string, category string, limit int) ([]LongMemRecord, error)
 
-	// Expand retrieves the original content for a step.
-	Expand(stepID int) (*ExpandResult, error)
+	// Expand retrieves content for a step.
+	// When full is true, returns L0 (original); when false, returns L1 (denoised) if available.
+	Expand(stepID int, full bool) (*ExpandResult, error)
 
 	// Surround retrieves context around a step.
 	Surround(stepID int, before, after int) ([]RenderedBlock, error)

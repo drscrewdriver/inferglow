@@ -132,7 +132,7 @@ func (t *ThreeZoneAdapter) SearchLongMem(ctx context.Context, query string, cate
 	return t.store.SearchLongMem(query, category, limit)
 }
 
-func (t *ThreeZoneAdapter) Expand(stepID int) (*ExpandResult, error) {
+func (t *ThreeZoneAdapter) Expand(stepID int, full bool) (*ExpandResult, error) {
 	step, err := t.store.GetStep(stepID)
 	if err != nil {
 		return nil, err

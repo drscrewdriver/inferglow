@@ -25,13 +25,13 @@ package contextmgr
 // tool call/result, reasoning block, etc.).
 type StepRecord struct {
 	StepID     int    `json:"step_id"`
-	Type       string `json:"type"`                  // "user" | "tool" | "reasoning" | "plan" | "failed"
-	Role       string `json:"role"`                  // "user" | "assistant" | "tool"
-	Content    string `json:"content"`               // full original content
-	TokenCount int    `json:"token_count"`           // token count of content
-	ToolName   string `json:"tool_name,omitempty"`   // for tool steps
-	KeyParams  string `json:"key_params,omitempty"`  // summarized key params
-	CreatedAt  int64  `json:"created_at,omitempty"`  // unix timestamp
+	Type       string `json:"type"`                 // "user" | "tool" | "reasoning" | "plan" | "failed"
+	Role       string `json:"role"`                 // "user" | "assistant" | "tool"
+	Content    string `json:"content"`              // full original content
+	TokenCount int    `json:"token_count"`          // token count of content
+	ToolName   string `json:"tool_name,omitempty"`  // for tool steps
+	KeyParams  string `json:"key_params,omitempty"` // summarized key params
+	CreatedAt  int64  `json:"created_at,omitempty"` // unix timestamp
 
 	// Causal tracking metadata (B1)
 	FilesRead     []string `json:"files_read,omitempty"`     // files read in this step
@@ -49,15 +49,15 @@ type StepRecord struct {
 // for each active step. Stored in {uuid}.refs.jsonl.
 type RefRecord struct {
 	StepID        int      `json:"step_id"`
-	Level         int      `json:"level"`                    // current compression level (0-3)
-	RefCount      int      `json:"ref_count"`                // cumulative §N citation count
-	LastRefAtStep *int     `json:"last_ref_at_step"`         // last step that cited this one
-	Strength      float64  `json:"strength"`                 // accumulated access strength (init 1.0, +0.1/ref)
-	TaskGroupID   int      `json:"task_group_id"`            // task group this step belongs to
-	TaskBoundary  bool     `json:"task_boundary"`            // whether this is the group's starting step
-	SemanticHold  bool     `json:"semantic_hold"`            // Redis semantic safety-net hold
-	PendingL4     bool     `json:"pending_l4"`               // idle consolidation pre-mark for L4
-	RelatedFiles  []string `json:"related_files,omitempty"`  // associated files (active edit → file_mod=0.3)
+	Level         int      `json:"level"`                   // current compression level (0-3)
+	RefCount      int      `json:"ref_count"`               // cumulative §N citation count
+	LastRefAtStep *int     `json:"last_ref_at_step"`        // last step that cited this one
+	Strength      float64  `json:"strength"`                // accumulated access strength (init 1.0, +0.1/ref)
+	TaskGroupID   int      `json:"task_group_id"`           // task group this step belongs to
+	TaskBoundary  bool     `json:"task_boundary"`           // whether this is the group's starting step
+	SemanticHold  bool     `json:"semantic_hold"`           // Redis semantic safety-net hold
+	PendingL4     bool     `json:"pending_l4"`              // idle consolidation pre-mark for L4
+	RelatedFiles  []string `json:"related_files,omitempty"` // associated files (active edit → file_mod=0.3)
 
 	// CrossGroupRefs is the number of cross-group citations (A-5 跨组引用计数).
 	// JSONL persists automatically; SQL backends currently leave it at zero
@@ -67,6 +67,20 @@ type RefRecord struct {
 	// JSONL persists automatically; SQL backends currently leave it at zero
 	// (column migration is deferred to a later wp). 0 acts as "no heat data".
 	Heat int `json:"heat"`
+
+	// LockL0 forces the step to stay at L0 (original), preventing any compression.
+	// Only settable via context_lock_l0 tool. Audit trail is in {uuid}.audit.jsonl.
+	LockL0 bool `json:"lock_l0"`
+}
+
+// AuditRecord is an append-only audit log entry stored in {uuid}.audit.jsonl.
+// Every lock/unlock and other policy-sensitive operations are recorded here.
+type AuditRecord struct {
+	Timestamp int64  `json:"ts"`     // unix timestamp
+	Action    string `json:"action"` // "lock_l0" | "unlock_l0" | ...
+	StepID    int    `json:"step_id"`
+	Reason    string `json:"reason,omitempty"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 // L1Record is the simple compression (denoised summary) stored in {uuid}.l1.jsonl.
@@ -117,7 +131,7 @@ type RenderedBlock struct {
 // StepSessionLink maps a step_id to its position in Session.FullContext.
 type StepSessionLink struct {
 	StepID    int    `json:"step_id"`
-	MsgIndex  int    `json:"msg_index"`  // FullContext index
+	MsgIndex  int    `json:"msg_index"` // FullContext index
 	SessionID string `json:"session_id"`
 }
 

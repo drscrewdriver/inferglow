@@ -127,8 +127,8 @@ func (a *AssemblyManager) SearchLongMem(ctx context.Context, query string, categ
 	return a.engine.SearchLongMem(ctx, query, category, limit)
 }
 
-func (a *AssemblyManager) Expand(stepID int) (*ExpandResult, error) {
-	return a.engine.Expand(stepID)
+func (a *AssemblyManager) Expand(stepID int, full bool) (*ExpandResult, error) {
+	return a.engine.Expand(stepID, full)
 }
 
 func (a *AssemblyManager) Surround(stepID int, before, after int) ([]RenderedBlock, error) {

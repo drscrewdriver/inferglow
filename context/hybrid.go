@@ -216,7 +216,7 @@ func (h *HybridManager) perStepDecay(currentStep int) error {
 			continue
 		}
 		ref, err := h.store.GetRef(id)
-		if err != nil || ref.Level >= 3 {
+		if err != nil || ref.Level >= 3 || ref.LockL0 {
 			continue
 		}
 
@@ -560,9 +560,9 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 			continue
 		}
 
-		// Skip if already at max level for type
+		// Skip if already at max level for type, or locked at L0
 		maxLvl := MaxLevelForType(h.stepType(id))
-		if ref.Level >= maxLvl {
+		if ref.Level >= maxLvl || ref.LockL0 {
 			continue
 		}
 
@@ -734,13 +734,10 @@ func (h *HybridManager) SearchLongMem(ctx context.Context, query string, categor
 	return h.store.SearchLongMem(query, category, limit)
 }
 
-// Expand retrieves original content for a step, updating refs (§8B.3).
-func (h *HybridManager) Expand(stepID int) (*ExpandResult, error) {
-	step, err := h.store.GetStep(stepID)
-	if err != nil {
-		return nil, err
-	}
-
+// Expand retrieves content for a step (§8B.3).
+// Default (full=false) returns L1 (denoised); full=true returns L0 (original).
+// Side effect: updates refs (same as §N citation) — affects decay to slow L1→L2→L3.
+func (h *HybridManager) Expand(stepID int, full bool) (*ExpandResult, error) {
 	// Side effect: update refs (same as §N citation)
 	ref, err := h.store.GetRef(stepID)
 	if err == nil {
@@ -751,11 +748,47 @@ func (h *HybridManager) Expand(stepID int) (*ExpandResult, error) {
 		_ = h.store.UpsertRef(*ref)
 	}
 
-	warning := ""
-	if step.TokenCount > 4000 {
-		warning = fmt.Sprintf("原文 %d tokens，注意窗口压力", step.TokenCount)
+	if full {
+		// Full expand: return L0 original
+		step, err := h.store.GetStep(stepID)
+		if err != nil {
+			return nil, err
+		}
+		warning := ""
+		if step.TokenCount > 4000 {
+			warning = fmt.Sprintf("原文 %d tokens，注意窗口压力", step.TokenCount)
+		}
+		return &ExpandResult{
+			StepID:  stepID,
+			Level:   0,
+			Content: step.Content,
+			Tokens:  step.TokenCount,
+			Warning: warning,
+		}, nil
 	}
 
+	// Default expand: return L1 (denoised), fallback to L0 if L1 unavailable
+	l1, err := h.store.GetL1(stepID)
+	if err == nil {
+		warning := ""
+		if l1.TokenCount > 4000 {
+			warning = fmt.Sprintf("L1 %d tokens，需要更多细节可用 full=true 展开原文", l1.TokenCount)
+		}
+		return &ExpandResult{
+			StepID:  stepID,
+			Level:   1,
+			Content: l1.Content,
+			Tokens:  l1.TokenCount,
+			Warning: warning,
+		}, nil
+	}
+
+	// Fallback to L0
+	step, err := h.store.GetStep(stepID)
+	if err != nil {
+		return nil, err
+	}
+	warning := fmt.Sprintf("L1 不可用，返回 L0 原文 %d tokens", step.TokenCount)
 	return &ExpandResult{
 		StepID:  stepID,
 		Level:   0,

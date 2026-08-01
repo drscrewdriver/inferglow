@@ -31,11 +31,16 @@ package compress
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/inferglow/context"
 )
+
+// maskHeaderRegex validates the L2/L3 mask header format.
+// Expected: [掩码 step_N|原X t|tool|params]
+var maskHeaderRegex = regexp.MustCompile(`^\[掩码 step_\d+\|原\d+t\|.+\|.+\]`)
 
 // CompressModelClient is the interface for compression model calls.
 type CompressModelClient interface {
@@ -105,11 +110,15 @@ func (c *CompressModelChain) validate(level int, original, compressed string) bo
 	if len(compressed) > len(original) {
 		return false
 	}
-	// Rule 2: L3 mask must have [掩码 prefix
-	if level == 3 && !strings.HasPrefix(compressed, "[掩码") {
+	// Rule 2: L2 must match mask header regex (§4.2)
+	if level == 2 && !maskHeaderRegex.MatchString(compressed) {
 		return false
 	}
-	// Rule 3: must not be empty
+	// Rule 3: L3 must match mask header regex (§4.3)
+	if level == 3 && !maskHeaderRegex.MatchString(compressed) {
+		return false
+	}
+	// Rule 4: must not be empty
 	if strings.TrimSpace(compressed) == "" {
 		return false
 	}
@@ -129,6 +138,7 @@ func NewEngine(chain *CompressModelChain, store contextmgr.StepStoreLike, cfg co
 }
 
 // CompressStep compresses a single step to the target level (§6.4 8-step process).
+// L3 is derived from L2's first line (mask header).
 func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) error {
 	// Step 1: Read current ref
 	ref, err := e.store.GetRef(stepID)
@@ -152,13 +162,25 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 	}
 
 	// Step 4: Build prompt and execute compression
-	prompt := BuildPrompt(targetLevel, stepID, step.ToolName, step.KeyParams, input)
-	compressed, err := e.chain.Compress(ctx, targetLevel, prompt)
+	// L3 uses L2 prompt (mask header + facts), then extracts first line as mask
+	promptLevel := targetLevel
+	if targetLevel == 3 {
+		promptLevel = 2 // L3 is derived from L2 output
+	}
+	prompt := BuildPrompt(promptLevel, stepID, step.ToolName, step.KeyParams, input)
+	compressed, err := e.chain.Compress(ctx, promptLevel, prompt)
 	if err != nil {
 		return fmt.Errorf("compress step %d to L%d: %w", stepID, targetLevel, err)
 	}
 
-	// Step 5: Write to appropriate .lN.jsonl + update ref
+	// For L3 target, ensure valid mask header. If LLM chain failed and
+	// mechanical L2 fallback produced output without [掩码 header,
+	// override with MechanicalL3 using step metadata (§4.4).
+	if targetLevel == 3 && !maskHeaderRegex.MatchString(compressed) {
+		compressed = MechanicalL3(stepID, step.ToolName, step.KeyParams, input)
+	}
+
+	// Step 5: Write to store
 	tokenEst := len(compressed) / 4
 	switch targetLevel {
 	case 1:
@@ -169,6 +191,7 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 			CompressedAtStep: stepID,
 		})
 	case 2:
+		// L2 stores mask header + facts
 		facts := strings.Split(compressed, "\n")
 		err = e.store.AppendL2(contextmgr.L2Record{
 			StepID:           stepID,
@@ -177,9 +200,20 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 			CompressedAtStep: stepID,
 		})
 	case 3:
+		// L3 is derived from L2: first line is the mask header
+		lines := strings.SplitN(compressed, "\n", 2)
+		mask := strings.TrimSpace(lines[0])
+		// Also store L2 (full content)
+		facts := strings.Split(compressed, "\n")
+		_ = e.store.AppendL2(contextmgr.L2Record{
+			StepID:           stepID,
+			Facts:            facts,
+			TokenCount:       tokenEst,
+			CompressedAtStep: stepID,
+		})
 		err = e.store.AppendL3(contextmgr.L3Record{
 			StepID:           stepID,
-			Mask:             compressed,
+			Mask:             mask,
 			TokenCount:       tokenEst,
 			CompressedAtStep: stepID,
 		})
@@ -243,7 +277,7 @@ func (e *Engine) BatchCompress(ctx context.Context) (*contextmgr.CompressResult,
 		}
 
 		maxLvl := contextmgr.MaxLevelForType(step.Type)
-		if ref.Level >= maxLvl {
+		if ref.Level >= maxLvl || ref.LockL0 {
 			continue
 		}
 
