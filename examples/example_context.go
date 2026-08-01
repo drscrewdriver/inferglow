@@ -105,9 +105,12 @@ func main() {
 		fmt.Printf("  step=%d level=%d score=%.2f snippet=%s\n", h.StepID, h.Level, h.Score, truncate(h.Snippet, 40))
 	}
 
-	// 9. 展开某步骤原始内容
-	if expanded, err := cm.Expand(1); err == nil {
-		fmt.Printf("\nexpand step 1: level=%d content=%s\n", expanded.Level, truncate(expanded.Content, 60))
+	// 9. 展开某步骤内容（默认 L1，full=true 为 L0 原文）
+	if expanded, err := cm.Expand(1, false); err == nil {
+		fmt.Printf("\nexpand step 1 (default L1): level=%d content=%s\n", expanded.Level, truncate(expanded.Content, 60))
+	}
+	if expanded, err := cm.Expand(1, true); err == nil {
+		fmt.Printf("expand step 1 (full L0): level=%d tokens=%d\n", expanded.Level, expanded.Tokens)
 	}
 }
 
