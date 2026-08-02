@@ -580,7 +580,7 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 
 | 层级 | 机制 | 触发条件 | 合规率 |
 |------|------|---------|--------|
-| **L1 硬约束** | `response_format: json_schema`（XGrammar token 级约束） | `force_json:true` + `Output.Properties` 非空 | ~100% |
+| **L1 硬约束** | `response_format: json_schema`（XGrammar in sglang/vllm, GBNF in llama.cpp 等 token 级约束引擎） | `force_json:true` + `Output.Properties` 非空 | ~100% |
 | **L2 API 约束** | 同 L1，云端 provider 服务端 structured output | 同上（OpenAI/DeepSeek） | ~99% |
 | **L3 兜底 prompt** | system prompt 注入 schema 描述 | provider 不支持 json_schema 时降级 | ~80% |
 | **L4 后置校验** | JSON 结构校验 + 字段类型检查 + 重试 | `WithOutputSchema` 配置后始终启用 | 检测层 |

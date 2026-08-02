@@ -7,6 +7,7 @@
 
 | 指南 | 能力 | 适用场景 |
 |------|------|---------|
+| [CLI 使用指南](./cli-usage.md) | 配置、启动、Slash 命令、审计链路、复盘报告 | 如何使用 InferGlow CLI 的全部能力 |
 | [工具组织与调度](./tool-organization.md) | `Action` / `ActionRegistry` / `ToolGroup` / `GroupRegistry` / `ToolFilter` / `ActionDispatcher` | 如何注册、分组、过滤、调度工具 |
 | [上下文管理](./context-management.md) | `ContextManager` / `HybridManager` / 5 种 Mode / 后备存储 | 如何管理对话上下文、选择压缩模式、接驳存储 |
 
