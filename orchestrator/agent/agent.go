@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/inferglow/audit"
 	"github.com/inferglow/flow"
 	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/middleware"
@@ -148,6 +149,9 @@ type runConfig struct {
 	maxRounds     int
 	systemPrompt  string
 	streamTimeout time.Duration
+	// auditHook optionally records decision audit entries. nil means
+	// use the default NoOpHook (zero overhead).
+	auditHook audit.AuditHook
 	// outputHook optionally scans the LLM's final response for
 	// prompt-injection content before Run returns it.
 	outputHook OutputSecurityHook
@@ -278,17 +282,34 @@ func WithCompactHook(hook func(promptTokens int)) RunOption {
 	}
 }
 
+// WithAuditHook installs an audit hook that records decision audit
+// entries. When non-nil, the engine is created with NewEngineWithAudit
+// instead of the default NoOpHook. Pass nil to disable (default).
+func WithAuditHook(hook audit.AuditHook) RunOption {
+	return func(c *runConfig) {
+		c.auditHook = hook
+	}
+}
+
 // New creates an Agent from the given components. Options applied here
 // (e.g. WithMaxRounds, WithSystemPrompt, WithStreamTimeout) are persisted
 // on the Agent and used by subsequent Run calls unless overridden by a
 // per-call option.
 func New(sess *session.Session, actionExt *ActionExtension, modelReq model.ModelRequester, opts ...RunOption) *Agent {
 	sessionExt := NewSessionExtension(sess)
-	engine := NewEngine(sessionExt, actionExt, modelReq)
 
 	c := &runConfig{maxRounds: 10}
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	// Use NewEngineWithAudit when an audit hook is provided, otherwise
+	// use the default NewEngine (NoOpHook, zero overhead).
+	var engine *Engine
+	if c.auditHook != nil {
+		engine = NewEngineWithAudit(sessionExt, actionExt, modelReq, c.auditHook)
+	} else {
+		engine = NewEngine(sessionExt, actionExt, modelReq)
 	}
 
 	// Default to DefaultFeatures when WithFeatures was not supplied so

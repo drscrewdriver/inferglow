@@ -276,6 +276,162 @@ func TestEngine_ThreeRoundsAuditCount(t *testing.T) {
 	}
 }
 
+// usageModelRequester extends scriptedModelRequester by returning UsageInfo
+// in the final StreamChunk of each response, simulating provider-reported
+// token usage. The usage values are the same for every call so tests can
+// assert on predictable metadata.
+type usageModelRequester struct {
+	scriptedModelRequester
+}
+
+func (m *usageModelRequester) RequestModel(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+	m.mu.Lock()
+	idx := m.calls
+	m.calls++
+	m.mu.Unlock()
+	ch := make(chan *model.StreamChunk, 1)
+	ch <- &model.StreamChunk{
+		Delta:  m.responses[idx],
+		IsDone: true,
+		Usage: &model.UsageInfo{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+			PromptTokensDetails: map[string]int{
+				"cached_tokens": 20,
+			},
+			CompletionTokensDetails: map[string]int{
+				"reasoning_tokens": 10,
+			},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestEngine_DecisionAuditEntryWithUsageInfo verifies that when the LLM
+// response includes UsageInfo, the decision audit entry's Metadata contains
+// model, provider, and token usage fields.
+func TestEngine_DecisionAuditEntryWithUsageInfo(t *testing.T) {
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	mockReq := &usageModelRequester{
+		scriptedModelRequester: scriptedModelRequester{
+			responses: []string{
+				`{"next_action":"response","final_response":"done"}`,
+			},
+		},
+	}
+
+	hook := &engineFakeAuditHook{}
+	engine := NewEngineWithAudit(sess, actExt, mockReq, hook)
+
+	decision, err := engine.executeLoop(context.Background(), "Hi", 1, "")
+	if err != nil {
+		t.Fatalf("executeLoop returned error: %v", err)
+	}
+	if decision.NextAction != "response" {
+		t.Errorf("Expected response, got %q", decision.NextAction)
+	}
+
+	entries := hook.Snapshot()
+	var decisionEntry *audit.AuditEntry
+	for _, entry := range entries {
+		if entry.Source == "agent" && entry.Action == "decision" {
+			decisionEntry = entry
+			break
+		}
+	}
+	if decisionEntry == nil {
+		t.Fatal("expected at least one decision audit entry")
+	}
+
+	// Verify metadata contains usage fields.
+	meta := decisionEntry.Metadata
+	if meta == nil {
+		t.Fatal("expected non-nil Metadata on decision audit entry")
+	}
+
+	// Check round (always present).
+	if meta["round"] != "0" {
+		t.Errorf("round = %q, want %q", meta["round"], "0")
+	}
+
+	// Check model and provider.
+	if meta["model"] == "" {
+		t.Error("expected model in metadata, got empty")
+	}
+	if meta["provider"] == "" {
+		t.Error("expected provider in metadata, got empty")
+	}
+
+	// Check token usage fields.
+	if meta["input_tokens"] != "100" {
+		t.Errorf("input_tokens = %q, want %q", meta["input_tokens"], "100")
+	}
+	if meta["output_tokens"] != "50" {
+		t.Errorf("output_tokens = %q, want %q", meta["output_tokens"], "50")
+	}
+	if meta["cached_tokens"] != "20" {
+		t.Errorf("cached_tokens = %q, want %q", meta["cached_tokens"], "20")
+	}
+	if meta["reasoning_tokens"] != "10" {
+		t.Errorf("reasoning_tokens = %q, want %q", meta["reasoning_tokens"], "10")
+	}
+}
+
+// TestEngine_DecisionAuditEntryNoUsageInfo verifies that when the LLM
+// response does NOT include UsageInfo, the decision audit entry's Metadata
+// contains only the "round" field and no usage-related fields.
+func TestEngine_DecisionAuditEntryNoUsageInfo(t *testing.T) {
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+
+	mockReq := &scriptedModelRequester{
+		responses: []string{
+			`{"next_action":"response","final_response":"done"}`,
+		},
+	}
+
+	hook := &engineFakeAuditHook{}
+	engine := NewEngineWithAudit(sess, actExt, mockReq, hook)
+
+	_, err := engine.executeLoop(context.Background(), "Hi", 1, "")
+	if err != nil {
+		t.Fatalf("executeLoop returned error: %v", err)
+	}
+
+	entries := hook.Snapshot()
+	var decisionEntry *audit.AuditEntry
+	for _, entry := range entries {
+		if entry.Source == "agent" && entry.Action == "decision" {
+			decisionEntry = entry
+			break
+		}
+	}
+	if decisionEntry == nil {
+		t.Fatal("expected at least one decision audit entry")
+	}
+
+	meta := decisionEntry.Metadata
+	if meta == nil {
+		t.Fatal("expected non-nil Metadata")
+	}
+
+	// Only round should be present.
+	if meta["round"] != "0" {
+		t.Errorf("round = %q, want %q", meta["round"], "0")
+	}
+
+	// Usage fields should NOT be present.
+	for _, key := range []string{"model", "provider", "input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"} {
+		if _, ok := meta[key]; ok {
+			t.Errorf("unexpected key %q in metadata when no UsageInfo", key)
+		}
+	}
+}
+
 // TestEngine_DisabledHookNoEntries verifies that when IsEnabled() returns
 // false (e.g. a NoOpHook wrapping an AuditChain with Enabled=false), the
 // engine does not append decision entries.

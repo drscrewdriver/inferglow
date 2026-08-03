@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/inferglow/flow"
+	"github.com/inferglow/model"
 	"github.com/inferglow/observability/otel"
 )
 
@@ -238,5 +239,127 @@ func TestFlowContextImpl_RequestPause_ReturnsErrPauseRequested(t *testing.T) {
 	err := fc.RequestPause("await approval")
 	if !errors.Is(err, flow.ErrPauseRequested) {
 		t.Errorf("RequestPause err = %v, want flow.ErrPauseRequested", err)
+	}
+}
+
+// ============================================================================
+// AuditAppend with UsageInfo
+// ============================================================================
+
+// TestFlowContextImpl_AuditAppend_WithUsage_IncludesMetadata 验证当
+// currentUsage 已设置时，AuditAppend 创建的审计条目 Metadata 包含
+// input_tokens / output_tokens / cached_tokens / reasoning_tokens 字段。
+func TestFlowContextImpl_AuditAppend_WithUsage_IncludesMetadata(t *testing.T) {
+	hook := &engineFakeAuditHook{}
+	fc := &flowContextImpl{
+		auditHook: hook,
+		currentUsage: &model.UsageInfo{
+			PromptTokens:     200,
+			CompletionTokens: 100,
+			TotalTokens:      300,
+			PromptTokensDetails: map[string]int{
+				"cached_tokens": 30,
+			},
+			CompletionTokensDetails: map[string]int{
+				"reasoning_tokens": 15,
+			},
+		},
+	}
+
+	fc.AuditAppend("test", "action", "input", "output")
+
+	entries := hook.Snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if entry.Source != "test" || entry.Action != "action" {
+		t.Errorf("source/action = %q/%q, want %q/%q", entry.Source, entry.Action, "test", "action")
+	}
+
+	meta := entry.Metadata
+	if meta == nil {
+		t.Fatal("expected non-nil Metadata when currentUsage is set")
+	}
+
+	if meta["input_tokens"] != "200" {
+		t.Errorf("input_tokens = %q, want %q", meta["input_tokens"], "200")
+	}
+	if meta["output_tokens"] != "100" {
+		t.Errorf("output_tokens = %q, want %q", meta["output_tokens"], "100")
+	}
+	if meta["cached_tokens"] != "30" {
+		t.Errorf("cached_tokens = %q, want %q", meta["cached_tokens"], "30")
+	}
+	if meta["reasoning_tokens"] != "15" {
+		t.Errorf("reasoning_tokens = %q, want %q", meta["reasoning_tokens"], "15")
+	}
+}
+
+// TestFlowContextImpl_AuditAppend_NoUsage_NilMetadata 验证当 currentUsage
+// 为 nil 时，AuditAppend 创建的审计条目 Metadata 为 nil（无 token 用量字段）。
+func TestFlowContextImpl_AuditAppend_NoUsage_NilMetadata(t *testing.T) {
+	hook := &engineFakeAuditHook{}
+	fc := &flowContextImpl{
+		auditHook: hook,
+	}
+
+	fc.AuditAppend("test", "action", "input", "output")
+
+	entries := hook.Snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if entry.Metadata != nil {
+		t.Errorf("expected nil Metadata when no currentUsage, got %v", entry.Metadata)
+	}
+}
+
+// TestFlowContextImpl_SetCurrentUsage_StoresUsage 验证 SetCurrentUsage
+// 正确存储 UsageInfo，后续 AuditAppend 能读取到。
+func TestFlowContextImpl_SetCurrentUsage_StoresUsage(t *testing.T) {
+	hook := &engineFakeAuditHook{}
+	fc := &flowContextImpl{
+		auditHook: hook,
+	}
+
+	usage := &model.UsageInfo{
+		PromptTokens:     300,
+		CompletionTokens: 150,
+		TotalTokens:      450,
+	}
+
+	fc.SetCurrentUsage(usage)
+	fc.AuditAppend("test", "action", "in", "out")
+
+	entries := hook.Snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+
+	meta := entries[0].Metadata
+	if meta == nil {
+		t.Fatal("expected non-nil Metadata after SetCurrentUsage")
+	}
+	if meta["input_tokens"] != "300" {
+		t.Errorf("input_tokens = %q, want %q", meta["input_tokens"], "300")
+	}
+	if meta["output_tokens"] != "150" {
+		t.Errorf("output_tokens = %q, want %q", meta["output_tokens"], "150")
+	}
+
+	// Clear usage and verify next audit entry has no metadata.
+	fc.SetCurrentUsage(nil)
+	fc.AuditAppend("test", "action", "in", "out")
+
+	entries = hook.Snapshot()
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 audit entries, got %d", len(entries))
+	}
+	if entries[1].Metadata != nil {
+		t.Errorf("expected nil Metadata after clearing usage, got %v", entries[1].Metadata)
 	}
 }

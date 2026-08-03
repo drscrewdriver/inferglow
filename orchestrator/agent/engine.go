@@ -693,15 +693,46 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if round > 0 && prevDecision != nil {
 				input = prevDecision.FinalResponse
 			}
+
+			metadata := map[string]string{
+				"round": strconv.Itoa(round),
+			}
+
+			// Inject token usage metadata when available from the LLM response.
+			if lastUsage != nil {
+				modelName := req.Model
+				if modelName == "" {
+					modelName = data.Model
+				}
+				providerName := e.modelReq.Name()
+				if providerName == "" {
+					providerName = "unknown"
+				}
+				if modelName == "" {
+					modelName = providerName
+				}
+
+				metadata["model"] = modelName
+				metadata["provider"] = providerName
+				metadata["input_tokens"] = strconv.Itoa(lastUsage.PromptTokens)
+				metadata["output_tokens"] = strconv.Itoa(lastUsage.CompletionTokens)
+
+				cachedTokens := 0
+				if lastUsage.PromptTokensDetails != nil {
+					cachedTokens = lastUsage.PromptTokensDetails["cached_tokens"]
+				}
+				metadata["cached_tokens"] = strconv.Itoa(cachedTokens)
+
+				metadata["reasoning_tokens"] = strconv.Itoa(lastUsage.ReasoningTokens())
+			}
+
 			_, _ = e.auditHook.Append(&audit.AuditEntry{
 				Timestamp: time.Now(),
 				Source:    "agent",
 				Action:    "decision",
 				Input:     input,
 				Output:    decision,
-				Metadata: map[string]string{
-					"round": strconv.Itoa(round),
-				},
+				Metadata:  metadata,
 			})
 		}
 

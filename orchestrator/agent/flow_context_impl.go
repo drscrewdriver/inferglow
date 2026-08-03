@@ -23,6 +23,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -58,6 +59,11 @@ type flowContextImpl struct {
 	// flow.ErrAgentNotConfigured。由 executeFlow 注入，使 step 可以在内部触发
 	// 多轮 Agent 循环（PLAN→EXECUTE）。
 	engine *Engine
+
+	// currentUsage 记录最近一次 LLM 调用的 token 用量信息。
+	// 由 GenerateModel 在流式响应结束后自动设置，供 AuditAppend
+	// 在创建审计条目时注入 token 用量元数据。nil 表示尚未有 LLM 调用。
+	currentUsage *model.UsageInfo
 }
 
 // otelSpanAdapter 把 otel 的 trace.Span 适配为 flow.Span 接口。
@@ -137,9 +143,14 @@ func (fc *flowContextImpl) GenerateModel(ctx context.Context, system, userMessag
 		return "", err
 	}
 	var sb strings.Builder
+	var lastUsage *model.UsageInfo
 	for chunk := range stream {
 		sb.WriteString(chunk.Delta)
+		if chunk.Usage != nil {
+			lastUsage = chunk.Usage
+		}
 	}
+	fc.currentUsage = lastUsage
 	return sb.String(), nil
 }
 
@@ -181,6 +192,8 @@ func (fc *flowContextImpl) AppendSession(role string, content any) {
 // A nil hook makes this a no-op so flow steps can call it unconditionally.
 // The Append return values are intentionally ignored so an audit failure
 // cannot break the flow.
+// When currentUsage is set (from a prior LLM call via GenerateModel), the
+// entry's Metadata automatically includes token usage information.
 func (fc *flowContextImpl) AuditAppend(source, action string, input, output any) {
 	if fc.auditHook == nil {
 		return
@@ -191,7 +204,28 @@ func (fc *flowContextImpl) AuditAppend(source, action string, input, output any)
 		Input:  input,
 		Output: output,
 	}
+	if fc.currentUsage != nil {
+		metadata := map[string]string{
+			"input_tokens":     strconv.Itoa(fc.currentUsage.PromptTokens),
+			"output_tokens":    strconv.Itoa(fc.currentUsage.CompletionTokens),
+			"reasoning_tokens": strconv.Itoa(fc.currentUsage.ReasoningTokens()),
+		}
+		cachedTokens := 0
+		if fc.currentUsage.PromptTokensDetails != nil {
+			cachedTokens = fc.currentUsage.PromptTokensDetails["cached_tokens"]
+		}
+		metadata["cached_tokens"] = strconv.Itoa(cachedTokens)
+		entry.Metadata = metadata
+	}
 	_, _ = fc.auditHook.Append(entry)
+}
+
+// SetCurrentUsage stores the token usage information from the most recent
+// LLM call. The engine or step should call this before creating an audit
+// entry so that AuditAppend can include token usage in the metadata.
+// A nil usage clears the current usage.
+func (fc *flowContextImpl) SetCurrentUsage(usage *model.UsageInfo) {
+	fc.currentUsage = usage
 }
 
 // SetValue stores a value in the per-execution key/value store.
