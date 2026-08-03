@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.4
 	github.com/google/uuid v1.6.0
 	github.com/inferglow/action v0.0.0
+	github.com/inferglow/audit v0.0.0
 	github.com/inferglow/builtins v0.0.0
 	github.com/inferglow/context v0.0.0
 	github.com/inferglow/memory v0.0.0

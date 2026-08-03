@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 
 	"github.com/inferglow/action"
+	"github.com/inferglow/audit"
 	"github.com/inferglow/builtins/actions"
 	contextmgr "github.com/inferglow/context"
 	"github.com/inferglow/context/tools"
@@ -35,14 +36,17 @@ import (
 )
 
 // buildAgent assembles a fully wired Agent with memory-bridged actions.
-func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.Agent, error) {
+// When ac is non-nil (and enabled), the agent engine uses
+// NewEngineWithAudit so decision audit entries flow through the chain.
+// Returns the agent and the audit chain (or nil if audit is disabled).
+func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string, ac *audit.AuditChain) (*agent.Agent, *audit.AuditChain, error) {
 	// 1. Session.
 	sess := session.NewSession(sessionID, cfg.WindowTokens)
 
 	// 2. Model.
 	modelReq, err := buildModelRequester(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build model: %w", err)
+		return nil, ac, fmt.Errorf("build model: %w", err)
 	}
 
 	// 3. Action extension — register builtins with ingest wrapping.
@@ -124,8 +128,13 @@ func buildAgent(cfg CLIConfig, bridge *MemoryBridge, sessionID string) (*agent.A
 	}
 
 	// 5. Construct agent.
-	ag := agent.New(sess, actExt, modelReq, agent.WithCallbacks(callbacks))
-	return ag, nil
+	var agentOpts []agent.RunOption
+	agentOpts = append(agentOpts, agent.WithCallbacks(callbacks))
+	if ac != nil {
+		agentOpts = append(agentOpts, agent.WithAuditHook(ac))
+	}
+	ag := agent.New(sess, actExt, modelReq, agentOpts...)
+	return ag, ac, nil
 }
 
 // registerContextTools bridges context tools (context_search, context_expand,

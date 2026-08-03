@@ -73,6 +73,38 @@ func RunInitWizard() error {
 	}
 	cfg.LLM.Provider = provider
 
+	// --- Audit trail configuration ---
+
+	// Enable audit trail.
+	fmt.Println()
+	fmt.Print("Enable audit trail? (y/N): ")
+	auditEnabled, _ := reader.ReadString('\n')
+	auditEnabled = strings.TrimSpace(strings.ToLower(auditEnabled))
+	cfg.Audit.Enabled = auditEnabled == "y" || auditEnabled == "yes"
+
+	if cfg.Audit.Enabled {
+		// Storage path.
+		defaultAuditPath := cfg.DataDir + "/audit/"
+		fmt.Printf("Audit storage path [%s]: ", defaultAuditPath)
+		auditPath, _ := reader.ReadString('\n')
+		auditPath = strings.TrimSpace(auditPath)
+		if auditPath == "" {
+			auditPath = defaultAuditPath
+		}
+		cfg.Audit.StoragePath = auditPath
+
+		// Enable signature.
+		fmt.Print("Enable audit trail signing? (y/N): ")
+		signEnabled, _ := reader.ReadString('\n')
+		signEnabled = strings.TrimSpace(strings.ToLower(signEnabled))
+		if signEnabled == "y" || signEnabled == "yes" {
+			fmt.Print("Audit signature key: ")
+			sigKey, _ := reader.ReadString('\n')
+			sigKey = strings.TrimSpace(sigKey)
+			cfg.Audit.SignatureKey = sigKey
+		}
+	}
+
 	// Ensure data directories exist.
 	if err := EnsureDataDirs(cfg.DataDir); err != nil {
 		return fmt.Errorf("create data dirs: %w", err)

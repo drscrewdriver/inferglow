@@ -38,11 +38,19 @@ type CLIConfig struct {
 	UnsafeMode   bool         `json:"unsafe_mode"`
 	SandboxMode  string       `json:"sandbox_mode,omitempty"` // "trusted_local", "local", "docker", "gvisor", "auto"
 	Features     FeatureFlags `json:"features"`
+	Audit        AuditConfig  `json:"audit,omitempty"`
 	TUI          TUIConfig    `json:"tui,omitempty"`
 	// MC-1: context management mode (passthrough/three_zone/summary/hybrid).
 	ContextMode string `json:"context_mode,omitempty"`
 	// MC-2: dedicated compression model; nil = fallback to main LLM.
 	CompressModel *LLMConfig `json:"compress_model,omitempty"`
+}
+
+// AuditConfig controls the audit trail for the CLI agent.
+type AuditConfig struct {
+	Enabled      bool   `json:"enabled"`
+	StoragePath  string `json:"storage_path,omitempty"`
+	SignatureKey string `json:"signature_key,omitempty"`
 }
 
 // TUIConfig holds TUI-specific display and behavior settings.
@@ -84,6 +92,9 @@ func DefaultCLIConfig() CLIConfig {
 		TopK:         5,
 		SandboxMode:  "trusted_local",
 		Constitutional: filepath.Join(dataDir, "constitutional", "rules.md"),
+		Audit: AuditConfig{
+			Enabled: false,
+		},
 		Features: FeatureFlags{
 			MemoryInjection:   true,
 			MemoryStorage:     true,
@@ -170,6 +181,7 @@ func LoadOrDefaultConfig(explicitPath string) (CLIConfig, string, error) {
 //	│   └── rules.md
 //	├── sessions/                    # session JSONL files (L0 + refs)
 //	│   └── index.jsonl              # session index
+//	├── audit/                      # audit trail JSONL files
 //	├── memory/                      # long-term memory store
 //	├── skills/                      # global skill store
 //	│   └── global/
@@ -183,6 +195,7 @@ func EnsureDataDirs(dataDir string) error {
 		filepath.Join(dataDir, "memory"),
 		filepath.Join(dataDir, "skills", "global"),
 		filepath.Join(dataDir, "projects", "default", "skills"),
+		filepath.Join(dataDir, "audit"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {

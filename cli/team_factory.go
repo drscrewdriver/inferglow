@@ -48,7 +48,7 @@ func BuildTeam(cfg CLIConfig, roles []TeamMemberRole, sessionPrefix string) (*te
 			return nil, nil, fmt.Errorf("team build: memory bridge for %s: %w", r.Role, err)
 		}
 
-		ag, err := buildAgent(cfg, bridge, sessionID)
+		ag, _, err := buildAgent(cfg, bridge, sessionID, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("team build: agent for %s: %w", r.Role, err)
 		}

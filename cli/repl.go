@@ -79,7 +79,7 @@ func RunREPL(ctx context.Context, cfg CLIConfig, resumeID string) error {
 
 		// Slash commands.
 		if strings.HasPrefix(line, "/") {
-			if shouldQuit := dispatchCommand(ctx, line, ag, bridge, cfg); shouldQuit {
+			if shouldQuit := dispatchCommand(ctx, line, ag, bridge, cfg, rt); shouldQuit {
 				return nil
 			}
 			continue

@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/inferglow/audit"
 	"github.com/inferglow/orchestrator/agent"
 )
 
@@ -32,10 +33,11 @@ import (
 // (TUI, REPL, OneShot). Extracting this eliminates duplicated initialization
 // code across the three entry points.
 type AgentRuntime struct {
-	Agent     *agent.Agent
-	Bridge    *MemoryBridge
-	SessionID string
-	Config    CLIConfig
+	Agent      *agent.Agent
+	Bridge     *MemoryBridge
+	SessionID  string
+	Config     CLIConfig
+	AuditChain *audit.AuditChain // non-nil when audit is enabled; closed on Close()
 }
 
 // BuildRuntime creates the shared agent infrastructure used by every output
@@ -67,17 +69,39 @@ func BuildRuntime(cfg CLIConfig, resumeID string) (*AgentRuntime, error) {
 		}
 	}
 
-	ag, err := buildAgent(cfg, bridge, sessionID)
+	// Create audit chain when enabled.
+	var ac *audit.AuditChain
+	if cfg.Audit.Enabled {
+		auditCfg := audit.AuditConfig{
+			Enabled:        true,
+			StorageBackend: "json_file",
+			StoragePath:    cfg.Audit.StoragePath,
+		}
+		if auditCfg.StoragePath == "" {
+			auditCfg.StoragePath = cfg.DataDir + "/audit"
+		}
+		if cfg.Audit.SignatureKey != "" {
+			auditCfg.SignatureKey = []byte(cfg.Audit.SignatureKey)
+		}
+		chain, err := audit.NewAuditChain(auditCfg)
+		if err != nil {
+			return nil, fmt.Errorf("init audit chain: %w", err)
+		}
+		ac = chain
+	}
+
+	ag, returnedAC, err := buildAgent(cfg, bridge, sessionID, ac)
 	if err != nil {
 		bridge.OnSessionEnd(context.Background())
 		return nil, fmt.Errorf("init agent: %w", err)
 	}
 
 	return &AgentRuntime{
-		Agent:     ag,
-		Bridge:    bridge,
-		SessionID: sessionID,
-		Config:    cfg,
+		Agent:      ag,
+		Bridge:     bridge,
+		SessionID:  sessionID,
+		Config:     cfg,
+		AuditChain: returnedAC,
 	}, nil
 }
 
@@ -85,4 +109,7 @@ func BuildRuntime(cfg CLIConfig, resumeID string) (*AgentRuntime, error) {
 // longer needed (typically via defer).
 func (r *AgentRuntime) Close(ctx context.Context) {
 	r.Bridge.OnSessionEnd(ctx)
+	// AuditChain has no external resources to release; the reference is
+	// cleared so the GC can reclaim it.
+	r.AuditChain = nil
 }
