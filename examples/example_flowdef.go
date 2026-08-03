@@ -44,14 +44,14 @@ func main() {
 	stages := stage.NewRegistry()
 
 	// "greet" stage: 接收 name 字段，返回问候语
-	stages.Register("greet", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("greet", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		name, _ := in["name"].(string)
 		return stage.Outputs{"greeting": fmt.Sprintf("Hello, %s!", name)}, nil
 	})
 	fmt.Println("  Registered: greet")
 
 	// "uppercase" stage: 接收 greeting 字段，返回大写版本
-	stages.Register("uppercase", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("uppercase", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		greeting, _ := in["greeting"].(string)
 		return stage.Outputs{"shout": strings.ToUpper(greeting)}, nil
 	})

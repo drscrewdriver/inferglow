@@ -215,8 +215,8 @@ func WithStreamTimeout(d time.Duration) RunOption {
 }
 
 // WithFlow 设置 flow 编排定义。设置后 Agent.Run 将使用 flow 编排模式
-// 而非默认的 PLAN→EXECUTE 循环。flow 步骤可通过 flow.FlowContextFrom(ctx)
-// 获取 FlowContext，访问 Action 执行、Model 调用、Session 读写等横切能力。
+// 而非默认的 PLAN→EXECUTE 循环。flow 步骤可通过 ContextFrom(ctx)
+// 获取 Context，访问 Action 执行、Model 调用、Session 读写等横切能力。
 func WithFlow(f *flow.Flow) RunOption {
 	return func(c *runConfig) {
 		c.flow = f
@@ -224,10 +224,10 @@ func WithFlow(f *flow.Flow) RunOption {
 }
 
 // WithTracer 安装一个 OpenTelemetry tracer。当传给 New 时持久化为 Agent
-// 默认；当传给 Run 时对该次调用做覆盖。tracer 非 nil 时 executeFlow 会在
+// tracer 非 nil 时 executeFlow 会在
 // 入口创建 SpanFlowExecute span、在暂停点创建 SpanPause span；ResumeFlow
 // 在入口创建 SpanResume span；flowContextImpl 也会持有该 tracer，让 step
-// 可以通过 FlowContext.StartSpan 自建 SpanKindStep / SpanKindTool span。
+// 可以通过 Context.StartSpan 自建 SpanKindStep / SpanKindTool span。
 // 传 nil 可显式禁用既有 tracer。
 func WithTracer(t SpanStarter) RunOption {
 	return func(c *runConfig) {

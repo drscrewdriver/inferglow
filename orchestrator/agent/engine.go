@@ -185,7 +185,7 @@ func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.StreamR
 
 // RunLoop executes a complete PLAN→EXECUTE agent loop and returns the final
 // response text. It is the public entry point for external callers (e.g.
-// inferflow's FlowContext) that need multi-turn agent capabilities without
+// inferflow's Context) that need multi-turn agent capabilities without
 // depending on the internal executeLoop signature or the actionruntime.Decision
 // type.
 func (e *Engine) RunLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (string, error) {

@@ -13,13 +13,13 @@ import (
 // executes it, and verifies each step ran and its output is accumulated.
 func TestToFlow_LinearStages(t *testing.T) {
 	stages := stage.NewRegistry()
-	stages.Register("triage", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("triage", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"category": "bug", "priority": "high"}, nil
 	})
-	stages.Register("coder", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("coder", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"files": []string{"a.go", "b.go"}, "coded": true}, nil
 	})
-	stages.Register("committer", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("committer", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"sha": "abc123", "committed": true}, nil
 	})
 
@@ -95,13 +95,13 @@ func TestToFlow_LinearStages(t *testing.T) {
 func TestToFlow_WhenExpression(t *testing.T) {
 	stages := stage.NewRegistry()
 	// step1 echoes the should_run flag from the flow input.
-	stages.Register("step1", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("step1", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"should_run": in["should_run"]}, nil
 	})
-	stages.Register("step2", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("step2", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"step2_ran": true}, nil
 	})
-	stages.Register("step3", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("step3", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"step3_ran": true}, nil
 	})
 
@@ -163,7 +163,7 @@ func TestToFlow_WhenExpression(t *testing.T) {
 // produces an error from ToFlow.
 func TestToFlow_StageNotFound(t *testing.T) {
 	stages := stage.NewRegistry()
-	stages.Register("triage", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("triage", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return nil, nil
 	})
 
@@ -193,11 +193,11 @@ func TestToFlow_StageNotFound(t *testing.T) {
 func TestToFlow_TemplateInputs(t *testing.T) {
 	stages := stage.NewRegistry()
 	var capturedInputs stage.Inputs
-	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		capturedInputs = in
 		return stage.Outputs{"echoed": in["repo_url"]}, nil
 	})
-	stages.Register("consumer", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("consumer", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"consumed": in["url"]}, nil
 	})
 
@@ -253,7 +253,7 @@ func TestToFlow_TemplateInputs(t *testing.T) {
 // pass-through steps that do not crash the flow.
 func TestToFlow_PassThroughOperator(t *testing.T) {
 	stages := stage.NewRegistry()
-	stages.Register("real", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("real", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"done": true}, nil
 	})
 
@@ -289,7 +289,7 @@ func TestToFlow_PassThroughOperator(t *testing.T) {
 // TestToFlow_SingleStep verifies a flow with one step and no depends_on.
 func TestToFlow_SingleStep(t *testing.T) {
 	stages := stage.NewRegistry()
-	stages.Register("only", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("only", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"v": 42}, nil
 	})
 
@@ -348,7 +348,7 @@ func keys(m map[string]any) []string {
 func TestToFlow_SystemPrompt(t *testing.T) {
 	stages := stage.NewRegistry()
 	var capturedInputs stage.Inputs
-	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		capturedInputs = in
 		return stage.Outputs{"echoed": "ok"}, nil
 	})
@@ -389,7 +389,7 @@ func TestToFlow_SystemPrompt(t *testing.T) {
 func TestToFlow_SystemPrompt_Template(t *testing.T) {
 	stages := stage.NewRegistry()
 	var capturedInputs stage.Inputs
-	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		capturedInputs = in
 		return stage.Outputs{"echoed": "ok"}, nil
 	})
@@ -431,7 +431,7 @@ func TestToFlow_SystemPrompt_Template(t *testing.T) {
 func TestToFlow_SystemPrompt_Empty(t *testing.T) {
 	stages := stage.NewRegistry()
 	var capturedInputs stage.Inputs
-	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stages.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		capturedInputs = in
 		return stage.Outputs{"echoed": "ok"}, nil
 	})

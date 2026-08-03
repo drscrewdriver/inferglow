@@ -12,10 +12,10 @@ import (
 	"github.com/inferglow/flow/flowdef"
 )
 
-// FlowContextFactory creates a FlowContext for a run. This allows the server
+// ContextFactory creates a Context for a run. This allows the server
 // to remain independent of orchestrator while still supporting LLM-backed
 // stage functions.
-type FlowContextFactory func(ctx context.Context) flow.FlowContext
+type ContextFactory func(ctx context.Context) flow.Context
 
 // SessionEndHook is called after a flow run completes successfully.
 // It allows external components (e.g. LongMemPromoter) to perform
@@ -45,17 +45,17 @@ type RunEvent struct {
 
 // RunHandle is the control handle for a single flow execution.
 type RunHandle struct {
-	ID         string                   `json:"run_id"`
-	FlowName   string                   `json:"flow"`
-	Status     RunStatus                `json:"status"`
-	Inputs     map[string]any           `json:"inputs,omitempty"`
-	Output     map[string]any           `json:"output,omitempty"`
-	Error      string                   `json:"error,omitempty"`
-	Owner      string                   `json:"owner,omitempty"`
-	StartedAt  time.Time                `json:"started_at"`
-	FinishedAt *time.Time               `json:"finished_at,omitempty"`
-	Events     chan RunEvent            `json:"-"`
-	ExecState  *flow.ExecutionState     `json:"-"` // read-only execution state snapshot
+	ID         string               `json:"run_id"`
+	FlowName   string               `json:"flow"`
+	Status     RunStatus            `json:"status"`
+	Inputs     map[string]any       `json:"inputs,omitempty"`
+	Output     map[string]any       `json:"output,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	Owner      string               `json:"owner,omitempty"`
+	StartedAt  time.Time            `json:"started_at"`
+	FinishedAt *time.Time           `json:"finished_at,omitempty"`
+	Events     chan RunEvent        `json:"-"`
+	ExecState  *flow.ExecutionState `json:"-"` // read-only execution state snapshot
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 }
@@ -66,7 +66,7 @@ type RunManager struct {
 	runs           map[string]*RunHandle
 	store          *FlowStore
 	seq            int
-	fctxFactory    FlowContextFactory
+	fctxFactory    ContextFactory
 	sessionEndHook SessionEndHook
 }
 
@@ -78,9 +78,9 @@ func NewRunManager(store *FlowStore) *RunManager {
 	}
 }
 
-// SetFlowContextFactory sets the factory used to create FlowContext for runs.
+// SetContextFactory sets the factory used to create Context for runs.
 // This allows stage functions to call LLM via fctx.GenerateModel().
-func (rm *RunManager) SetFlowContextFactory(factory FlowContextFactory) {
+func (rm *RunManager) SetContextFactory(factory ContextFactory) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.fctxFactory = factory
@@ -132,7 +132,7 @@ func (rm *RunManager) execute(ctx context.Context, handle *RunHandle, def *flowd
 	handle.emit(RunEvent{Type: "run_started", Timestamp: time.Now()})
 	handle.mu.Unlock()
 
-	// Inject FlowContext if factory is available.
+	// Inject Context if factory is available.
 	rm.mu.RLock()
 	factory := rm.fctxFactory
 	rm.mu.RUnlock()

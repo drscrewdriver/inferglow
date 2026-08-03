@@ -40,7 +40,7 @@ type RunSkillConfig struct {
 // NewRunSkillAction creates the "run_skill" action that loads and executes
 // a skill playbook. Supports two modes:
 //   - inline: skill body is injected as tool result into current turn
-//   - subagent: skill runs in an isolated sub-agent via FlowContext.RunAgent
+//   - subagent: skill runs in an isolated sub-agent via Context.RunAgent
 func NewRunSkillAction(cfg RunSkillConfig) *action.Action {
 	if cfg.MaxRounds <= 0 {
 		cfg.MaxRounds = 15
@@ -99,7 +99,7 @@ func (e *runSkillExecutor) Execute(ctx context.Context, input map[string]any) (*
 
 	// Subagent mode: run in isolated sub-agent
 	if sk.RunAs == "subagent" {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok || fc == nil {
 			return &action.ActionResult{
 				OK:     false,

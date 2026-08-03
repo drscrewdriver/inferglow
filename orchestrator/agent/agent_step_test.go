@@ -28,10 +28,10 @@ import (
 	"github.com/inferglow/flow"
 )
 
-// stubFlowContext 是 agent_step 测试用的 FlowContext 替身。
+// stubContext 是 agent_step 测试用的 Context 替身。
 // RunAgent 返回预设的 stubResponse / stubErr；
 // RunAgentParallel 按 stubResponses 索引返回（长度不足时用 stubResponse 填充）。
-type stubFlowContext struct {
+type stubContext struct {
 	stubResponse  string
 	stubResponses []string // 按索引返回，为空时用 stubResponse
 	stubErr       error
@@ -44,25 +44,25 @@ type stubCall struct {
 	maxRounds    int
 }
 
-func (s *stubFlowContext) ExecuteAction(_ context.Context, _ string, _ map[string]any) (any, error) {
+func (s *stubContext) ExecuteAction(_ context.Context, _ string, _ map[string]any) (any, error) {
 	return nil, nil
 }
-func (s *stubFlowContext) GenerateModel(_ context.Context, _ string, _ string) (string, error) {
+func (s *stubContext) GenerateModel(_ context.Context, _ string, _ string) (string, error) {
 	return "", nil
 }
-func (s *stubFlowContext) SessionHistory() []map[string]any { return nil }
-func (s *stubFlowContext) AppendSession(_ string, _ any)    {}
-func (s *stubFlowContext) AuditAppend(_, _ string, _, _ any) {}
-func (s *stubFlowContext) SetValue(_ string, _ any)         {}
-func (s *stubFlowContext) GetValue(_ string) (any, bool)    { return nil, false }
-func (s *stubFlowContext) StartSpan(ctx context.Context, _ flow.SpanKind, _ string) (context.Context, flow.Span) {
+func (s *stubContext) SessionHistory() []map[string]any  { return nil }
+func (s *stubContext) AppendSession(_ string, _ any)     {}
+func (s *stubContext) AuditAppend(_, _ string, _, _ any) {}
+func (s *stubContext) SetValue(_ string, _ any)          {}
+func (s *stubContext) GetValue(_ string) (any, bool)     { return nil, false }
+func (s *stubContext) StartSpan(ctx context.Context, _ flow.SpanKind, _ string) (context.Context, flow.Span) {
 	return ctx, flow.NoopSpan()
 }
-func (s *stubFlowContext) MaskInput(input string) string  { return input }
-func (s *stubFlowContext) CheckOutput(_ string) error     { return nil }
-func (s *stubFlowContext) RequestPause(_ string) error    { return flow.ErrPauseRequested }
+func (s *stubContext) MaskInput(input string) string { return input }
+func (s *stubContext) CheckOutput(_ string) error    { return nil }
+func (s *stubContext) RequestPause(_ string) error   { return flow.ErrPauseRequested }
 
-func (s *stubFlowContext) RunAgent(_ context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
+func (s *stubContext) RunAgent(_ context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
 	mr := 10
 	if opts != nil && opts.MaxRounds > 0 {
 		mr = opts.MaxRounds
@@ -74,7 +74,7 @@ func (s *stubFlowContext) RunAgent(_ context.Context, userMessage string, system
 	return s.stubResponse, nil
 }
 
-func (s *stubFlowContext) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
+func (s *stubContext) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
 	results := make([]string, len(agents))
 	for i, sub := range agents {
 		r, err := s.RunAgent(ctx, sub.UserMessage, sub.SystemPrompt, &flow.AgentRunOptions{
@@ -93,8 +93,8 @@ func (s *stubFlowContext) RunAgentParallel(ctx context.Context, agents []flow.Ag
 	return results, nil
 }
 
-// injectFlowContext 将 stubFlowContext 注入到 context 中。
-func injectFlowContext(stub *stubFlowContext) context.Context {
+// injectContext 将 stubContext 注入到 context 中。
+func injectContext(stub *stubContext) context.Context {
 	return flow.WithFlowContext(context.Background(), stub)
 }
 
@@ -176,8 +176,8 @@ func TestCopyInputMap_NonMap(t *testing.T) {
 // ============================================================================
 
 func TestNewAgentStepFunc_Basic(t *testing.T) {
-	stub := &stubFlowContext{stubResponse: "code modified"}
-	ctx := injectFlowContext(stub)
+	stub := &stubContext{stubResponse: "code modified"}
+	ctx := injectContext(stub)
 
 	fn := NewAgentStepFunc(AgentStepConfig{
 		SystemPrompt: "You are a coder",
@@ -215,8 +215,8 @@ func TestNewAgentStepFunc_Basic(t *testing.T) {
 }
 
 func TestNewAgentStepFunc_NoOutputKey(t *testing.T) {
-	stub := &stubFlowContext{stubResponse: "raw result"}
-	ctx := injectFlowContext(stub)
+	stub := &stubContext{stubResponse: "raw result"}
+	ctx := injectContext(stub)
 
 	fn := NewAgentStepFunc(AgentStepConfig{
 		SystemPrompt: "Analyze",
@@ -236,17 +236,17 @@ func TestNewAgentStepFunc_NoOutputKey(t *testing.T) {
 	}
 }
 
-func TestNewAgentStepFunc_NoFlowContext(t *testing.T) {
+func TestNewAgentStepFunc_NoContext(t *testing.T) {
 	fn := NewAgentStepFunc(AgentStepConfig{SystemPrompt: "test"})
 	_, err := fn(context.Background(), "input")
 	if err == nil {
-		t.Fatal("expected error when FlowContext missing")
+		t.Fatal("expected error when Context missing")
 	}
 }
 
 func TestNewAgentStepFunc_AgentError(t *testing.T) {
-	stub := &stubFlowContext{stubErr: fmt.Errorf("model timeout")}
-	ctx := injectFlowContext(stub)
+	stub := &stubContext{stubErr: fmt.Errorf("model timeout")}
+	ctx := injectContext(stub)
 
 	fn := NewAgentStepFunc(AgentStepConfig{SystemPrompt: "test"})
 	_, err := fn(ctx, "input")
@@ -260,10 +260,10 @@ func TestNewAgentStepFunc_AgentError(t *testing.T) {
 // ============================================================================
 
 func TestNewParallelAgentStepFunc_Basic(t *testing.T) {
-	stub := &stubFlowContext{
+	stub := &stubContext{
 		stubResponses: []string{"review: LGTM", "test: all passed"},
 	}
-	ctx := injectFlowContext(stub)
+	ctx := injectContext(stub)
 
 	fn := NewParallelAgentStepFunc(ParallelAgentStepConfig{
 		SubTasks: []SubTaskSpec{
@@ -298,12 +298,12 @@ func TestNewParallelAgentStepFunc_Basic(t *testing.T) {
 	}
 }
 
-func TestNewParallelAgentStepFunc_NoFlowContext(t *testing.T) {
+func TestNewParallelAgentStepFunc_NoContext(t *testing.T) {
 	fn := NewParallelAgentStepFunc(ParallelAgentStepConfig{
 		SubTasks: []SubTaskSpec{{Label: "x", SystemPrompt: "test"}},
 	})
 	_, err := fn(context.Background(), "input")
 	if err == nil {
-		t.Fatal("expected error when FlowContext missing")
+		t.Fatal("expected error when Context missing")
 	}
 }

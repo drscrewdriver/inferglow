@@ -38,7 +38,7 @@ type SubAgentConfig struct {
 
 // NewSubAgentAction creates the "spawn_agent" action that allows the LLM
 // to spawn a child agent for delegated tasks. The child agent runs via
-// FlowContext.RunAgent with depth control to prevent infinite recursion.
+// Context.RunAgent with depth control to prevent infinite recursion.
 func NewSubAgentAction(cfg SubAgentConfig) *action.Action {
 	if cfg.MaxDepth <= 0 {
 		cfg.MaxDepth = 3
@@ -78,8 +78,8 @@ func (e *subAgentExecutor) Execute(ctx context.Context, input map[string]any) (*
 		maxRounds = int(f)
 	}
 
-	// Get FlowContext from ctx to access RunAgent.
-	fc, ok := flow.FlowContextFrom(ctx)
+	// Get Context from ctx to access RunAgent.
+	fc, ok := flow.ContextFrom(ctx)
 	if !ok || fc == nil {
 		return &action.ActionResult{
 			OK:     false,
@@ -88,7 +88,7 @@ func (e *subAgentExecutor) Execute(ctx context.Context, input map[string]any) (*
 		}, nil
 	}
 
-	// Run the sub-agent via FlowContext.RunAgent with depth control.
+	// Run the sub-agent via Context.RunAgent with depth control.
 	opts := &flow.AgentRunOptions{
 		MaxRounds: maxRounds,
 		MaxDepth:  e.cfg.MaxDepth,

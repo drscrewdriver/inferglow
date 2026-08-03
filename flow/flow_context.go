@@ -25,7 +25,7 @@ import (
 	"errors"
 )
 
-// ErrPauseRequested 是 step 主动调用 FlowContext.RequestPause 时返回的
+// ErrPauseRequested 是 step 主动调用 Context.RequestPause 时返回的
 // 哨兵错误。flow.Execute 在 step.Func 返回该错误时将状态置为 StatusPaused
 // 而非 StatusFailed，且不会把它追加到 exec.State.Errors。
 var ErrPauseRequested = errors.New("flow: pause requested by step")
@@ -47,7 +47,7 @@ const (
 
 // Span 是 flow 包对 tracing span 的最小抽象。flow 包不直接依赖 observability，
 // 仅暴露 End() 方法供调用方在 step 结束时调用。当未配置 tracer 时，
-// FlowContext.StartSpan 返回一个 no-op Span。
+// Context.StartSpan 返回一个 no-op Span。
 type Span interface {
 	End()
 }
@@ -64,13 +64,11 @@ func NoopSpan() Span { return noopSpan{} }
 // flowContextKey 是 context.Value 的私有 key 类型。
 type flowContextKey struct{}
 
-// FlowContext 为 flow 步骤提供横切关注点访问。
+// Context 为 flow 步骤提供横切关注点访问。
 // 定义在 flow 包（不依赖 orchestrator）；由 orchestrator 提供具体实现并注入。
 // 接口方法仅使用基础类型（context.Context, string, map[string]any, any），
 // 避免引入 action/model/session 依赖。
-//
-//nolint:revive // stutter is intentional for clarity
-type FlowContext interface {
+type Context interface {
 	// ExecuteAction 按名称调用已注册的 Action。
 	ExecuteAction(ctx context.Context, name string, params map[string]any) (any, error)
 
@@ -117,6 +115,11 @@ type FlowContext interface {
 	RunAgentParallel(ctx context.Context, agents []AgentSubTask) ([]string, error)
 }
 
+// FlowContext is kept for backward compatibility.
+//
+//nolint:revive
+type FlowContext = Context
+
 // ErrAgentNotConfigured 是 RunAgent / RunAgentParallel 在未配置 Agent 运行时
 // 返回的哨兵错误。通常出现在直接使用 flow.Execute 而非通过 orchestrator/agent
 // 的 executeFlow 路径时（后者会注入 engine 引用）。
@@ -154,26 +157,31 @@ type AgentSubTask struct {
 	MaxRounds int
 }
 
-// WithFlowContext 将 FlowContext 注入到 context.Context 中。
+// WithFlowContext 将 Context 注入到 context.Context 中。
 // 返回新的 context（不修改原始 ctx）。
-func WithFlowContext(ctx context.Context, fc FlowContext) context.Context {
+func WithFlowContext(ctx context.Context, fc Context) context.Context {
 	return context.WithValue(ctx, flowContextKey{}, fc)
 }
 
-// FlowContextFrom 从 context.Context 中提取 FlowContext。
+// ContextFrom 从 context.Context 中提取 Context。
 // 若未注入，返回 (nil, false)。
 //
 //nolint:revive // stutter is intentional for clarity
-func FlowContextFrom(ctx context.Context) (FlowContext, bool) {
-	fc, ok := ctx.Value(flowContextKey{}).(FlowContext)
+func ContextFrom(ctx context.Context) (Context, bool) {
+	fc, ok := ctx.Value(flowContextKey{}).(Context)
 	return fc, ok
 }
+
+// FlowContextFrom is kept for backward compatibility.
+//
+//nolint:revive
+var FlowContextFrom = ContextFrom
 
 // ---------------------------------------------------------------------------
 // 横切关注点小接口（通过 context 值注入，未注入时返回 noop 实现）
 //
-// 这些接口将 FlowContext 中的横切方法（审计/安全/可观测/KV）解耦为独立
-// 的小接口，step 可通过 context getter 访问而无需依赖完整的 FlowContext。
+// 这些接口将 Context 中的横切方法（审计/安全/可观测/KV）解耦为独立
+// 的小接口，step 可通过 context getter 访问而无需依赖完整的 Context。
 // 这是四阶段迁移的阶段 1：定义接口 + context getter，零破坏。
 // ---------------------------------------------------------------------------
 
@@ -228,7 +236,7 @@ func (noopSecurityHook) MaskInput(input string) string { return input }
 func (noopSecurityHook) CheckOutput(string) error      { return nil }
 
 // SpanStarterHook 是 tracing span 启动的横切接口。
-// 注意：该接口与 FlowContext.StartSpan 签名一致，但独立定义以便通过 context 传递。
+// 注意：该接口与 Context.StartSpan 签名一致，但独立定义以便通过 context 传递。
 // 未注入时 SpanStarterHookFrom 返回 noopSpanStarter。
 type SpanStarterHook interface {
 	StartSpan(ctx context.Context, kind SpanKind, name string) (context.Context, Span)

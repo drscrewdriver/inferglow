@@ -319,7 +319,7 @@ func TestMeta_Concurrent(t *testing.T) {
 // tagged returns a Func that echoes a stable tag through its Outputs so a
 // test can verify which function instance is actually stored.
 func tagged(tag string) Func {
-	return func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	return func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		_ = ctx
 		_ = in
 		_ = fctx

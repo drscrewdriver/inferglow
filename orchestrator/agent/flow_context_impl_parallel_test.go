@@ -58,9 +58,9 @@ func TestRunAgentParallel_Timing(t *testing.T) {
 	}
 
 	step := flow.NewStep("parallel-timing", func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext not found")
+			return nil, errors.New("Context not found")
 		}
 		results, err := fc.RunAgentParallel(ctx, []flow.AgentSubTask{
 			{Label: "t1", UserMessage: "a", SystemPrompt: "s", MaxRounds: 3},
@@ -134,9 +134,9 @@ func TestRunAgentParallel_ErrorPropagation(t *testing.T) {
 	}
 
 	step := flow.NewStep("parallel-error", func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext not found")
+			return nil, errors.New("Context not found")
 		}
 		_, err := fc.RunAgentParallel(ctx, []flow.AgentSubTask{
 			{Label: "ok", UserMessage: "a", SystemPrompt: "s", MaxRounds: 3},

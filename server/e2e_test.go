@@ -14,12 +14,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// mockFlowContext is a minimal FlowContext for testing.
-type mockFlowContext struct {
-	flow.FlowContext
+// mockContext is a minimal Context for testing.
+type mockContext struct {
+	flow.Context
 }
 
-func (m *mockFlowContext) GenerateModel(ctx context.Context, system, userMessage string) (string, error) {
+func (m *mockContext) GenerateModel(ctx context.Context, system, userMessage string) (string, error) {
 	// Return a mock JSON response based on the system prompt.
 	if contains(system, "triage") {
 		return `{"category": "bug", "priority": "high", "summary": "Test issue"}`, nil
@@ -50,7 +50,7 @@ func containsSubstring(s, substr string) bool {
 }
 
 // TestEndToEnd_BugFixWorkflow tests the complete chain:
-// YAML → FlowDef → Flow → Execute with FlowContext injection.
+// YAML → FlowDef → Flow → Execute with Context injection.
 func TestEndToEnd_BugFixWorkflow(t *testing.T) {
 	// 1. Create stage registry and register builtins.
 	stages := stage.NewRegistry()
@@ -97,10 +97,10 @@ spec:
 		t.Fatalf("register flow: %v", err)
 	}
 
-	// 5. Create RunManager with mock FlowContext factory.
+	// 5. Create RunManager with mock Context factory.
 	runMgr := NewRunManager(flowStore)
-	runMgr.SetFlowContextFactory(func(ctx context.Context) flow.FlowContext {
-		return &mockFlowContext{}
+	runMgr.SetContextFactory(func(ctx context.Context) flow.Context {
+		return &mockContext{}
 	})
 
 	// 6. Start run.

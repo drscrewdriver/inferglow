@@ -83,21 +83,21 @@ func TestErrPauseRequested_IsSentinel(t *testing.T) {
 // A8: step 主动 RequestPause
 // ============================================================================
 
-// TestExecute_StepRequestPause_StatusPaused 验证 step 通过 FlowContext.RequestPause
+// TestExecute_StepRequestPause_StatusPaused 验证 step 通过 Context.RequestPause
 // 主动请求挂起时，flow.Execute 将状态置为 StatusPaused 而非 StatusFailed，
 // 且不把 ErrPauseRequested 追加到 exec.State.Errors。
 //
-// step 通过 flow.FlowContextFrom(ctx) 取得 FlowContext 并调用 RequestPause，
+// step 通过 ContextFrom(ctx) 取得 Context 并调用 RequestPause,
 // 把返回的 ErrPauseRequested 作为 StepFunc 的返回值。Execute 捕获该哨兵错误
 // 后转入暂停路径。
 func TestExecute_StepRequestPause_StatusPaused(t *testing.T) {
-	fc := newMockFlowContext()
+	fc := newMockContext()
 	ctx := WithFlowContext(context.Background(), fc)
 
 	step := NewStep("ask-approval", func(c context.Context, _ any) (any, error) {
-		fctx, ok := FlowContextFrom(c)
+		fctx, ok := ContextFrom(c)
 		if !ok {
-			return nil, errors.New("FlowContext missing")
+			return nil, errors.New("Context missing")
 		}
 		// step 主动请求挂起；RequestPause 返回 ErrPauseRequested。
 		return nil, fctx.RequestPause("await approval")
@@ -128,11 +128,11 @@ func TestExecute_StepRequestPause_StatusPaused(t *testing.T) {
 // TestExecute_StepRequestPause_StepExecLogRecorded 验证 RequestPause 路径
 // 上 StepExecLog 仍记录了被暂停的 step，以便后续 Resume 知道从哪个 step 之后续跑。
 func TestExecute_StepRequestPause_StepExecLogRecorded(t *testing.T) {
-	fc := newMockFlowContext()
+	fc := newMockContext()
 	ctx := WithFlowContext(context.Background(), fc)
 
 	step := NewStep("s1", func(c context.Context, _ any) (any, error) {
-		fctx, _ := FlowContextFrom(c)
+		fctx, _ := ContextFrom(c)
 		return nil, fctx.RequestPause("halt")
 	}).Build()
 	f := NewFlow().AddStep(step).Build()

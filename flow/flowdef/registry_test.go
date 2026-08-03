@@ -15,7 +15,7 @@ func newStageRegistry(names ...string) *stage.Registry {
 	reg := stage.NewRegistry()
 	for _, n := range names {
 		name := n
-		reg.Register(name, func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+		reg.Register(name, func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 			return stage.Outputs{}, nil
 		})
 	}

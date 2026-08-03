@@ -140,7 +140,7 @@ func (f *Flow) Execute(ctx context.Context, input any) *Execution {
 		exec.State.StepExecLog = append(exec.State.StepExecLog, step.Name)
 
 		// A8: step 主动请求挂起。当 step.Func 返回 ErrPauseRequested 时
-		// （通常通过 FlowContext.RequestPause 触发），将状态置为 StatusPaused
+		// （通常通过 Context.RequestPause 触发），将状态置为 StatusPaused
 		// 而非 StatusFailed，且不把 ErrPauseRequested 追加到 Errors。这样
 		// 上层 executeFlow 走暂停路径（f.Pause + 返回 exec 句柄），
 		// daemon 可随后通过 ResumeFlow 续跑。

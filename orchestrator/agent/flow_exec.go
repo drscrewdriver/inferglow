@@ -76,9 +76,9 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 		f.ApplyOptions(opts...)
 	}
 
-	// 1. 构建 FlowContext
+	// 1. 构建 Context
 	// A3: 注入 tracer / piiMasker / outputHook，让 step 可以通过
-	// FlowContext.StartSpan / MaskInput / CheckOutput 访问横切能力。
+	// Context.StartSpan / MaskInput / CheckOutput 访问横切能力。
 	fc := &flowContextImpl{
 		session:    e.session,
 		actionExt:  e.actionExt,
@@ -103,7 +103,7 @@ func (e *Engine) executeFlow(ctx context.Context, f *flow.Flow, userMessage stri
 	// 2. 注入到 context
 	ctx = flow.WithFlowContext(ctx, fc)
 	// Phase 2: 同时注入横切小接口，使 step 可通过 flow.AuditHookFrom(ctx) 等
-	// getter 访问横切能力，无需依赖完整的 FlowContext 接口。
+	// getter 访问横切能力，无需依赖完整的 Context 接口。
 	ctx = flow.WithAuditHook(ctx, fc)
 	ctx = flow.WithSecurityHook(ctx, fc)
 	ctx = flow.WithSpanStarterHook(ctx, fc)

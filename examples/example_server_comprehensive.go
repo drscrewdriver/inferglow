@@ -228,10 +228,10 @@ func main() {
 
 	// 创建 Stage Registry 并注册 stage 函数
 	stageReg := stage.NewRegistry()
-	stageReg.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stageReg.Register("echo", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		return stage.Outputs{"message": in["message"]}, nil
 	})
-	stageReg.Register("greet", func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+	stageReg.Register("greet", func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 		name, _ := in["name"].(string)
 		return stage.Outputs{"greeting": "Hello, " + name + "!"}, nil
 	})

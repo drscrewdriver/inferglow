@@ -423,23 +423,23 @@ func TestExtractFlowResponse_NestedMapFinalResponseNotPromoted(t *testing.T) {
 }
 
 // ============================================================================
-// A8: step 通过 FlowContext.RequestPause 主动挂起（agent 端到端）
+// A8: step 通过 Context.RequestPause 主动挂起（agent 端到端）
 // ============================================================================
 
 // TestExecuteFlow_StepRequestPause_StatusPaused 验证 step 通过
-// FlowContext.RequestPause 主动请求挂起时，executeFlow 观察到 StatusPaused
+// Context.RequestPause 主动请求挂起时，executeFlow 观察到 StatusPaused
 // 并走暂停路径（f.Pause + 返回 exec 句柄）。
 //
 // 与 flow 包的 TestExecute_StepRequestPause_StatusPaused 互补：
-// flow 包用 mockFlowContext 验证 Execute 行为；本测试用真实 flowContextImpl
+// flow 包用 mockContext 验证 Execute 行为；本测试用真实 flowContextImpl
 // 验证 RequestPause 端到端从 orchestrator 层穿透到 flow 层。
 func TestExecuteFlow_StepRequestPause_StatusPaused(t *testing.T) {
 	engine := newTestEngine(t)
 
 	step := flow.NewStep("ask-approval", func(ctx context.Context, _ any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext missing")
+			return nil, errors.New("Context missing")
 		}
 		return nil, fc.RequestPause("await human approval")
 	}).Build()
@@ -473,7 +473,7 @@ func TestAgent_Run_StepRequestPause_ReturnsEmptyResponse(t *testing.T) {
 	mockReq := &mockModelRequester{}
 
 	step := flow.NewStep("pause-step", func(ctx context.Context, _ any) (any, error) {
-		fc, _ := flow.FlowContextFrom(ctx)
+		fc, _ := flow.ContextFrom(ctx)
 		return nil, fc.RequestPause("await approval")
 	}).Build()
 	f := flow.NewFlow().AddStep(step).Build()

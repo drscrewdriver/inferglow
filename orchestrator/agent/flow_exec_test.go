@@ -97,9 +97,9 @@ func TestAgent_Run_WithFlow_UsesExecuteFlow(t *testing.T) {
 	}
 }
 
-// TestExecuteFlow_ActionInStep 验证 flow 步骤中通过 FlowContext 调用 Action。
-// 注册一个 "echo" action，flow 的 step 通过 flow.FlowContextFrom(ctx) 取得
-// FlowContext 并调用 ExecuteAction，断言 action 被调用且结果正确返回。
+// TestExecuteFlow_ActionInStep 验证 flow 步骤中通过 Context 调用 Action。
+// 注册一个 "echo" action，flow 的 step 通过 ContextFrom(ctx) 取得
+// Context 并调用 ExecuteAction，断言 action 被调用且结果正确返回。
 func TestExecuteFlow_ActionInStep(t *testing.T) {
 	sess := session.NewSession("test", 10000)
 	actExt := NewActionExtension()
@@ -121,9 +121,9 @@ func TestExecuteFlow_ActionInStep(t *testing.T) {
 	mockReq := &mockModelRequester{}
 
 	step := flow.NewStep("call-action", func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext not found in ctx")
+			return nil, errors.New("Context not found in ctx")
 		}
 		result, err := fc.ExecuteAction(ctx, "echo", map[string]any{"msg": "hello"})
 		if err != nil {
@@ -218,8 +218,8 @@ func TestExtractFlowResponse(t *testing.T) {
 	})
 }
 
-// TestExecuteFlow_RunAgentInStep 验证 flow 步骤中通过 FlowContext.RunAgent
-// 触发多轮 Agent 循环（executeLoop）。step 从 ctx 提取 FlowContext 并调用
+// TestExecuteFlow_RunAgentInStep 验证 flow 步骤中通过 Context.RunAgent
+// 触发多轮 Agent 循环（executeLoop）。step 从 ctx 提取 Context 并调用
 // RunAgent，mock 模型返回 response decision，断言最终响应来自 Agent 循环。
 // 这证明 executeFlow 路径中 engine 引用已正确注入到 flowContextImpl。
 func TestExecuteFlow_RunAgentInStep(t *testing.T) {
@@ -241,9 +241,9 @@ func TestExecuteFlow_RunAgentInStep(t *testing.T) {
 	}
 
 	step := flow.NewStep("run-agent", func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext not found in ctx")
+			return nil, errors.New("Context not found in ctx")
 		}
 		result, err := fc.RunAgent(ctx, "do-task", "you are a helper", nil)
 		if err != nil {
@@ -267,7 +267,7 @@ func TestExecuteFlow_RunAgentInStep(t *testing.T) {
 }
 
 // TestExecuteFlow_RunAgentParallelInStep 验证 flow 步骤中通过
-// FlowContext.RunAgentParallel 触发多个子 Agent 循环。当前实现为顺序降级，
+// Context.RunAgentParallel 触发多个子 Agent 循环。当前实现为顺序降级，
 // mock 模型通过计数器为每个子任务返回不同结果，断言所有结果正确收集。
 func TestExecuteFlow_RunAgentParallelInStep(t *testing.T) {
 	sess := session.NewSession("test", 10000)
@@ -288,9 +288,9 @@ func TestExecuteFlow_RunAgentParallelInStep(t *testing.T) {
 	}
 
 	step := flow.NewStep("parallel-agents", func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, errors.New("FlowContext not found in ctx")
+			return nil, errors.New("Context not found in ctx")
 		}
 		results, err := fc.RunAgentParallel(ctx, []flow.AgentSubTask{
 			{Label: "task-a", UserMessage: "do-a", SystemPrompt: "sys-a", MaxRounds: 5},

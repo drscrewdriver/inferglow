@@ -34,9 +34,9 @@ import (
 //
 // Relationship to stage.Func:
 //   - stage.Func is a specialised form with typed Inputs/Outputs maps
-//     and direct access to FlowContext. Use stage.Adapt to convert a
+//     and direct access to Context. Use stage.Adapt to convert a
 //     Func into a StepFunc for use in LCEL chains or flow.Step.
-//   - StepFunc can access FlowContext via flow.FlowContextFrom(ctx),
+//   - StepFunc can access Context via ContextFrom(ctx),
 //     so it can do everything Func can, just with untyped input/output.
 type StepFunc func(ctx context.Context, input any) (any, error)
 

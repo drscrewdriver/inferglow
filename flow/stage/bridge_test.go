@@ -32,7 +32,7 @@ import (
 // and correctly handles map input/output.
 func TestAdapt_BasicConversion(t *testing.T) {
 	// Create a simple Func that echoes input and adds a field.
-	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	stageFn := func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		name, _ := in["name"].(string)
 		return Outputs{
 			"greeting": "hello " + name,
@@ -66,7 +66,7 @@ func TestAdapt_BasicConversion(t *testing.T) {
 
 // TestAdapt_NonMapInput verifies Adapt wraps non-map input under "input" key.
 func TestAdapt_NonMapInput(t *testing.T) {
-	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	stageFn := func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		// Should receive input under "input" key.
 		val, ok := in["input"]
 		if !ok {
@@ -89,19 +89,19 @@ func TestAdapt_NonMapInput(t *testing.T) {
 	}
 }
 
-// TestAdapt_FlowContextExtraction verifies Adapt extracts FlowContext from ctx.
-func TestAdapt_FlowContextExtraction(t *testing.T) {
-	var capturedFctx flow.FlowContext
+// TestAdapt_ContextExtraction verifies Adapt extracts Context from ctx.
+func TestAdapt_ContextExtraction(t *testing.T) {
+	var capturedFctx flow.Context
 
-	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	stageFn := func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		capturedFctx = fctx
 		return Outputs{"ok": true}, nil
 	}
 
 	stepFn := Adapt(stageFn)
 
-	// Create a mock FlowContext.
-	mockFctx := &mockFlowContext{}
+	// Create a mock Context.
+	mockFctx := &mockContext{}
 	ctx := flow.WithFlowContext(context.Background(), mockFctx)
 
 	_, err := stepFn(ctx, map[string]any{})
@@ -109,32 +109,32 @@ func TestAdapt_FlowContextExtraction(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify FlowContext was extracted and passed to Func.
+	// Verify Context was extracted and passed to Func.
 	if capturedFctx != mockFctx {
-		t.Error("FlowContext was not correctly extracted from ctx")
+		t.Error("Context was not correctly extracted from ctx")
 	}
 }
 
-// TestAdapt_NoFlowContext verifies Adapt works when FlowContext is not injected.
-func TestAdapt_NoFlowContext(t *testing.T) {
-	var capturedFctx flow.FlowContext
+// TestAdapt_NoContext verifies Adapt works when Context is not injected.
+func TestAdapt_NoContext(t *testing.T) {
+	var capturedFctx flow.Context
 
-	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	stageFn := func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		capturedFctx = fctx
 		return Outputs{"ok": true}, nil
 	}
 
 	stepFn := Adapt(stageFn)
 
-	// Call without injecting FlowContext.
+	// Call without injecting Context.
 	_, err := stepFn(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// FlowContext should be nil (not injected).
+	// Context should be nil (not injected).
 	if capturedFctx != nil {
-		t.Error("expected nil FlowContext when not injected")
+		t.Error("expected nil Context when not injected")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestAdapt_NoFlowContext(t *testing.T) {
 func TestAdapt_ErrorPropagation(t *testing.T) {
 	expectedErr := errors.New("stage error")
 
-	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
+	stageFn := func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error) {
 		return nil, expectedErr
 	}
 
@@ -154,29 +154,29 @@ func TestAdapt_ErrorPropagation(t *testing.T) {
 	}
 }
 
-// mockFlowContext is a minimal FlowContext implementation for testing.
-type mockFlowContext struct{}
+// mockContext is a minimal Context implementation for testing.
+type mockContext struct{}
 
-func (m *mockFlowContext) ExecuteAction(ctx context.Context, name string, params map[string]any) (any, error) {
+func (m *mockContext) ExecuteAction(ctx context.Context, name string, params map[string]any) (any, error) {
 	return nil, nil
 }
-func (m *mockFlowContext) GenerateModel(ctx context.Context, system, userMessage string) (string, error) {
+func (m *mockContext) GenerateModel(ctx context.Context, system, userMessage string) (string, error) {
 	return "", nil
 }
-func (m *mockFlowContext) SessionHistory() []map[string]any                     { return nil }
-func (m *mockFlowContext) AppendSession(role string, content any)               {}
-func (m *mockFlowContext) AuditAppend(source, action string, input, output any) {}
-func (m *mockFlowContext) SetValue(key string, value any)                       {}
-func (m *mockFlowContext) GetValue(key string) (any, bool)                      { return nil, false }
-func (m *mockFlowContext) StartSpan(ctx context.Context, kind flow.SpanKind, name string) (context.Context, flow.Span) {
+func (m *mockContext) SessionHistory() []map[string]any                     { return nil }
+func (m *mockContext) AppendSession(role string, content any)               {}
+func (m *mockContext) AuditAppend(source, action string, input, output any) {}
+func (m *mockContext) SetValue(key string, value any)                       {}
+func (m *mockContext) GetValue(key string) (any, bool)                      { return nil, false }
+func (m *mockContext) StartSpan(ctx context.Context, kind flow.SpanKind, name string) (context.Context, flow.Span) {
 	return ctx, flow.NoopSpan()
 }
-func (m *mockFlowContext) MaskInput(input string) string    { return input }
-func (m *mockFlowContext) CheckOutput(output string) error  { return nil }
-func (m *mockFlowContext) RequestPause(reason string) error { return nil }
-func (m *mockFlowContext) RunAgent(ctx context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
+func (m *mockContext) MaskInput(input string) string    { return input }
+func (m *mockContext) CheckOutput(output string) error  { return nil }
+func (m *mockContext) RequestPause(reason string) error { return nil }
+func (m *mockContext) RunAgent(ctx context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
 	return "", nil
 }
-func (m *mockFlowContext) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
+func (m *mockContext) RunAgentParallel(ctx context.Context, agents []flow.AgentSubTask) ([]string, error) {
 	return nil, nil
 }

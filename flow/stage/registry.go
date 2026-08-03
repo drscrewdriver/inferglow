@@ -2,7 +2,7 @@
 //
 // A Stage is the unit of execution in a flow. Stages are registered by name
 // and looked up at flow-build time. Each Func receives the step inputs
-// and the flow.FlowContext (for LLM/Action/Session access).
+// and the flow.Context (for LLM/Action/Session access).
 //
 // This package was recycled from the inferflow project and adapted to live
 // under the inferglow flow module.
@@ -21,14 +21,14 @@ type Inputs map[string]any
 // Outputs is the set of named outputs produced by a stage.
 type Outputs map[string]any
 
-// Func is the signature for a registered stage. The flow.FlowContext
+// Func is the signature for a registered stage. The flow.Context
 // may be nil when the stage is invoked outside a flow (e.g. in unit tests).
 //
 // Func is a specialised form of flow.StepFunc that receives typed
-// Inputs/Outputs maps and direct access to FlowContext. Use Adapt to
+// Inputs/Outputs maps and direct access to Context. Use Adapt to
 // convert a Func into a flow.StepFunc for use in LCEL chains or
 // other StepFunc-based APIs.
-type Func func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error)
+type Func func(ctx context.Context, in Inputs, fctx flow.Context) (Outputs, error)
 
 // StageFunc is kept for backward compatibility.
 //
@@ -38,14 +38,14 @@ type StageFunc = Func
 // Adapt converts a Func into a flow.StepFunc so it can be used in
 // LCEL chains, flow.Step, or any other API that accepts flow.StepFunc.
 //
-// The returned StepFunc extracts the FlowContext from ctx (via
-// flow.FlowContextFrom), type-asserts the input to map[string]any
+// The returned StepFunc extracts the Context from ctx (via
+// ContextFrom), type-asserts the input to map[string]any
 // (falling back to wrapping under key "input"), and converts the
 // stage.Outputs result to a plain map[string]any.
 func Adapt(fn Func) flow.StepFunc {
 	return func(ctx context.Context, input any) (any, error) {
 		data := toMap(input)
-		fctx, _ := flow.FlowContextFrom(ctx)
+		fctx, _ := flow.ContextFrom(ctx)
 		outs, err := fn(ctx, data, fctx)
 		if err != nil {
 			return nil, err

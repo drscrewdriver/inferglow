@@ -34,7 +34,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// flowContextImpl bridges orchestrator components into the flow.FlowContext
+// flowContextImpl bridges orchestrator components into the flow.Context
 // interface. It is constructed by the Engine (or Agent) and injected into
 // flow steps via flow.WithContext so that flow nodes can invoke actions,
 // call the LLM, read/append session history, record audit entries, and
@@ -97,11 +97,11 @@ func flowToOtelKind(kind flow.SpanKind) SemanticSpanKind {
 }
 
 // Compile-time interface satisfaction checks.
-// flowContextImpl satisfies both the full FlowContext interface and the
+// flowContextImpl satisfies both the full Context interface and the
 // four small hook interfaces (AuditHook, SecurityHook, SpanStarterHook, KVStore)
 // so it can be injected into context for step-level access via *From(ctx) getters.
 var (
-	_ flow.FlowContext     = (*flowContextImpl)(nil)
+	_ flow.Context         = (*flowContextImpl)(nil)
 	_ flow.AuditHook       = (*flowContextImpl)(nil)
 	_ flow.SecurityHook    = (*flowContextImpl)(nil)
 	_ flow.SpanStarterHook = (*flowContextImpl)(nil)
@@ -364,18 +364,18 @@ func cloneEngineForParallel(src *Engine) *Engine {
 	}
 	tl, cm := newTurnLoopAndCancel()
 	return &Engine{
-		session:       src.session,
-		actionExt:     src.actionExt,
-		modelReq:      src.modelReq,
-		auditHook:     src.auditHook,
-		loopGuard:     src.loopGuard,
-		streamTimeout: src.streamTimeout,
-		turnLoop:      tl,
-		cancelManager: cm,
-		outputSchema:  src.outputSchema,
-		tracer:        src.tracer,
+		session:           src.session,
+		actionExt:         src.actionExt,
+		modelReq:          src.modelReq,
+		auditHook:         src.auditHook,
+		loopGuard:         src.loopGuard,
+		streamTimeout:     src.streamTimeout,
+		turnLoop:          tl,
+		cancelManager:     cm,
+		outputSchema:      src.outputSchema,
+		tracer:            src.tracer,
 		maxToolCallRounds: src.maxToolCallRounds,
-		depth:         src.depth + 1,
+		depth:             src.depth + 1,
 	}
 }
 

@@ -265,10 +265,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// SetFlowContextFactory sets the factory for creating FlowContext in runs.
+// SetContextFactory sets the factory for creating Context in runs.
 // This enables stage functions to call LLM via fctx.GenerateModel().
-func (s *Server) SetFlowContextFactory(factory FlowContextFactory) {
-	s.runMgr.SetFlowContextFactory(factory)
+func (s *Server) SetContextFactory(factory ContextFactory) {
+	s.runMgr.SetContextFactory(factory)
 }
 
 // SetMemoryStore sets the persistent memory backend.

@@ -28,7 +28,7 @@ import (
 )
 
 // AgentStepConfig 配置 AgentStepFunc 的行为。
-// 返回的 StepFunc 从 ctx 中提取 FlowContext，调用 RunAgent 执行 PLAN→EXECUTE 循环，
+// 返回的 StepFunc 从 ctx 中提取 Context，调用 RunAgent 执行 PLAN→EXECUTE 循环，
 // 使 Flow 中的任意 step 可以嵌入 Agent 级别的多轮智能决策能力。
 type AgentStepConfig struct {
 	// SystemPrompt 是 Agent 循环的系统提示词。
@@ -47,7 +47,7 @@ type AgentStepConfig struct {
 }
 
 // NewAgentStepFunc 创建一个 StepFunc，在 step 内部运行完整的多轮 Agent 循环。
-// 返回的 StepFunc 从 ctx 中提取 FlowContext，调用 RunAgent 执行 PLAN→EXECUTE 循环。
+// 返回的 StepFunc 从 ctx 中提取 Context，调用 RunAgent 执行 PLAN→EXECUTE 循环。
 // 这允许 Flow 中的任意 step 嵌入 Agent 级别的多轮智能决策能力。
 //
 // 用法示例：
@@ -60,9 +60,9 @@ type AgentStepConfig struct {
 //	})).Build()
 func NewAgentStepFunc(cfg AgentStepConfig) flow.StepFunc {
 	return func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, fmt.Errorf("agent step: FlowContext not found in context")
+			return nil, fmt.Errorf("agent step: Context not found in context")
 		}
 
 		userMessage := extractInputString(input, cfg.InputKey)
@@ -115,9 +115,9 @@ type SubTaskSpec struct {
 //	})).Build()
 func NewParallelAgentStepFunc(cfg ParallelAgentStepConfig) flow.StepFunc {
 	return func(ctx context.Context, input any) (any, error) {
-		fc, ok := flow.FlowContextFrom(ctx)
+		fc, ok := flow.ContextFrom(ctx)
 		if !ok {
-			return nil, fmt.Errorf("parallel agent step: FlowContext not found in context")
+			return nil, fmt.Errorf("parallel agent step: Context not found in context")
 		}
 
 		// 构建 AgentSubTask 列表

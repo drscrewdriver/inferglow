@@ -1,12 +1,12 @@
 // Package builtin provides built-in stage functions for common agent workflows.
 //
-// These stages use the flow.FlowContext interface to call LLM (via GenerateModel)
+// These stages use the flow.Context interface to call LLM (via GenerateModel)
 // or run multi-turn agent loops (via RunAgent). They are designed to be registered
 // in a stage.Registry and referenced by name in YAML flow definitions.
 //
 // Each stage function follows the stage.StageFunc signature:
 //
-//	func(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error)
+//	func(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error)
 //
 // When fctx is nil, stages fall back to simple pass-through or return an error.
 package builtin
@@ -67,9 +67,9 @@ func RegisterAll(reg *stage.Registry) {
 //
 // Outputs:
 //   - "category", "priority", "summary", "labels"
-func Triage(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+func Triage(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 	if fctx == nil {
-		return stage.Outputs{"category": "unknown", "priority": "medium", "summary": "no FlowContext", "labels": []string{}}, nil
+		return stage.Outputs{"category": "unknown", "priority": "medium", "summary": "no Context", "labels": []string{}}, nil
 	}
 
 	issueTitle := getString(in, "issue_title")
@@ -102,7 +102,7 @@ func Triage(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.
 //
 // Outputs:
 //   - "title", "steps", "risks", "estimated_complexity"
-func Plan(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+func Plan(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 	if fctx == nil {
 		return stage.Outputs{"title": "no-op plan", "steps": "[]", "risks": "[]", "estimated_complexity": "low"}, nil
 	}
@@ -140,7 +140,7 @@ func Plan(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Ou
 //
 // Outputs:
 //   - "files", "summary", "tests"
-func Coder(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+func Coder(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 	if fctx == nil {
 		return stage.Outputs{"files": "[]", "summary": "no-op", "tests": "[]"}, nil
 	}
@@ -176,7 +176,7 @@ func Coder(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.O
 //
 // Outputs:
 //   - "approved", "comments", "summary", "suggestions"
-func Reviewer(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Outputs, error) {
+func Reviewer(ctx context.Context, in stage.Inputs, fctx flow.Context) (stage.Outputs, error) {
 	if fctx == nil {
 		return stage.Outputs{"approved": "true", "comments": "[]", "summary": "no-op review", "suggestions": "[]"}, nil
 	}
