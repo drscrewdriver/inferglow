@@ -38,7 +38,7 @@ func (s *Server) handleCreateKnowledgeBase(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		Name        string `json:"name"`
+		Name        string `json:"name" validate:"required"`
 		Description string `json:"description,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -179,15 +179,15 @@ func (s *Server) handleSearchKnowledgeBase(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		Query string `json:"query"`
+		Query string `json:"query" validate:"required"`
 		Limit int    `json:"limit,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "query is required")
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 	if req.Limit <= 0 {

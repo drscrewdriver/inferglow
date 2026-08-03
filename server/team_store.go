@@ -31,7 +31,7 @@ import (
 // TeamConfig defines a team of agents for coordinated execution.
 type TeamConfig struct {
 	ID        string             `json:"id"`
-	Name      string             `json:"name"`
+	Name      string             `json:"name" validate:"required"`
 	Members   []TeamMemberConfig `json:"members"`
 	MaxRounds int                `json:"max_rounds,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`

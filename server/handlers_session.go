@@ -37,7 +37,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Owner   string `json:"owner,omitempty"`
-		AgentID string `json:"agent_id"`
+		AgentID string `json:"agent_id" validate:"required"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())

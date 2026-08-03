@@ -19,7 +19,7 @@ import (
 // handleCreateRun handles POST /v1/runs — submit a flow execution.
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Flow   string         `json:"flow"`
+		Flow   string         `json:"flow" validate:"required"`
 		Inputs map[string]any `json:"inputs"`
 		Owner  string         `json:"owner"`
 	}
@@ -27,8 +27,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if req.Flow == "" {
-		writeError(w, http.StatusBadRequest, "flow name is required")
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 

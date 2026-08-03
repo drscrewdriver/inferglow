@@ -48,8 +48,8 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if cfg.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if err := validate.Struct(cfg); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 
@@ -91,7 +91,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 // ChatRequest is the request body for agent chat.
 type ChatRequest struct {
-	Message     string `json:"message"`
+	Message     string `json:"message" validate:"required"`
 	PreemptMode string `json:"preempt_mode,omitempty"` // "queue"|"safe_point"|"force"
 }
 
@@ -134,8 +134,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if req.Message == "" {
-		writeError(w, http.StatusBadRequest, "message is required")
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 
@@ -194,6 +194,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
+		return
+	}
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -243,8 +247,8 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if req.Message == "" {
-		writeError(w, http.StatusBadRequest, "message is required")
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 

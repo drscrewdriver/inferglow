@@ -1,0 +1,2706 @@
+openapi: "3.0.3"
+info:
+  title: "InferGlow API"
+  description: "InferGlow Agent Framework REST API"
+  version: "6.0.0"
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  # ─── Health & Dashboard ───────────────────────────────────────────────
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      tags: [System]
+      responses:
+        "200":
+          description: Server health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /dashboard:
+    get:
+      operationId: getDashboard
+      summary: Observability dashboard (HTML)
+      tags: [System]
+      responses:
+        "200":
+          description: Dashboard HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  # ─── Agents ───────────────────────────────────────────────────────────
+  /v1/agents:
+    get:
+      operationId: listAgents
+      summary: List all agents
+      tags: [Agents]
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentListResponse"
+    post:
+      operationId: createAgent
+      summary: Create a new agent
+      tags: [Agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentConfig"
+      responses:
+        "201":
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get an agent by ID
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentGetResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteAgent
+      summary: Delete an agent
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Agent deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/agents/{id}/chat:
+    post:
+      operationId: chatWithAgent
+      summary: Synchronous chat with an agent
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: Too many requests (queue full)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+
+  /v1/agents/{id}/input:
+    post:
+      operationId: agentInput
+      summary: Submit input to agent with preempt mode
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Agent response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: Input queue is full
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+        "503":
+          description: Agent does not support input queue
+
+  /v1/agents/{id}/stream:
+    post:
+      operationId: streamChatWithAgent
+      summary: Stream chat with agent (SSE)
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SSEStream"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/agents/{id}/stream-run:
+    post:
+      operationId: streamRunAgent
+      summary: Streaming agent execution with tool call events (SSE)
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: SSE event stream with tool/LLM lifecycle events
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/ToolStreamEvent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/agents/{id}/status:
+    get:
+      operationId: getAgentStatus
+      summary: Get agent runtime status (TurnLoop phase)
+      tags: [Agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Agent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Sessions ─────────────────────────────────────────────────────────
+  /v1/sessions:
+    post:
+      operationId: createSession
+      summary: Create a new management session
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listSessions
+      summary: List all sessions
+      tags: [Sessions]
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionRecord"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/sessions/{id}:
+    get:
+      operationId: getSession
+      summary: Get a session by ID
+      tags: [Sessions]
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteSession
+      summary: Delete a session
+      tags: [Sessions]
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteSessionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/sessions/{id}/stream:
+    get:
+      operationId: streamSession
+      summary: Stream session events via SSE
+      tags: [Sessions]
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Tools ────────────────────────────────────────────────────────────
+  /v1/tools:
+    get:
+      operationId: listTools
+      summary: List available tools
+      tags: [Tools]
+      responses:
+        "200":
+          description: Tool list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolListResponse"
+
+  # ─── Memories ─────────────────────────────────────────────────────────
+  /v1/memories:
+    post:
+      operationId: createMemory
+      summary: Create a memory entry
+      tags: [Memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMemoryRequest"
+      responses:
+        "201":
+          description: Memory created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: searchMemories
+      summary: Search memories
+      tags: [Memories]
+      parameters:
+        - name: q
+          in: query
+          description: Search query
+          schema:
+            type: string
+        - name: category
+          in: query
+          description: Filter by category
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum results
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Memory search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemorySearchResponse"
+
+  /v1/memories/{id}:
+    get:
+      operationId: getMemory
+      summary: Get a memory by ID
+      tags: [Memories]
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      responses:
+        "200":
+          description: Memory record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteMemory
+      summary: Delete a memory by ID
+      tags: [Memories]
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      responses:
+        "200":
+          description: Memory deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDeleteResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/memories/search:
+    post:
+      operationId: semanticMemorySearch
+      summary: Semantic search for memories
+      tags: [Memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticMemorySearchRequest"
+      responses:
+        "200":
+          description: Semantic search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemorySearchResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/memories/stats:
+    get:
+      operationId: getMemoryStats
+      summary: Get memory subsystem statistics
+      tags: [Memories]
+      responses:
+        "200":
+          description: Memory statistics
+          content:
+            application/json:
+              schema:
+                type: object
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Flows ────────────────────────────────────────────────────────────
+  /v1/flows:
+    get:
+      operationId: listFlows
+      summary: List all registered flows
+      tags: [Flows]
+      responses:
+        "200":
+          description: Flow names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+    post:
+      operationId: registerFlow
+      summary: Register a new flow (hot-load YAML)
+      tags: [Flows]
+      requestBody:
+        required: true
+        content:
+          application/x-yaml:
+            schema:
+              type: string
+              description: YAML flow definition
+      responses:
+        "201":
+          description: Flow registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowRegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: Unprocessable flow definition
+
+  /v1/flows/{name}:
+    get:
+      operationId: getFlow
+      summary: Get a flow definition by name
+      tags: [Flows]
+      parameters:
+        - $ref: "#/components/parameters/FlowName"
+      responses:
+        "200":
+          description: Flow definition
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/flows/{name}/validate:
+    post:
+      operationId: validateFlow
+      summary: Validate a flow definition without loading
+      tags: [Flows]
+      parameters:
+        - $ref: "#/components/parameters/FlowName"
+      requestBody:
+        required: true
+        content:
+          application/x-yaml:
+            schema:
+              type: string
+              description: YAML flow definition to validate
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowValidateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: Invalid flow definition
+
+  # ─── Stages ───────────────────────────────────────────────────────────
+  /v1/stages:
+    get:
+      operationId: listStages
+      summary: List available stages
+      tags: [Stages]
+      responses:
+        "200":
+          description: Stage names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  # ─── Runs ─────────────────────────────────────────────────────────────
+  /v1/runs:
+    post:
+      operationId: createRun
+      summary: Create and start a flow run
+      tags: [Runs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "202":
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      operationId: listRuns
+      summary: List all runs
+      tags: [Runs]
+      parameters:
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [pending, running, paused, done, failed, canceled]
+      responses:
+        "200":
+          description: Run list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RunResponse"
+
+  /v1/runs/{id}:
+    get:
+      operationId: getRun
+      summary: Get run status by ID
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: cancelRun
+      summary: Cancel a run
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run canceled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunActionResponse"
+        "409":
+          description: Conflict (cannot cancel)
+
+  /v1/runs/{id}/pause:
+    post:
+      operationId: pauseRun
+      summary: Pause a running run
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunActionResponse"
+        "409":
+          description: Conflict (cannot pause)
+
+  /v1/runs/{id}/resume:
+    post:
+      operationId: resumeRun
+      summary: Resume a paused run
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResumeRunRequest"
+      responses:
+        "200":
+          description: Run resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunActionResponse"
+        "409":
+          description: Conflict (cannot resume)
+
+  /v1/runs/{id}/events:
+    get:
+      operationId: getRunEvents
+      summary: Stream run events via SSE
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{id}/state:
+    get:
+      operationId: getRunState
+      summary: Get run execution state snapshot
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run execution state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStateResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{id}/steps:
+    get:
+      operationId: getRunSteps
+      summary: Get run step execution log
+      tags: [Runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run step log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStepsResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Triggers ─────────────────────────────────────────────────────────
+  /v1/triggers:
+    post:
+      operationId: createTrigger
+      summary: Register a new trigger
+      tags: [Triggers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerConfig"
+      responses:
+        "201":
+          description: Trigger created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Trigger already exists
+    get:
+      operationId: listTriggers
+      summary: List all triggers
+      tags: [Triggers]
+      responses:
+        "200":
+          description: Trigger list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TriggerResponse"
+
+  /v1/triggers/{id}:
+    get:
+      operationId: getTrigger
+      summary: Get a trigger by ID
+      tags: [Triggers]
+      parameters:
+        - $ref: "#/components/parameters/TriggerId"
+      responses:
+        "200":
+          description: Trigger details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteTrigger
+      summary: Remove a trigger
+      tags: [Triggers]
+      parameters:
+        - $ref: "#/components/parameters/TriggerId"
+      responses:
+        "200":
+          description: Trigger deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/triggers/{id}/start:
+    post:
+      operationId: startTrigger
+      summary: Activate a trigger
+      tags: [Triggers]
+      parameters:
+        - $ref: "#/components/parameters/TriggerId"
+      responses:
+        "200":
+          description: Trigger started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/triggers/{id}/stop:
+    post:
+      operationId: stopTrigger
+      summary: Deactivate a trigger
+      tags: [Triggers]
+      parameters:
+        - $ref: "#/components/parameters/TriggerId"
+      responses:
+        "200":
+          description: Trigger stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/webhooks/{id}:
+    post:
+      operationId: webhookEntry
+      summary: Webhook HTTP entry point
+      tags: [Triggers]
+      parameters:
+        - $ref: "#/components/parameters/TriggerId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed
+        "400":
+          description: Not a webhook trigger
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Teams ────────────────────────────────────────────────────────────
+  /v1/teams:
+    post:
+      operationId: createTeam
+      summary: Create a team definition
+      tags: [Teams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeamConfig"
+      responses:
+        "201":
+          description: Team created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listTeams
+      summary: List all team definitions
+      tags: [Teams]
+      responses:
+        "200":
+          description: Team list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamListResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/teams/{id}:
+    get:
+      operationId: getTeam
+      summary: Get a team definition by ID
+      tags: [Teams]
+      parameters:
+        - $ref: "#/components/parameters/TeamId"
+      responses:
+        "200":
+          description: Team config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteTeam
+      summary: Delete a team definition
+      tags: [Teams]
+      parameters:
+        - $ref: "#/components/parameters/TeamId"
+      responses:
+        "200":
+          description: Team deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/teams/{id}/run:
+    post:
+      operationId: teamRun
+      summary: Execute a team coordination round synchronously
+      tags: [Teams]
+      parameters:
+        - $ref: "#/components/parameters/TeamId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeamRunRequest"
+      responses:
+        "200":
+          description: Team execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamRunResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/teams/{id}/stream:
+    post:
+      operationId: teamStream
+      summary: Execute a team coordination round with SSE streaming
+      tags: [Teams]
+      parameters:
+        - $ref: "#/components/parameters/TeamId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeamRunRequest"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Context ──────────────────────────────────────────────────────────
+  /v1/context/search:
+    get:
+      operationId: contextSearch
+      summary: Semantic or keyword search via ContextProvider
+      tags: [Context]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum results
+          schema:
+            type: integer
+            default: 10
+        - name: scope
+          in: query
+          description: Search scope
+          schema:
+            type: string
+            enum: [session, task_group, global]
+            default: global
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/context/stats:
+    get:
+      operationId: contextStats
+      summary: Get context subsystem statistics
+      tags: [Context]
+      responses:
+        "200":
+          description: Context statistics
+          content:
+            application/json:
+              schema:
+                type: object
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Audit ────────────────────────────────────────────────────────────
+  /v1/audit/verify:
+    get:
+      operationId: auditVerify
+      summary: Verify integrity of the audit chain
+      tags: [Audit]
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditVerifyResponse"
+        "501":
+          description: Audit chain is disabled
+
+  /v1/audit/entries:
+    get:
+      operationId: auditEntries
+      summary: Get recent audit entries
+      tags: [Audit]
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum entries
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEntriesResponse"
+        "501":
+          description: Audit chain is disabled
+
+  # ─── Observability ────────────────────────────────────────────────────
+  /v1/observability/spans:
+    get:
+      operationId: getObservabilitySpans
+      summary: Get recent spans
+      tags: [Observability]
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum spans
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Span list
+          content:
+            application/json:
+              schema:
+                type: array
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/observability/stats:
+    get:
+      operationId: getObservabilityStats
+      summary: Get aggregated span statistics
+      tags: [Observability]
+      responses:
+        "200":
+          description: Span statistics
+          content:
+            application/json:
+              schema:
+                type: object
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Schedules ────────────────────────────────────────────────────────
+  /v1/schedules:
+    post:
+      operationId: createSchedule
+      summary: Create a periodic schedule
+      tags: [Schedules]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScheduleRequest"
+      responses:
+        "201":
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listSchedules
+      summary: List all schedules
+      tags: [Schedules]
+      responses:
+        "200":
+          description: Schedule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScheduleResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/schedules/{id}:
+    get:
+      operationId: getSchedule
+      summary: Get a schedule by ID
+      tags: [Schedules]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Schedule details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteSchedule
+      summary: Delete a schedule
+      tags: [Schedules]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Schedule deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/schedules/{id}/start:
+    post:
+      operationId: startSchedule
+      summary: Activate a schedule
+      tags: [Schedules]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Schedule started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/schedules/{id}/stop:
+    post:
+      operationId: stopSchedule
+      summary: Deactivate a schedule
+      tags: [Schedules]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Schedule stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Credentials ──────────────────────────────────────────────────────
+  /v1/credentials:
+    post:
+      operationId: createCredential
+      summary: Create a credential
+      tags: [Credentials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCredentialRequest"
+      responses:
+        "201":
+          description: Credential created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listCredentials
+      summary: List all credentials (masked)
+      tags: [Credentials]
+      responses:
+        "200":
+          description: Credential list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CredentialRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/credentials/{id}:
+    get:
+      operationId: getCredential
+      summary: Get a credential by ID (masked)
+      tags: [Credentials]
+      parameters:
+        - $ref: "#/components/parameters/CredentialId"
+      responses:
+        "200":
+          description: Credential record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteCredential
+      summary: Delete a credential
+      tags: [Credentials]
+      parameters:
+        - $ref: "#/components/parameters/CredentialId"
+      responses:
+        "200":
+          description: Credential deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Workspaces ───────────────────────────────────────────────────────
+  /v1/workspaces:
+    post:
+      operationId: createWorkspace
+      summary: Open a workspace
+      tags: [Workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInfo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listWorkspaces
+      summary: List all opened workspaces
+      tags: [Workspaces]
+      responses:
+        "200":
+          description: Workspace list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkspaceInfo"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/workspaces/{id}:
+    get:
+      operationId: getWorkspace
+      summary: Get a workspace by name
+      tags: [Workspaces]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Workspace info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInfo"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteWorkspace
+      summary: Close a workspace
+      tags: [Workspaces]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Workspace closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceDeleteResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/workspaces/{id}/files:
+    get:
+      operationId: listWorkspaceFiles
+      summary: List files in a workspace
+      tags: [Workspaces]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: path
+          in: query
+          description: Relative path within workspace
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceFilesResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Skill Hub ────────────────────────────────────────────────────────
+  /v1/skill-hub:
+    get:
+      operationId: listSkills
+      summary: List installed skills
+      tags: [Skill Hub]
+      responses:
+        "200":
+          description: Skill list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SkillRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/skill-hub/{name}:
+    get:
+      operationId: getSkill
+      summary: Get a skill by name
+      tags: [Skill Hub]
+      parameters:
+        - $ref: "#/components/parameters/SkillName"
+      responses:
+        "200":
+          description: Skill details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteSkill
+      summary: Remove a skill
+      tags: [Skill Hub]
+      parameters:
+        - $ref: "#/components/parameters/SkillName"
+      responses:
+        "200":
+          description: Skill deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/skill-hub/{name}/execute:
+    post:
+      operationId: executeSkill
+      summary: Execute a skill
+      tags: [Skill Hub]
+      parameters:
+        - $ref: "#/components/parameters/SkillName"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecuteSkillRequest"
+      responses:
+        "200":
+          description: Skill execution result
+          content:
+            application/json:
+              schema:
+                type: object
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── Knowledge Bases ──────────────────────────────────────────────────
+  /v1/knowledge-bases:
+    post:
+      operationId: createKnowledgeBase
+      summary: Create a knowledge base
+      tags: [Knowledge Bases]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKnowledgeBaseRequest"
+      responses:
+        "201":
+          description: Knowledge base created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KBRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Knowledge base already exists
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    get:
+      operationId: listKnowledgeBases
+      summary: List all knowledge bases
+      tags: [Knowledge Bases]
+      responses:
+        "200":
+          description: Knowledge base list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KBRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/knowledge-bases/{name}:
+    get:
+      operationId: getKnowledgeBase
+      summary: Get a knowledge base by name
+      tags: [Knowledge Bases]
+      parameters:
+        - $ref: "#/components/parameters/KBName"
+      responses:
+        "200":
+          description: Knowledge base details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KBRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteKnowledgeBase
+      summary: Delete a knowledge base
+      tags: [Knowledge Bases]
+      parameters:
+        - $ref: "#/components/parameters/KBName"
+      responses:
+        "200":
+          description: Knowledge base deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KBDeleteResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/knowledge-bases/{name}/ingest:
+    post:
+      operationId: ingestKnowledgeBase
+      summary: Ingest documents into a knowledge base
+      tags: [Knowledge Bases]
+      parameters:
+        - $ref: "#/components/parameters/KBName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestKBRequest"
+      responses:
+        "200":
+          description: Documents ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestKBResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/knowledge-bases/{name}/search:
+    post:
+      operationId: searchKnowledgeBase
+      summary: Search a knowledge base
+      tags: [Knowledge Bases]
+      parameters:
+        - $ref: "#/components/parameters/KBName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchKBRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── MCP Hub ──────────────────────────────────────────────────────────
+  /v1/mcp-hub:
+    get:
+      operationId: listMCPTools
+      summary: List installed MCP tools
+      tags: [MCP Hub]
+      responses:
+        "200":
+          description: MCP tool list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MCPToolRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      operationId: installMCPTool
+      summary: Install an MCP tool
+      tags: [MCP Hub]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstallMCPToolRequest"
+      responses:
+        "201":
+          description: MCP tool installed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPToolRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Tool already exists
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/mcp-hub/{name}:
+    get:
+      operationId: getMCPTool
+      summary: Get an MCP tool by name
+      tags: [MCP Hub]
+      parameters:
+        - $ref: "#/components/parameters/MCPToolName"
+      responses:
+        "200":
+          description: MCP tool details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPToolRecord"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      operationId: deleteMCPTool
+      summary: Remove an MCP tool
+      tags: [MCP Hub]
+      parameters:
+        - $ref: "#/components/parameters/MCPToolName"
+      responses:
+        "200":
+          description: MCP tool deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/mcp-hub/{name}/call:
+    post:
+      operationId: callMCPTool
+      summary: Invoke an MCP tool
+      tags: [MCP Hub]
+      parameters:
+        - $ref: "#/components/parameters/MCPToolName"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallMCPToolRequest"
+      responses:
+        "200":
+          description: Tool invocation result
+          content:
+            application/json:
+              schema:
+                type: object
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ─── OpenAPI Spec ─────────────────────────────────────────────────────
+  /openapi.json:
+    get:
+      operationId: getOpenAPISpec
+      summary: Get OpenAPI 3.0 specification (JSON)
+      tags: [System]
+      responses:
+        "200":
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  parameters:
+    AgentId:
+      name: id
+      in: path
+      required: true
+      description: Agent ID
+      schema:
+        type: string
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: Session ID
+      schema:
+        type: string
+    MemoryId:
+      name: id
+      in: path
+      required: true
+      description: Memory ID
+      schema:
+        type: string
+    FlowName:
+      name: name
+      in: path
+      required: true
+      description: Flow name
+      schema:
+        type: string
+    RunId:
+      name: id
+      in: path
+      required: true
+      description: Run ID
+      schema:
+        type: string
+    TriggerId:
+      name: id
+      in: path
+      required: true
+      description: Trigger ID
+      schema:
+        type: string
+    TeamId:
+      name: id
+      in: path
+      required: true
+      description: Team ID
+      schema:
+        type: string
+    ScheduleId:
+      name: id
+      in: path
+      required: true
+      description: Schedule ID
+      schema:
+        type: string
+    CredentialId:
+      name: id
+      in: path
+      required: true
+      description: Credential ID
+      schema:
+        type: string
+    WorkspaceId:
+      name: id
+      in: path
+      required: true
+      description: Workspace name (ID)
+      schema:
+        type: string
+    SkillName:
+      name: name
+      in: path
+      required: true
+      description: Skill name
+      schema:
+        type: string
+    KBName:
+      name: name
+      in: path
+      required: true
+      description: Knowledge base name
+      schema:
+        type: string
+    MCPToolName:
+      name: name
+      in: path
+      required: true
+      description: MCP tool name
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Service not configured
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    # ─── Common ───────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+      required: [error]
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "deleted"
+
+    # ─── System ───────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "healthy"
+        uptime_s:
+          type: integer
+          description: Server uptime in seconds
+        go_version:
+          type: string
+          description: Go runtime version
+        timestamp:
+          type: string
+          format: date-time
+          description: Current UTC timestamp
+
+    # ─── Agents ───────────────────────────────────────────────────────
+    AgentConfig:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Agent name
+        model:
+          type: string
+          description: Model identifier
+        system_prompt:
+          type: string
+          description: System prompt for the agent
+        memory_strategy:
+          type: string
+          description: Memory strategy (token_buffer, summary, or empty)
+          enum: [token_buffer, summary, ""]
+
+    AgentListResponse:
+      type: object
+      properties:
+        agents:
+          type: array
+          items:
+            type: object
+            description: Agent object
+        count:
+          type: integer
+
+    AgentCreateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+
+    AgentGetResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        agent:
+          type: object
+          description: Agent object
+
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: User message
+        preempt_mode:
+          type: string
+          description: Preempt mode for input queue
+          enum: [queue, safe_point, force]
+
+    ChatResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        agent_id:
+          type: string
+
+    AgentStatusResponse:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        turn_phase:
+          type: string
+          description: Current TurnLoop phase
+        cancel_pending:
+          type: boolean
+
+    # ─── Sessions ─────────────────────────────────────────────────────
+    CreateSessionRequest:
+      type: object
+      required: [agent_id]
+      properties:
+        owner:
+          type: string
+          description: Session owner
+        agent_id:
+          type: string
+          description: Agent ID to bind
+
+    SessionRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        owner:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+          enum: [active, stopped, archived]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DeleteSessionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "deleted"
+        id:
+          type: string
+
+    # ─── Tools ────────────────────────────────────────────────────────
+    ToolListResponse:
+      type: object
+      properties:
+        tools:
+          type: array
+          items:
+            type: object
+        count:
+          type: integer
+
+    # ─── Memories ─────────────────────────────────────────────────────
+    CreateMemoryRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Optional ID (auto-generated if empty)
+        content:
+          type: string
+          description: Memory content text
+        category:
+          type: string
+          description: Memory category
+        facts:
+          type: array
+          items:
+            type: string
+          description: Fact strings
+
+    MemoryRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        category:
+          type: string
+        facts:
+          type: array
+          items:
+            type: string
+
+    MemoryCreateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          example: "created"
+
+    MemorySearchResponse:
+      type: object
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryRecord"
+        count:
+          type: integer
+
+    MemoryDeleteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "deleted"
+        id:
+          type: string
+
+    SemanticMemorySearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 10
+        use_semantic:
+          type: boolean
+          default: false
+
+    # ─── Flows ────────────────────────────────────────────────────────
+    FlowRegisterResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          example: "registered"
+
+    FlowValidateResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        valid:
+          type: boolean
+        steps:
+          type: integer
+
+    # ─── Runs ─────────────────────────────────────────────────────────
+    CreateRunRequest:
+      type: object
+      required: [flow]
+      properties:
+        flow:
+          type: string
+          description: Flow name to execute
+        inputs:
+          type: object
+          description: Flow input parameters
+        owner:
+          type: string
+          description: Run owner
+
+    RunResponse:
+      type: object
+      properties:
+        run_id:
+          type: string
+        flow:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, paused, done, failed, canceled]
+        inputs:
+          type: object
+        output:
+          type: object
+        error:
+          type: string
+        owner:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+
+    RunActionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        run_id:
+          type: string
+
+    ResumeRunRequest:
+      type: object
+      properties:
+        resume_input:
+          type: object
+          description: Input data for resuming
+
+    RunStateResponse:
+      type: object
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+        step_log:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              step:
+                type: string
+              duration:
+                type: string
+              error:
+                type: string
+        step_exec_log:
+          type: array
+          items:
+            type: string
+        error_count:
+          type: integer
+
+    RunStepsResponse:
+      type: object
+      properties:
+        run_id:
+          type: string
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              step:
+                type: string
+              duration:
+                type: string
+              error:
+                type: string
+
+    # ─── Triggers ─────────────────────────────────────────────────────
+    TriggerConfig:
+      type: object
+      required: [id, type, flow]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [webhook, cron, event]
+        flow:
+          type: string
+        enabled:
+          type: boolean
+        cron:
+          $ref: "#/components/schemas/CronConfig"
+        event:
+          $ref: "#/components/schemas/EventConfig"
+        webhook:
+          $ref: "#/components/schemas/WebhookConfig"
+        defaults:
+          type: object
+
+    CronConfig:
+      type: object
+      properties:
+        expr:
+          type: string
+          description: Cron expression or interval
+        interval:
+          type: integer
+          description: Interval duration in nanoseconds
+        inputs:
+          type: object
+
+    EventConfig:
+      type: object
+      properties:
+        topics:
+          type: array
+          items:
+            type: string
+        filter:
+          type: string
+          description: CEL/JS filter expression
+        inputs:
+          type: object
+
+    WebhookConfig:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Custom path suffix
+        inputs:
+          type: object
+        secret:
+          type: string
+          description: HMAC verification secret
+
+    TriggerResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        flow:
+          type: string
+        enabled:
+          type: boolean
+
+    TriggerActionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        id:
+          type: string
+
+    # ─── Teams ────────────────────────────────────────────────────────
+    TeamConfig:
+      type: object
+      required: [name, members]
+      properties:
+        name:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/TeamMemberConfig"
+        max_rounds:
+          type: integer
+          default: 3
+
+    TeamMemberConfig:
+      type: object
+      required: [agent_id, role]
+      properties:
+        agent_id:
+          type: string
+        role:
+          type: string
+        handoff:
+          type: array
+          items:
+            type: string
+
+    TeamCreateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          example: "created"
+
+    TeamListResponse:
+      type: object
+      properties:
+        teams:
+          type: array
+          items:
+            $ref: "#/components/schemas/TeamConfig"
+        count:
+          type: integer
+
+    TeamRunRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+          description: Task description for the team
+
+    TeamRunResponse:
+      type: object
+      properties:
+        team_id:
+          type: string
+        final_response:
+          type: string
+        member_outputs:
+          type: object
+          additionalProperties:
+            type: string
+        rounds:
+          type: integer
+
+    # ─── Context ──────────────────────────────────────────────────────
+    ContextSearchResponse:
+      type: object
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextHit"
+        count:
+          type: integer
+        scope:
+          type: string
+
+    ContextHit:
+      type: object
+      properties:
+        content:
+          type: string
+        score:
+          type: number
+          format: double
+        source:
+          type: string
+        session_id:
+          type: string
+
+    # ─── Audit ────────────────────────────────────────────────────────
+    AuditVerifyResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        entries:
+          type: integer
+        error:
+          type: string
+
+    AuditEntriesResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+        count:
+          type: integer
+
+    # ─── Schedules ────────────────────────────────────────────────────
+    CreateScheduleRequest:
+      type: object
+      required: [name, interval_ms]
+      properties:
+        name:
+          type: string
+        flow:
+          type: string
+        interval_ms:
+          type: integer
+          description: Interval in milliseconds
+        stateful:
+          type: boolean
+        enabled:
+          type: boolean
+
+    ScheduleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        flow:
+          type: string
+        interval_ms:
+          type: integer
+        stateful:
+          type: boolean
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    ScheduleActionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        id:
+          type: string
+
+    # ─── Credentials ──────────────────────────────────────────────────
+    CreateCredentialRequest:
+      type: object
+      required: [name, provider, secret]
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+        username:
+          type: string
+        secret:
+          type: string
+          description: Raw secret value (never returned in responses)
+
+    CredentialRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        username:
+          type: string
+        secret:
+          type: string
+          description: Masked secret preview (first/last 4 chars visible)
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ─── Workspaces ───────────────────────────────────────────────────
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, root_dir]
+      properties:
+        name:
+          type: string
+        root_dir:
+          type: string
+          description: Root directory path
+
+    WorkspaceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        root:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    WorkspaceDeleteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "closed"
+        name:
+          type: string
+
+    WorkspaceFilesResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+
+    # ─── Skill Hub ────────────────────────────────────────────────────
+    SkillRecord:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        executable:
+          type: boolean
+
+    ExecuteSkillRequest:
+      type: object
+      properties:
+        input:
+          type: object
+          description: Input parameters for the skill
+
+    # ─── Knowledge Bases ──────────────────────────────────────────────
+    CreateKnowledgeBaseRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    KBRecord:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        doc_count:
+          type: integer
+
+    KBDeleteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "deleted"
+        name:
+          type: string
+
+    IngestKBRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Raw text content to split and ingest
+        splitter:
+          type: string
+          description: Splitter type
+          enum: [recursive, markdown, token, ""]
+        chunk_size:
+          type: integer
+          default: 1000
+        chunk_overlap:
+          type: integer
+          default: 100
+        documents:
+          type: array
+          description: Pre-chunked documents
+          items:
+            type: object
+            properties:
+              content:
+                type: string
+              source:
+                type: string
+              metadata:
+                type: object
+
+    IngestKBResponse:
+      type: object
+      properties:
+        added:
+          type: integer
+          description: Number of documents added
+        name:
+          type: string
+
+    SearchKBRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 5
+
+    # ─── MCP Hub ──────────────────────────────────────────────────────
+    MCPToolRecord:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          description: JSON Schema for tool input
+
+    InstallMCPToolRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          description: JSON Schema for tool input
+        executor:
+          type: string
+          description: Reserved for future marketplace payloads
+
+    CallMCPToolRequest:
+      type: object
+      properties:
+        arguments:
+          type: object
+          description: Tool invocation arguments
+
+    # ─── SSE ──────────────────────────────────────────────────────────
+    SSEStream:
+      type: string
+      description: Server-Sent Events stream
+
+    ToolStreamEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [tool_start, tool_end, llm_start, llm_end, run_start, run_end, error]
+        tool_name:
+          type: string
+        round:
+          type: integer
+        tokens:
+          type: integer
+        error:
+          type: string
+        timestamp:
+          type: string
+          format: date-time

@@ -55,13 +55,17 @@ func (s *Server) handleCreateCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Name     string `json:"name"`
-		Provider string `json:"provider"`
+		Name     string `json:"name" validate:"required"`
+		Provider string `json:"provider" validate:"required"`
 		Username string `json:"username,omitempty"`
-		Secret   string `json:"secret"`
+		Secret   string `json:"secret" validate:"required"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 		return
 	}
 	rec := CredentialRecord{

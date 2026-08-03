@@ -115,8 +115,8 @@ type AgentLike interface {
 
 // AgentConfig holds the configuration for creating a new agent.
 type AgentConfig struct {
-	Name           string `json:"name"`
-	Model          string `json:"model"`
+	Name           string `json:"name" validate:"required"`
+	Model          string `json:"model" validate:"required"`
 	SystemPrompt   string `json:"system_prompt,omitempty"`
 	MemoryStrategy string `json:"memory_strategy,omitempty"` // "token_buffer" | "summary" | "" (default)
 }
