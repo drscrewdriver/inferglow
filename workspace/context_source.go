@@ -30,20 +30,25 @@ import (
 	"time"
 )
 
-// WorkspaceContextSource implements the taskcontext.ContextSource interface
+// ContextSource implements the taskcontext.ContextSource interface
 // for a Workspace, allowing the task context system to enumerate and read
 // files from the workspace.
-type WorkspaceContextSource struct {
+type ContextSource struct {
 	ws *Workspace
 }
+
+// WorkspaceContextSource is kept for backward compatibility.
+//
+//nolint:revive
+type WorkspaceContextSource = ContextSource
 
 // Compile-time interface check (commented out to avoid import cycle;
 // the interface is defined in orchestrator/taskcontext which depends
 // on no workspace types).
 
 // NewWorkspaceContextSource creates a context source backed by a Workspace.
-func NewWorkspaceContextSource(ws *Workspace) *WorkspaceContextSource {
-	return &WorkspaceContextSource{ws: ws}
+func NewWorkspaceContextSource(ws *Workspace) *ContextSource {
+	return &ContextSource{ws: ws}
 }
 
 // wsDescriptor is a lightweight context descriptor for workspace files.
@@ -60,7 +65,7 @@ type wsRef struct {
 }
 
 // EnumerateDescriptors lists files in the workspace up to limit.
-func (s *WorkspaceContextSource) EnumerateDescriptors(_ context.Context, cursor string, limit int) ([]wsDescriptor, string, error) {
+func (s *ContextSource) EnumerateDescriptors(_ context.Context, cursor string, limit int) ([]wsDescriptor, string, error) {
 	root := s.ws.Root()
 	var files []wsDescriptor
 
@@ -106,7 +111,7 @@ func (s *WorkspaceContextSource) EnumerateDescriptors(_ context.Context, cursor 
 }
 
 // ReadFile reads a file from the workspace, up to maxChars.
-func (s *WorkspaceContextSource) ReadFile(relPath string, maxChars int) (string, bool, error) {
+func (s *ContextSource) ReadFile(relPath string, maxChars int) (string, bool, error) {
 	data, err := s.ws.ReadFile(relPath)
 	if err != nil {
 		return "", false, err

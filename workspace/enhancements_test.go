@@ -162,9 +162,9 @@ func TestIdentityCatalog(t *testing.T) {
 	}
 }
 
-// --- WorkspaceContextSource tests ---
+// --- ContextSource tests ---
 
-func TestWorkspaceContextSource(t *testing.T) {
+func TestContextSource(t *testing.T) {
 	dir := t.TempDir()
 	ws, err := New(Config{RootDir: dir})
 	if err != nil {

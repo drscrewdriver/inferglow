@@ -42,7 +42,7 @@ type ContentIdentity struct {
 
 // IdentityCatalog tracks content identities for workspace files.
 type IdentityCatalog struct {
-	mu       sync.RWMutex
+	mu         sync.RWMutex
 	identities map[string]*ContentIdentity
 	versionSeq int
 }

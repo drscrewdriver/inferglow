@@ -86,10 +86,10 @@ func TestFallbackOnFailure(t *testing.T) {
 func TestNewRerankerFromConfig(t *testing.T) {
 	// Test cohere config
 	cfg := Config{
-		Provider:   "cohere",
+		Provider:     "cohere",
 		CohereAPIKey: "test-key",
-		CohereModel: "rerank-multilingual-v3.0",
-		TopN:       5,
+		CohereModel:  "rerank-multilingual-v3.0",
+		TopN:         5,
 	}
 	r, err := NewRerankerFromConfig(cfg)
 	if err != nil {

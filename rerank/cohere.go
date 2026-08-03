@@ -67,11 +67,11 @@ func NewCohereReranker(apiKey string) *CohereReranker {
 }
 
 type cohereRequest struct {
-	Query          string   `json:"query"`
-	Documents      []string `json:"documents"`
-	Model          string   `json:"model"`
-	TopN           int      `json:"top_n,omitempty"`
-	ReturnDocuments bool    `json:"return_documents"`
+	Query           string   `json:"query"`
+	Documents       []string `json:"documents"`
+	Model           string   `json:"model"`
+	TopN            int      `json:"top_n,omitempty"`
+	ReturnDocuments bool     `json:"return_documents"`
 }
 
 type cohereResponse struct {

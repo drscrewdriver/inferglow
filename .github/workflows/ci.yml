@@ -28,10 +28,14 @@ jobs:
 
       - name: Run go test (root module)
         run: |
-          if [ -n "$GO_TAGS" ]; then
-            go test -tags "$GO_TAGS" ./...
+          if ls *.go 2>/dev/null; then
+            if [ -n "$GO_TAGS" ]; then
+              go test -tags "$GO_TAGS" ./...
+            else
+              go test ./...
+            fi
           else
-            go test ./...
+            echo "No Go files in root module, skipping"
           fi
 
       - name: Run go test (submodules)
@@ -67,10 +71,14 @@ jobs:
 
       - name: Run go vet (root module)
         run: |
-          if [ -n "$GO_TAGS" ]; then
-            go vet -tags "$GO_TAGS" ./...
+          if ls *.go 2>/dev/null; then
+            if [ -n "$GO_TAGS" ]; then
+              go vet -tags "$GO_TAGS" ./...
+            else
+              go vet ./...
+            fi
           else
-            go vet ./...
+            echo "No Go files in root module, skipping"
           fi
 
       - name: Run go vet (submodules)

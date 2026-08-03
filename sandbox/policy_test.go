@@ -103,8 +103,8 @@ func TestNetworkAccessLevelRank(t *testing.T) {
 		{NetworkAccessNone, 0},
 		{NetworkAccessEgressOnly, 1},
 		{NetworkAccessFull, 2},
-		{"", 0},            // empty → most restrictive
-		{"bogus", 0},       // unknown → most restrictive (deny-by-default)
+		{"", 0},      // empty → most restrictive
+		{"bogus", 0}, // unknown → most restrictive (deny-by-default)
 	}
 	for _, c := range cases {
 		if got := c.level.Rank(); got != c.want {

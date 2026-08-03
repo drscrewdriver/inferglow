@@ -425,12 +425,12 @@ var _ Provider = (*LandlockProvider)(nil)
 //   - 长生命周期的服务进程内反复创建/销毁沙箱。
 //   - 需要在沙箱结束后继续访问受限路径的代码。
 type LandlockHandle struct {
-	mu        sync.Mutex
-	config    LandlockConfig
-	policy    *ExecutionPolicy
-	status    HandleStatus
-	rulesetFD int
-	consumed  bool // 是否已应用过 landlock_restrict_self
+	mu          sync.Mutex
+	config      LandlockConfig
+	policy      *ExecutionPolicy
+	status      HandleStatus
+	rulesetFD   int
+	consumed    bool   // 是否已应用过 landlock_restrict_self
 	tmpDir      string // 自动创建的临时目录路径
 	tmpDirClean func() // 清理函数，Stop() 时调用
 }

@@ -51,18 +51,18 @@ type SpanSummary struct {
 
 // AggregatedStats holds per-kind aggregated metrics.
 type AggregatedStats struct {
-	TotalSpans  int              `json:"total_spans"`
-	ByKind      map[SpanKind]KindStats `json:"by_kind"`
-	RecentErrors int             `json:"recent_errors"`
+	TotalSpans   int                    `json:"total_spans"`
+	ByKind       map[SpanKind]KindStats `json:"by_kind"`
+	RecentErrors int                    `json:"recent_errors"`
 }
 
 // KindStats holds aggregated stats for a single SpanKind.
 type KindStats struct {
-	Count    int           `json:"count"`
-	P50      time.Duration `json:"p50_ns"`
-	P95      time.Duration `json:"p95_ns"`
-	Avg      time.Duration `json:"avg_ns"`
-	Errors   int           `json:"errors"`
+	Count  int           `json:"count"`
+	P50    time.Duration `json:"p50_ns"`
+	P95    time.Duration `json:"p95_ns"`
+	Avg    time.Duration `json:"avg_ns"`
+	Errors int           `json:"errors"`
 }
 
 // SpanCollector is a bounded in-memory ring buffer that collects finished
