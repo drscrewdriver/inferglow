@@ -86,7 +86,7 @@ func truthyValue(rv reflect.Value) bool {
 	case reflect.String:
 		s := rv.String()
 		return s != "" && s != "false"
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if rv.IsNil() {
 			return false
 		}

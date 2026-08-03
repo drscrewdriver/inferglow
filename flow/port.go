@@ -30,6 +30,7 @@ package flow
 // be mirrored onto a flow.Step without loss.
 type PortType string
 
+// Port types.
 const (
 	PortString PortType = "string"
 	PortInt    PortType = "int"

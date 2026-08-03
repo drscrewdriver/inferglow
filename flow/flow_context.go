@@ -68,6 +68,7 @@ type flowContextKey struct{}
 // 定义在 flow 包（不依赖 orchestrator）；由 orchestrator 提供具体实现并注入。
 // 接口方法仅使用基础类型（context.Context, string, map[string]any, any），
 // 避免引入 action/model/session 依赖。
+//nolint:revive // stutter is intentional for clarity
 type FlowContext interface {
 	// ExecuteAction 按名称调用已注册的 Action。
 	ExecuteAction(ctx context.Context, name string, params map[string]any) (any, error)
@@ -160,6 +161,7 @@ func WithFlowContext(ctx context.Context, fc FlowContext) context.Context {
 
 // FlowContextFrom 从 context.Context 中提取 FlowContext。
 // 若未注入，返回 (nil, false)。
+//nolint:revive // stutter is intentional for clarity
 func FlowContextFrom(ctx context.Context) (FlowContext, bool) {
 	fc, ok := ctx.Value(flowContextKey{}).(FlowContext)
 	return fc, ok
@@ -274,7 +276,7 @@ func KVStoreFrom(ctx context.Context) KVStore {
 
 type noopKVStore struct{}
 
-func (noopKVStore) SetValue(string, any)  {}
+func (noopKVStore) SetValue(string, any)        {}
 func (noopKVStore) GetValue(string) (any, bool) { return nil, false }
 
 // pauseSignalKey 是 context.Value 的私有 key 类型，用于携带暂停信号。

@@ -28,6 +28,7 @@ type Outputs map[string]any
 // Inputs/Outputs maps and direct access to FlowContext. Use Adapt to
 // convert a StageFunc into a flow.StepFunc for use in LCEL chains or
 // other StepFunc-based APIs.
+//nolint:revive // stutter is intentional for clarity
 type StageFunc func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error)
 
 // Adapt converts a StageFunc into a flow.StepFunc so it can be used in

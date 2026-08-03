@@ -123,10 +123,10 @@ func Plan(ctx context.Context, in stage.Inputs, fctx flow.FlowContext) (stage.Ou
 
 	return stage.Outputs{
 		"title":                extractJSONField(resp, "title", "Implementation Plan"),
-		"steps":               extractJSONField(resp, "steps", "[]"),
-		"risks":               extractJSONField(resp, "risks", "[]"),
+		"steps":                extractJSONField(resp, "steps", "[]"),
+		"risks":                extractJSONField(resp, "risks", "[]"),
 		"estimated_complexity": extractJSONField(resp, "estimated_complexity", "medium"),
-		"raw":                 resp,
+		"raw":                  resp,
 	}, nil
 }
 

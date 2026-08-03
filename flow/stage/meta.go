@@ -14,6 +14,7 @@ package stage
 // PortType enumerates the accepted data kinds for a named input/output port.
 type PortType string
 
+// Port types.
 const (
 	PortString PortType = "string"
 	PortInt    PortType = "int"
@@ -50,6 +51,7 @@ func (t PortType) CompatibleWith(o PortType) bool {
 // Name is auto-filled by RegisterMeta/RegisterWithMeta when left empty.
 // Meta holds arbitrary key/value metadata (e.g. Kind, Version, Owner) that
 // downstream tooling (ContextManager-style registries) can consume by name.
+//nolint:revive // stutter is intentional for clarity
 type StageMeta struct {
 	Name        string
 	Description string
