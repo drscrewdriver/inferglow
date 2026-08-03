@@ -28,10 +28,10 @@ import (
 	"github.com/inferglow/flow"
 )
 
-// TestAdapt_BasicConversion verifies Adapt converts a StageFunc to a StepFunc
+// TestAdapt_BasicConversion verifies Adapt converts a Func to a StepFunc
 // and correctly handles map input/output.
 func TestAdapt_BasicConversion(t *testing.T) {
-	// Create a simple StageFunc that echoes input and adds a field.
+	// Create a simple Func that echoes input and adds a field.
 	stageFn := func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
 		name, _ := in["name"].(string)
 		return Outputs{
@@ -109,7 +109,7 @@ func TestAdapt_FlowContextExtraction(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify FlowContext was extracted and passed to StageFunc.
+	// Verify FlowContext was extracted and passed to Func.
 	if capturedFctx != mockFctx {
 		t.Error("FlowContext was not correctly extracted from ctx")
 	}
@@ -138,7 +138,7 @@ func TestAdapt_NoFlowContext(t *testing.T) {
 	}
 }
 
-// TestAdapt_ErrorPropagation verifies errors from StageFunc are propagated.
+// TestAdapt_ErrorPropagation verifies errors from Func are propagated.
 func TestAdapt_ErrorPropagation(t *testing.T) {
 	expectedErr := errors.New("stage error")
 
@@ -163,16 +163,16 @@ func (m *mockFlowContext) ExecuteAction(ctx context.Context, name string, params
 func (m *mockFlowContext) GenerateModel(ctx context.Context, system, userMessage string) (string, error) {
 	return "", nil
 }
-func (m *mockFlowContext) SessionHistory() []map[string]any { return nil }
-func (m *mockFlowContext) AppendSession(role string, content any) {}
+func (m *mockFlowContext) SessionHistory() []map[string]any                     { return nil }
+func (m *mockFlowContext) AppendSession(role string, content any)               {}
 func (m *mockFlowContext) AuditAppend(source, action string, input, output any) {}
-func (m *mockFlowContext) SetValue(key string, value any) {}
-func (m *mockFlowContext) GetValue(key string) (any, bool) { return nil, false }
+func (m *mockFlowContext) SetValue(key string, value any)                       {}
+func (m *mockFlowContext) GetValue(key string) (any, bool)                      { return nil, false }
 func (m *mockFlowContext) StartSpan(ctx context.Context, kind flow.SpanKind, name string) (context.Context, flow.Span) {
 	return ctx, flow.NoopSpan()
 }
-func (m *mockFlowContext) MaskInput(input string) string { return input }
-func (m *mockFlowContext) CheckOutput(output string) error { return nil }
+func (m *mockFlowContext) MaskInput(input string) string    { return input }
+func (m *mockFlowContext) CheckOutput(output string) error  { return nil }
 func (m *mockFlowContext) RequestPause(reason string) error { return nil }
 func (m *mockFlowContext) RunAgent(ctx context.Context, userMessage string, systemPrompt string, opts *flow.AgentRunOptions) (string, error) {
 	return "", nil

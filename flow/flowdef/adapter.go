@@ -67,7 +67,7 @@ func (a *Adapter) ToFlow(def *FlowDef) (*flow.Flow, error) {
 //   - Evaluates the `when` expression; if false, skips the stage and returns
 //     the data map unchanged
 //   - For the `stage` operator: uses stage.Adapt to convert the registered
-//     StageFunc into a StepFunc, then wraps it with template rendering and
+//     Func into a StepFunc, then wraps it with template rendering and
 //     data merging logic
 //   - For other operators: pass-through stub (TODO: Phase 1.5)
 func (a *Adapter) toStepFunc(sd StepDef) (flow.StepFunc, error) {
@@ -82,7 +82,7 @@ func (a *Adapter) toStepFunc(sd StepDef) (flow.StepFunc, error) {
 		if !ok {
 			return nil, fmt.Errorf("stage %q not found in registry", sd.Stage)
 		}
-		// Use stage.Adapt to convert StageFunc to StepFunc.
+		// Use stage.Adapt to convert Func to StepFunc.
 		adaptedFn = stage.Adapt(fn)
 	}
 

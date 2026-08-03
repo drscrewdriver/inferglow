@@ -77,13 +77,13 @@ func TestRegistry_BackwardCompat(t *testing.T) {
 	}
 }
 
-// TestStageMeta_IsolatedFromStageFunc verifies the StageFunc map (m) and the
+// TestMeta_IsolatedFromFunc verifies the Func map (m) and the
 // metadata map (meta) are fully decoupled: Register only affects Get, and
 // RegisterMeta only affects GetMeta.
-func TestStageMeta_IsolatedFromStageFunc(t *testing.T) {
+func TestMeta_IsolatedFromFunc(t *testing.T) {
 	r := NewRegistry()
 	r.Register("s", tagged("s"))
-	r.RegisterMeta("s", StageMeta{Name: "s", Description: "decl"})
+	r.RegisterMeta("s", Meta{Name: "s", Description: "decl"})
 
 	// Get still reads only m, even though meta exists for the same name.
 	if _, ok := r.Get("s"); !ok {
@@ -92,7 +92,7 @@ func TestStageMeta_IsolatedFromStageFunc(t *testing.T) {
 
 	// RegisterMeta without a stage func: Get must not see it, GetMeta must.
 	r2 := NewRegistry()
-	r2.RegisterMeta("meta-only", StageMeta{Name: "meta-only"})
+	r2.RegisterMeta("meta-only", Meta{Name: "meta-only"})
 	if _, ok := r2.Get("meta-only"); ok {
 		t.Fatal("Get must not read the meta map")
 	}
@@ -101,9 +101,9 @@ func TestStageMeta_IsolatedFromStageFunc(t *testing.T) {
 	}
 }
 
-// TestStageMeta_RegisterGetMeta covers RegisterMeta -> GetMeta round-trip, name
+// TestMeta_RegisterGetMeta covers RegisterMeta -> GetMeta round-trip, name
 // auto back-fill, overwrite replacement, and unknown-name handling.
-func TestStageMeta_RegisterGetMeta(t *testing.T) {
+func TestMeta_RegisterGetMeta(t *testing.T) {
 	r := NewRegistry()
 
 	// Unknown name returns zero value and ok=false.
@@ -112,7 +112,7 @@ func TestStageMeta_RegisterGetMeta(t *testing.T) {
 	}
 
 	// Empty Name is auto back-filled to the registration key.
-	r.RegisterMeta("alpha", StageMeta{Description: "a"})
+	r.RegisterMeta("alpha", Meta{Description: "a"})
 	m, ok := r.GetMeta("alpha")
 	if !ok {
 		t.Fatal("expected meta to be found")
@@ -125,14 +125,14 @@ func TestStageMeta_RegisterGetMeta(t *testing.T) {
 	}
 
 	// Registering under a different key preserves an explicit Name.
-	r.RegisterMeta("key", StageMeta{Name: "renamed", Description: "b"})
+	r.RegisterMeta("key", Meta{Name: "renamed", Description: "b"})
 	m, ok = r.GetMeta("key")
 	if !ok || m.Name != "renamed" {
 		t.Fatalf("explicit Name must be preserved, ok=%v name=%q", ok, m.Name)
 	}
 
 	// Re-registration replaces the previous metadata.
-	r.RegisterMeta("alpha", StageMeta{Description: "updated"})
+	r.RegisterMeta("alpha", Meta{Description: "updated"})
 	m, ok = r.GetMeta("alpha")
 	if !ok || m.Description != "updated" {
 		t.Fatalf("re-register should replace meta, ok=%v desc=%q", ok, m.Description)
@@ -142,10 +142,10 @@ func TestStageMeta_RegisterGetMeta(t *testing.T) {
 	}
 }
 
-// TestStageMeta_RegisterWithMeta verifies one call populates both Get and GetMeta.
-func TestStageMeta_RegisterWithMeta(t *testing.T) {
+// TestMeta_RegisterWithMeta verifies one call populates both Get and GetMeta.
+func TestMeta_RegisterWithMeta(t *testing.T) {
 	r := NewRegistry()
-	r.RegisterWithMeta("both", tagged("fn"), StageMeta{
+	r.RegisterWithMeta("both", tagged("fn"), Meta{
 		Name:        "both",
 		Description: "one-shot",
 		InputPorts:  []PortDef{{Name: "in", Type: PortString}},
@@ -166,12 +166,12 @@ func TestStageMeta_RegisterWithMeta(t *testing.T) {
 	}
 }
 
-// TestStageMeta_MetaNames verifies the set of names carrying a StageMeta.
-func TestStageMeta_MetaNames(t *testing.T) {
+// TestMeta_MetaNames verifies the set of names carrying a Meta.
+func TestMeta_MetaNames(t *testing.T) {
 	r := NewRegistry()
-	r.RegisterMeta("x", StageMeta{})
-	r.RegisterMeta("y", StageMeta{})
-	r.RegisterMeta("z", StageMeta{})
+	r.RegisterMeta("x", Meta{})
+	r.RegisterMeta("y", Meta{})
+	r.RegisterMeta("z", Meta{})
 
 	names := r.MetaNames()
 	if len(names) != 3 {
@@ -192,10 +192,10 @@ func TestStageMeta_MetaNames(t *testing.T) {
 	}
 }
 
-// TestStageMeta_PortLookup verifies field-level lookups on a StageMeta and the
+// TestMeta_PortLookup verifies field-level lookups on a Meta and the
 // package-level FindPort helper.
-func TestStageMeta_PortLookup(t *testing.T) {
-	m := StageMeta{
+func TestMeta_PortLookup(t *testing.T) {
+	m := Meta{
 		InputPorts:  []PortDef{{Name: "prompt", Type: PortString}, {Name: "n", Type: PortInt}},
 		OutputPorts: []PortDef{{Name: "out", Type: PortJSON}},
 	}
@@ -258,9 +258,9 @@ func TestPortType_Compatible(t *testing.T) {
 	}
 }
 
-// TestStageMeta_Concurrent exercises concurrent Register/RegisterMeta/Get/GetMeta
+// TestMeta_Concurrent exercises concurrent Register/RegisterMeta/Get/GetMeta
 // to guard against data races under -race.
-func TestStageMeta_Concurrent(t *testing.T) {
+func TestMeta_Concurrent(t *testing.T) {
 	r := NewRegistry()
 	const workers = 8
 	const per = 100
@@ -281,7 +281,7 @@ func TestStageMeta_Concurrent(t *testing.T) {
 		go func(start, end int) {
 			defer wg.Done()
 			for _, name := range names[start:end] {
-				r.RegisterWithMeta(name, tagged("fn"), StageMeta{Name: name})
+				r.RegisterWithMeta(name, tagged("fn"), Meta{Name: name})
 			}
 		}(w*per, (w+1)*per)
 	}
@@ -316,9 +316,9 @@ func TestStageMeta_Concurrent(t *testing.T) {
 	}
 }
 
-// tagged returns a StageFunc that echoes a stable tag through its Outputs so a
+// tagged returns a Func that echoes a stable tag through its Outputs so a
 // test can verify which function instance is actually stored.
-func tagged(tag string) StageFunc {
+func tagged(tag string) Func {
 	return func(ctx context.Context, in Inputs, fctx flow.FlowContext) (Outputs, error) {
 		_ = ctx
 		_ = in
@@ -327,8 +327,8 @@ func tagged(tag string) StageFunc {
 	}
 }
 
-// gotTag invokes a StageFunc and returns its emitted tag.
-func gotTag(f StageFunc) string {
+// gotTag invokes a Func and returns its emitted tag.
+func gotTag(f Func) string {
 	outs, err := f(context.Background(), Inputs{}, nil)
 	if err != nil {
 		return "<err:" + err.Error() + ">"
