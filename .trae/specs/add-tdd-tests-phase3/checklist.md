@@ -12,4 +12,4 @@
 - [x] `builtins/actions` 测试覆盖 sub_agent（spawn_agent 逻辑）
 - [x] `builtins/actions` 测试覆盖 task_tracker（TaskStore CRUD + 4 个 Action）
 - [x] `go test -count=1`（三个模块全部通过）
-- [ ] GitHub CI 测试通过
+- [ ] GitHub CI 测试通过（等待 CI 运行中）

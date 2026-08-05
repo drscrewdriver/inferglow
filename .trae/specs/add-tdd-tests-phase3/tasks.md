@@ -30,7 +30,7 @@
 
 - [x] Task 6: 验证所有测试通过
   - [x] SubTask 6.1: 运行 `go test -count=1`（三个模块全部通过）
-  - [ ] SubTask 6.2: 提交并推送至 GitHub 触发 CI
+  - [x] SubTask 6.2: 提交并推送至 GitHub 触发 CI（c6ce150）
 
 # Task Dependencies
 - Tasks 1-5 无依赖，可并行执行

@@ -2,6 +2,12 @@
 
 Go 语言实现的 AI Agent 基础设施框架，对标 [Agently](https://github.com/AgentEra/Agently)（Python）的设计理念。
 
+[![CI](https://github.com/drscrewdriver/inferglow/actions/workflows/ci.yml/badge.svg)](https://github.com/drscrewdriver/inferglow/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.25-blue)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> **一句话定位**：Go 生态里兼具**契约优先**（L1-L4 约束生成）与**高可靠工程**（SSE 流式、取消语义、并发安全、不可篡改审计）的 Agent 基础设施框架。
+
 ## 为什么
 
 Go 生态缺乏一个对标 Agently 设计理念的框架：**契约优先、可单测编排、内置沙箱、明确的 Pause/Resume/Persist 能力**。Inferglow 提供一套可组合的基础设施模块，为下游引用 AI Agent 框架（inferglow）提供支撑（已经初步合并）。
@@ -612,6 +618,21 @@ Inferglow 实现 L1-L4 四层 schema 保障，确保 LLM 输出结构合规：
 | TypedDict | Go struct |
 | Protocol (typing) | Go interface |
 | asyncio.Event/Lock | Go channel + sync.Mutex |
+
+## 工程鲁棒性（Engineering Robustness）
+
+面向流式、并发与高可靠性场景的工程化保障（这是 Agent 框架能否扛住生产环境的关键）：
+
+| 关注点 | 实现 |
+|--------|------|
+| **SSE 流式解析** | `model/internal/ssestream` 统一封装四个 Provider 的 SSE 解析：每次读取前轮询 `ctx.Done()`、有界缓冲 channel（cap 64）、EOF/错误归一、`body` 随协程退出关闭，**无 goroutine 泄漏** |
+| **取消语义** | `CancelManager` 提供三种取消安全点，区分"停止给客户端"与"后台必须读完"两种语义；所有协程通过 `context` 联动取消 |
+| **死循环防护** | `LoopGuard` 检测无限 Agent 循环，避免失控轮转 |
+| **并发 Action** | 并发执行 + 输入队列 + `EventSink` 统一事件流，避免共享可变状态竞态 |
+| **不可篡改审计** | 链表式 SHA-256 哈希指针 + HMAC 签名，审计链防篡改、可验证 |
+| **确定性测试** | `eval` 离线回放（ScriptedProvider mock），并行走 Case + 断言（Contains/ToolSequence），无需真实 API Key 即可复现并发与编排行为 |
+
+> 设计取向：**用"有界缓冲 + 显式取消 + 单一事件流"替代"裸 goroutine + 无界 channel"**，从结构上规避资源泄漏与竞态，而不是靠事后排查。
 
 ## 系统分析文档
 
