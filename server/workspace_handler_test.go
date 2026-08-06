@@ -88,7 +88,7 @@ func TestWorkspaceHandlerCRUD(t *testing.T) {
 	srv := NewServer(DefaultConfig(), newMockStore())
 	srv.SetWorkspaceProvider(NewWorkspaceProvider())
 
-	body := `{"name":"main","root_dir":"` + root + `"}`
+	body := `{"name":"main","root_dir":"` + strings.ReplaceAll(root, `\`, `\\`) + `"}`
 	req := httptest.NewRequest("POST", "/v1/workspaces", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
