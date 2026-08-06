@@ -1,0 +1,24 @@
+# Checklist — openhanako v0.442.0 静态拆分 + 界面差异修正
+
+- [x] Task 1：内联样式已抽出为 `index.css`，`<head>` 以 `<link>` 引用，原 `<style>` 已移除
+- [x] Task 1：拆分后主界面 / 聊天 / 设置 / Onboarding 视觉与拆分前一致
+- [x] Task 2：运行态 JS 已抽出为 `app.js`，且在 `base.js` 之后加载
+- [x] Task 2：`VERSION_CONFIG` 保持内联且在 `base.js` 之前声明
+- [x] Task 2：流式回显 / ⌘K / 设置联动等交互正常，无 console 报错
+- [x] Task 3：`settings-content.js` 已拆为 17 个 `settings-<tab>.js`
+- [x] Task 3：`index.html` 已在 VERSION_CONFIG 之前按顺序引入 17 个文件
+- [x] Task 3：原 `settings-content.js` 已删除
+- [x] Task 3：17 个设置标签逐个点击均渲染，无空白、无报错
+- [x] Task 4：界面标签字体卡片改为两行（大字名称 + 小字描述）
+- [x] Task 4：界面标签分档滑块改为真实 range slider + 刻度标签，当前值加粗
+- [x] Task 4：`app.js` 中 button 版 `bindSliderButtons` 已移除
+- [x] Task 4：12 张主题卡片各有独立背景色/名称色/副标题色（`index.css` 中 `[data-theme="..."]` 规则），与截图一致
+- [x] Task 4：自动卡片左右分色（左暖白/右深青）
+- [x] Task 4：浏览器验证主题卡片颜色
+- [x] Task 5：分享标签配色卡片等宽三列 + 圆角 + 选中描述边
+- [x] Task 5：分享标签宽度卡片改为左右布局 + 排版缩略图
+- [x] Task 5：分享标签截图字体为胶囊式右对齐下拉
+- [x] Task 5：分享标签单页字数输入框右对齐 + 「字」单位
+- [x] Task 6：`界面差异记录.md` 已修正项标注「已修正」，未改项保留原结论
+- [x] Task 7：浏览器全量验收通过（4 视图 + 17 标签 + 无 console 错误）
+- [x] 全程未修改 `_shared/groupC/base.css` / `base.js`
