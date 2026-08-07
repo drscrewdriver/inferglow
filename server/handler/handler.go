@@ -188,6 +188,20 @@ func OpenAPISpec(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
+			"/v1/sessions/{id}/messages": map[string]any{
+				"get": map[string]any{
+					"summary":     "List session messages (paginated)",
+					"operationId": "listSessionMessages",
+					"parameters": []map[string]any{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+						{"name": "before", "in": "query", "required": false, "schema": map[string]string{"type": "string", "format": "date-time"}},
+						{"name": "limit", "in": "query", "required": false, "schema": map[string]string{"type": "integer"}},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+					},
+				},
+			},
 		},
 	}
 

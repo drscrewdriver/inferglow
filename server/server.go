@@ -77,6 +77,7 @@ type Server struct {
 	skillStore     *SkillStore
 	kbStore        *KBStore
 	mcpHubStore    *MCPHubStore
+	msgStore       *MessageStore
 }
 
 // MemoryRecord represents a persistent memory entry.
@@ -334,6 +335,13 @@ func (s *Server) SetMessageBus(b messagebus.MessageBus) {
 // /v1/sessions endpoints use this store for CRUD and SSE streaming.
 func (s *Server) SetSessionStore(st *SessionStore) {
 	s.sessionStore = st
+}
+
+// SetMessageStore attaches the session message log backing the paginated
+// history endpoint GET /v1/sessions/{id}/messages. When nil, the endpoint
+// returns 503.
+func (s *Server) SetMessageStore(st *MessageStore) {
+	s.msgStore = st
 }
 
 // SetScheduleStore attaches the C-5 scheduler management store. When set, the
