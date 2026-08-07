@@ -122,6 +122,31 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
+// handleUpdateSession handles PATCH /v1/sessions/{id} — update session
+// metadata (title/group/pinned/status) with pointer semantics: absent fields
+// are left untouched, empty values explicitly clear the field.
+func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request) {
+	if s.sessionStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store not configured")
+		return
+	}
+	id := r.PathValue("id")
+	if s.sessionStore.Get(id) == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var patch SessionPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if !s.sessionStore.UpdateMeta(id, patch) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.sessionStore.Get(id))
+}
+
 // handleSessionStream handles GET /v1/sessions/{id}/stream — a long-lived SSE
 // stream of the chosen session's bus events (spec C-4).
 //

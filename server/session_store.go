@@ -38,11 +38,16 @@ const (
 )
 
 // SessionRecord describes a single management session (spec C-4).
+// Title/Group/Pinned are GUI metadata (patchable via PATCH /v1/sessions/{id});
+// all new fields use omitempty so existing responses stay byte-compatible.
 type SessionRecord struct {
 	ID        string        `json:"id"`
 	Owner     string        `json:"owner,omitempty"`
 	AgentID   string        `json:"agent_id,omitempty"`
 	Status    SessionStatus `json:"status"`
+	Title     string        `json:"title,omitempty"`
+	Group     string        `json:"group,omitempty"`
+	Pinned    bool          `json:"pinned,omitempty"`
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 }
@@ -113,6 +118,39 @@ func (ss *SessionStore) UpdateStatus(id string, status SessionStatus) bool {
 		return false
 	}
 	rec.Status = status
+	rec.UpdatedAt = time.Now()
+	return true
+}
+
+// SessionPatch carries optional session metadata fields for PATCH updates.
+// Pointer fields distinguish "not provided" (nil, leave untouched) from
+// "explicitly cleared" (non-nil empty string / false).
+type SessionPatch struct {
+	Title  *string `json:"title,omitempty"`
+	Group  *string `json:"group,omitempty"`
+	Pinned *bool   `json:"pinned,omitempty"`
+	Status *string `json:"status,omitempty"`
+}
+
+// UpdateMeta applies a session metadata patch in place and bumps UpdatedAt.
+// It reports whether the session existed.
+func (ss *SessionStore) UpdateMeta(id string, patch SessionPatch) bool {
+	rec := ss.Get(id)
+	if rec == nil {
+		return false
+	}
+	if patch.Title != nil {
+		rec.Title = *patch.Title
+	}
+	if patch.Group != nil {
+		rec.Group = *patch.Group
+	}
+	if patch.Pinned != nil {
+		rec.Pinned = *patch.Pinned
+	}
+	if patch.Status != nil {
+		rec.Status = SessionStatus(*patch.Status)
+	}
 	rec.UpdatedAt = time.Now()
 	return true
 }

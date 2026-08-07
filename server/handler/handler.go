@@ -138,6 +138,56 @@ func OpenAPISpec(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
+			"/v1/sessions": map[string]any{
+				"get": map[string]any{
+					"summary":     "List sessions",
+					"operationId": "listSessions",
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+					},
+				},
+				"post": map[string]any{
+					"summary":     "Create session",
+					"operationId": "createSession",
+					"responses": map[string]any{
+						"201": map[string]any{"description": "Created"},
+					},
+				},
+			},
+			"/v1/sessions/{id}": map[string]any{
+				"get": map[string]any{
+					"summary":     "Get session",
+					"operationId": "getSession",
+					"parameters": []map[string]any{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+						"404": map[string]any{"description": "Not Found"},
+					},
+				},
+				"patch": map[string]any{
+					"summary":     "Update session metadata (title/group/pinned/status)",
+					"operationId": "updateSessionMeta",
+					"parameters": []map[string]any{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+						"404": map[string]any{"description": "Not Found"},
+					},
+				},
+				"delete": map[string]any{
+					"summary":     "Delete session",
+					"operationId": "deleteSession",
+					"parameters": []map[string]any{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+					},
+				},
+			},
 		},
 	}
 

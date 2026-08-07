@@ -52,6 +52,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	api.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	api.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
+	api.HandleFunc("PATCH /v1/sessions/{id}", s.handleUpdateSession)
 	api.HandleFunc("DELETE /v1/sessions/{id}", s.handleDeleteSession)
 	api.HandleFunc("GET /v1/sessions/{id}/stream", s.handleSessionStream)
 
