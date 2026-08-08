@@ -35,6 +35,12 @@ func (s *Server) registerRoutes() {
 	// Dashboard (OT-13, no auth for dev convenience)
 	s.mux.HandleFunc("GET /dashboard", s.handleDashboard)
 
+	// GUI (React build embedded in webui/, no auth, mirrors /dashboard tier)
+	s.mux.HandleFunc("GET /gui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/gui/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /gui/{path...}", s.handleGUI)
+
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
 
