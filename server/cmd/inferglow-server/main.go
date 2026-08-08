@@ -63,6 +63,7 @@ func main() {
 	srv.SetScheduleStore(server.NewScheduleStore())
 	srv.SetCredentialStore(server.NewCredentialStore())
 	srv.SetWorkspaceProvider(server.NewWorkspaceProvider())
+	srv.SetMessageStore(server.NewMessageStore())
 
 	// C-10: Skill Hub store (backed by action.ActionRegistry). Skills are
 	// installed by Go-side registration via SkillStore.Install; see the

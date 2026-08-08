@@ -23,6 +23,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -342,6 +343,23 @@ func (s *Server) SetSessionStore(st *SessionStore) {
 // returns 503.
 func (s *Server) SetMessageStore(st *MessageStore) {
 	s.msgStore = st
+}
+
+// recordMessage appends a chat message to the session log when a message
+// store is configured. Failures are logged and never alter the HTTP response,
+// so chat/stream handlers stay byte-compatible with and without the store.
+func (s *Server) recordMessage(sessionID string, role MessageRole, content, toolName, toolStatus string) {
+	if s.msgStore == nil || sessionID == "" {
+		return
+	}
+	if _, err := s.msgStore.Append(sessionID, MessageRecord{
+		Role:       role,
+		Content:    content,
+		ToolName:   toolName,
+		ToolStatus: toolStatus,
+	}); err != nil {
+		log.Printf("record message failed: %v", err)
+	}
 }
 
 // SetScheduleStore attaches the C-5 scheduler management store. When set, the

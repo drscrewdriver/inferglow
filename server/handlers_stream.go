@@ -49,11 +49,41 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// SSE timeout fix: lift the absolute write deadline so a long agent run
+	// with no events (e.g. a long thinking phase) is not cut off by the
+	// server's WriteTimeout after 60s (mirrors handleSessionStream).
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
+
+	// Persist the user message up-front when a session is attached.
+	s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
+
+	// recordStreamEvent persists tool/assistant messages from SSE events.
+	// It is invoked for every event written to the client; tool_start is
+	// skipped so the history only carries settled tool records.
+	recordStreamEvent := func(ev ToolStreamEvent) {
+		switch ev.Type {
+		case "tool_end":
+			status := "ok"
+			if ev.Error != "" {
+				status = "error"
+			}
+			s.recordMessage(req.SessionID, MessageRoleTool, "", ev.ToolName, status)
+		case "run_end":
+			// NOTE: the run_end event carries the full assistant reply in
+			// its ToolName field (contract quirk of stream-run).
+			if ev.ToolName != "" {
+				s.recordMessage(req.SessionID, MessageRoleAssistant, ev.ToolName, "", "")
+			}
+		}
+	}
+
 
 	// Create a channel for streaming events.
 	eventCh := make(chan ToolStreamEvent, 32)
@@ -97,11 +127,13 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			}
 			writeSSEEvent(w, ev.Type, ev)
 			flusher.Flush()
+			recordStreamEvent(ev)
 		case <-doneCh:
 			// Drain remaining events.
 			for ev := range eventCh {
 				writeSSEEvent(w, ev.Type, ev)
 				flusher.Flush()
+				recordStreamEvent(ev)
 			}
 			writeSSEEvent(w, "done", map[string]string{"agent_id": id})
 			flusher.Flush()

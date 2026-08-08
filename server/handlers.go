@@ -93,6 +93,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 type ChatRequest struct {
 	Message     string `json:"message" validate:"required"`
 	PreemptMode string `json:"preempt_mode,omitempty"` // "queue"|"safe_point"|"force"
+	SessionID   string `json:"session_id,omitempty"`   // optional: persist into the session message log
 }
 
 // ChatResponse is the response body for agent chat.
@@ -163,6 +164,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				Response: resp.Response,
 				AgentID:  id,
 			})
+			s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
+			s.recordMessage(req.SessionID, MessageRoleAssistant, resp.Response, "", "")
 			return
 		}
 		// Fall through to synchronous Run if agent does not support SubmitInput.
@@ -178,6 +181,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Response: resp,
 		AgentID:  id,
 	})
+	s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
+	s.recordMessage(req.SessionID, MessageRoleAssistant, resp, "", "")
 }
 
 // handleStream performs a streaming agent chat (SSE).
@@ -224,6 +229,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	writeSSEEvent(w, "delta", map[string]string{"content": resp})
 	writeSSEEvent(w, "done", map[string]string{"agent_id": id})
 	flusher.Flush()
+	s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
+	s.recordMessage(req.SessionID, MessageRoleAssistant, resp, "", "")
 }
 
 // handleInput processes user input with preempt mode support.
@@ -274,6 +281,8 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 		Response: resp.Response,
 		AgentID:  id,
 	})
+	s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
+	s.recordMessage(req.SessionID, MessageRoleAssistant, resp.Response, "", "")
 }
 
 // handleListTools returns available tools (stub).
