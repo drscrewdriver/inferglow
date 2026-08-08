@@ -31,6 +31,7 @@ import (
 	"github.com/inferglow/flow/stage"
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
+	"github.com/inferglow/session"
 	"github.com/inferglow/server/trigger"
 )
 
@@ -42,6 +43,7 @@ type Config struct {
 	IdleTimeout  time.Duration // Keep-alive idle timeout
 	APIKey       string        // Optional Bearer token for auth (empty = disabled)
 	CORSOrigins  []string      // Allowed CORS origins (empty = disabled)
+	UsageDataDir string        // Directory holding sessions/*.usage.jsonl for usage reports
 }
 
 // DefaultConfig returns a sensible default configuration.
@@ -51,6 +53,7 @@ func DefaultConfig() Config {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
+		UsageDataDir: "data",
 	}
 }
 
@@ -79,6 +82,7 @@ type Server struct {
 	kbStore        *KBStore
 	mcpHubStore    *MCPHubStore
 	msgStore       *MessageStore
+	reportGen      *session.ReportGenerator
 }
 
 // MemoryRecord represents a persistent memory entry.
@@ -360,6 +364,12 @@ func (s *Server) recordMessage(sessionID string, role MessageRole, content, tool
 	}); err != nil {
 		log.Printf("record message failed: %v", err)
 	}
+}
+
+// SetReportGenerator attaches the usage report generator backing
+// GET /v1/usage/report. When nil, one is built lazily from cfg.UsageDataDir.
+func (s *Server) SetReportGenerator(g *session.ReportGenerator) {
+	s.reportGen = g
 }
 
 // SetScheduleStore attaches the C-5 scheduler management store. When set, the

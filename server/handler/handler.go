@@ -202,6 +202,20 @@ func OpenAPISpec(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
+			"/v1/usage/report": map[string]any{
+				"get": map[string]any{
+					"summary":     "Usage aggregation report",
+					"operationId": "usageReport",
+					"parameters": []map[string]any{
+						{"name": "from", "in": "query", "required": false, "schema": map[string]string{"type": "string", "format": "date-time"}},
+						{"name": "to", "in": "query", "required": false, "schema": map[string]string{"type": "string", "format": "date-time"}},
+						{"name": "model", "in": "query", "required": false, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{"description": "OK"},
+					},
+				},
+			},
 		},
 	}
 

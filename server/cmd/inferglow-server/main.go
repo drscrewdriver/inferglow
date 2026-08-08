@@ -37,10 +37,11 @@ import (
 
 func main() {
 	var (
-		addr    = flag.String("addr", ":8080", "Listen address")
-		apiKey  = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
-		cors    = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
-		timeout = flag.Duration("timeout", 30*time.Second, "Request read timeout")
+		addr     = flag.String("addr", ":8080", "Listen address")
+		apiKey   = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
+		cors     = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
+		timeout  = flag.Duration("timeout", 30*time.Second, "Request read timeout")
+		usageDir = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
 	)
 	flag.Parse()
 
@@ -48,6 +49,7 @@ func main() {
 	cfg.Addr = *addr
 	cfg.APIKey = *apiKey
 	cfg.ReadTimeout = *timeout
+	cfg.UsageDataDir = *usageDir
 
 	if *cors != "" {
 		cfg.CORSOrigins = splitComma(*cors)

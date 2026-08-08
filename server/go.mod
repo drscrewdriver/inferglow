@@ -43,6 +43,7 @@ require (
 	github.com/inferglow/observability v0.0.0
 	github.com/inferglow/orchestrator v0.0.0-00010101000000-000000000000
 	github.com/inferglow/rag v0.0.0
+	github.com/inferglow/session v0.0.0
 	github.com/inferglow/storage v0.0.0-00010101000000-000000000000
 	github.com/inferglow/workspace v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
@@ -66,7 +67,6 @@ require (
 	github.com/inferglow/model v0.0.0 // indirect
 	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
-	github.com/inferglow/session v0.0.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect

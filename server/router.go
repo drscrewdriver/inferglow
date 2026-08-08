@@ -109,6 +109,9 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /v1/context/search", s.handleContextSearch)
 	api.HandleFunc("GET /v1/context/stats", s.handleContextStats)
 
+	// Usage aggregation report
+	api.HandleFunc("GET /v1/usage/report", s.handleUsageReport)
+
 	// Enhanced memory endpoints
 	api.HandleFunc("POST /v1/memories/search", s.handleMemorySemanticSearch)
 	api.HandleFunc("GET /v1/memories/stats", s.handleMemoryStats)
