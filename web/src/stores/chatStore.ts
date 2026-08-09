@@ -75,6 +75,28 @@ export const createChatStore = (t: Transport) =>
         ].slice(-MAX_MESSAGES),
       })
 
+      // Fallback when stream-run is unavailable (agent not wired, 404/5xx):
+      // retry through the synchronous chat endpoint and surface the reply.
+      const fallbackChat = async (msg: string) => {
+        try {
+          const resp = await t.request<{ response: string }>('POST', `/agents/${agentId}/chat`, {
+            message: msg,
+            session_id: sessionId,
+          })
+          const st = get()
+          const msgs = [...st.messages]
+          const last = msgs[msgs.length - 1]
+          if (last && last.role === 'assistant' && last.content === '') {
+            msgs[msgs.length - 1] = { ...last, content: resp.response }
+          } else {
+            msgs.push({ id: `run-${Date.now()}`, role: 'assistant' as const, content: resp.response, createdAt: Date.now() })
+          }
+          set({ messages: msgs.slice(-MAX_MESSAGES) })
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+
       await t.streamRun(
         agentId,
         { message, session_id: sessionId },
@@ -140,7 +162,10 @@ export const createChatStore = (t: Transport) =>
             set({ streaming: false, running: false, runSeen: false })
           },
           onError: (msg) => {
-            set({ error: msg, streaming: false, running: false })
+            // Degrade to the synchronous endpoint when stream-run fails.
+            set({ streaming: false, running: false })
+            void fallbackChat(message)
+            set({ error: `流式不可用，已回退同步请求：${msg}` })
           },
         },
         controller.signal,
