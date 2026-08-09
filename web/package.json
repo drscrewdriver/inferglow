@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "node node_modules/vitest/vitest.mjs run",
     "preview": "vite preview"
   },
   "dependencies": {

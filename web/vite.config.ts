@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 // The production build is embedded by the Go server via //go:embed webui,
 // so dist output is redirected into server/webui (checked into the repo,
@@ -15,5 +15,8 @@ export default defineConfig({
       '/v1': 'http://localhost:8080',
       '/health': 'http://localhost:8080',
     },
+  },
+  test: {
+    environment: 'node',
   },
 })
