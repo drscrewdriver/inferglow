@@ -28,8 +28,12 @@ interface ChatState {
   error: string | null
   controller: AbortController | null
   runSeen: boolean
+  hasMore: boolean
+  nextBefore: string | null
+  loadingOlder: boolean
   loadHistory: (sessionId: string, before?: string) => Promise<MessagePage | null>
   appendHistory: (page: MessagePage) => void
+  loadOlder: (sessionId: string) => Promise<void>
   sendMessage: (sessionId: string, agentId: string, message: string) => Promise<void>
   stop: () => void
   clear: () => void
@@ -43,11 +47,15 @@ export const createChatStore = (t: Transport) =>
     error: null,
     controller: null,
     runSeen: false,
+    hasMore: false,
+    nextBefore: null,
+    loadingOlder: false,
 
     async loadHistory(sessionId, before) {
       const q = new URLSearchParams({ limit: '50' })
       if (before) q.set('before', before)
       const page = await t.request<MessagePage>('GET', `/sessions/${sessionId}/messages?${q}`)
+      set({ hasMore: page.has_more, nextBefore: page.next_before })
       return page
     },
 
@@ -62,6 +70,24 @@ export const createChatStore = (t: Transport) =>
         createdAt: Date.parse(m.created_at),
       }))
       set({ messages: [...incoming, ...get().messages].slice(0, MAX_MESSAGES) })
+    },
+
+    async loadOlder(sessionId) {
+      const { hasMore, nextBefore, loadingOlder } = get()
+      if (!hasMore || !nextBefore || loadingOlder) return
+      set({ loadingOlder: true })
+      try {
+        const page = await t.request<MessagePage>(
+          'GET',
+          `/sessions/${sessionId}/messages?limit=50&before=${encodeURIComponent(nextBefore)}`,
+        )
+        get().appendHistory(page)
+        set({ hasMore: page.has_more, nextBefore: page.next_before })
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : String(err) })
+      } finally {
+        set({ loadingOlder: false })
+      }
     },
 
     async sendMessage(sessionId, agentId, message) {
@@ -178,7 +204,7 @@ export const createChatStore = (t: Transport) =>
     },
 
     clear() {
-      set({ messages: [], error: null, runSeen: false })
+      set({ messages: [], error: null, runSeen: false, hasMore: false, nextBefore: null, loadingOlder: false })
     },
   }))
 

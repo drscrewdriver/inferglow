@@ -120,13 +120,19 @@ function ToolCardView({ m }: { m: ChatMessage }) {
   )
 }
 
-function MessageList({ messages }: { messages: ChatMessage[] }) {
+function MessageList({ messages, onScrollTop }: { messages: ChatMessage[]; onScrollTop?: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
   }, [messages.length])
   return (
-    <div className="messages" ref={ref}>
+    <div
+      className="messages"
+      ref={ref}
+      onScroll={(e) => {
+        if (e.currentTarget.scrollTop < 80) onScrollTop?.()
+      }}
+    >
       {messages.map((m) =>
         m.role === 'tool' ? (
           <div key={m.id} className="msg msg--a">
@@ -219,6 +225,7 @@ function ChatMain({ live }: { live: boolean }) {
   const error = useChatStore((s) => s.error)
   const loadHistory = useChatStore((s) => s.loadHistory)
   const appendHistory = useChatStore((s) => s.appendHistory)
+  const loadOlder = useChatStore((s) => s.loadOlder)
   const clear = useChatStore((s) => s.clear)
 
   // Load history when switching sessions; clear local state otherwise.
@@ -240,7 +247,7 @@ function ChatMain({ live }: { live: boolean }) {
         <span className="model">{active?.agent_id ?? 'agent'} · {live ? 'live' : 'demo'}</span>
         <span className="spacer" />
       </div>
-      <MessageList messages={messages} />
+      <MessageList messages={messages} onScrollTop={activeId ? () => void loadOlder(activeId) : undefined} />
       {error && (
         <div style={{ padding: '4px 16px', fontSize: 12, color: 'var(--err)', background: 'rgba(229,83,75,.08)' }}>
           {error}

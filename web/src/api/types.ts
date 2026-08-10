@@ -56,3 +56,41 @@ export interface CacheReport {
   overall: CacheReportSummary
   by_model?: CacheReportSummary[]
 }
+
+export interface CredentialRecord {
+  id: string
+  name: string
+  provider: string
+  username?: string
+  secret?: string
+  created_at: string
+}
+
+export interface ScheduleRecord {
+  id: string
+  name: string
+  flow: string
+  interval: number
+  stateful: boolean
+  enabled: boolean
+  created_at: string
+}
+
+export interface SkillRecord {
+  name: string
+  description: string
+  tags?: string[]
+  executable: boolean
+}
+
+export interface MCPToolRecord {
+  name: string
+  description: string
+  input_schema?: Record<string, unknown>
+}
+
+export interface AuditVerifyResult {
+  valid: boolean
+  chain_length?: number
+  [key: string]: unknown
+}

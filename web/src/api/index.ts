@@ -9,6 +9,11 @@ export type {
   MessagePage,
   ToolStreamEvent,
   CacheReport,
+  CredentialRecord,
+  ScheduleRecord,
+  SkillRecord,
+  MCPToolRecord,
+  AuditVerifyResult,
 } from './types'
 
 /** Shared transport instance; stores and hooks depend only on this. */

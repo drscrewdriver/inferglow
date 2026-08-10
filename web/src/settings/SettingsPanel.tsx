@@ -3,6 +3,8 @@ import { SETTINGS_TABS, type AppSettings } from './settingsSchema'
 import { useSettingsStore } from './settingsStore'
 import { THEME_GROUPS, THEMES } from '../theme/themes'
 import { applyTheme } from '../theme/ThemeProvider'
+import { RowList, useServerList, useServerResource } from './serverData'
+import { transport, type AuditVerifyResult, type CredentialRecord, type MCPToolRecord, type ScheduleRecord, type SkillRecord } from '../api'
 
 // ─── generic setting control primitives (mirror prototype helpers) ───
 
@@ -307,27 +309,33 @@ function ShortcutsTab({ s }: { s: AppSettings }) {
   )
 }
 
-function ServerPlaceholder({ title, sub, note }: { title: string; sub: string; note: string }) {
+function ProvidersTab() {
+  const report = useServerResource<import('../api').CacheReport>('/usage/report')
+  const overall = report.data?.overall
   return (
     <>
-      <SecHead title={title} sub={sub} />
-      <div className="card">
-        <div className="card__head">
-          <span className="t">服务端数据</span>
-          <span className="spacer" />
+      <SecHead title="提供方" sub="模型提供方 · 用量" />
+      <Card title="提供方列表">
+        <div className="cred-row"><span className="name">deepseek</span><span className="st">已连接</span></div>
+        <div className="cred-row"><span className="name">openai-compatible</span><span className="st st--warning">未配置</span></div>
+      </Card>
+      <Card title="用量统计">
+        <div className="appearance-row">
+          <span className="lbl">本月 tokens</span>
+          <b style={{ fontFamily: 'var(--font-mono)' }}>{overall ? (overall.total_prompt_tokens + overall.total_cached_tokens).toLocaleString() : '—'}</b>
         </div>
-        <div className="card__body">
-          <div className="appearance-row">
-            <div className="note" style={{ fontSize: 12, lineHeight: 1.7 }}>{note}</div>
-          </div>
+        <div className="appearance-row">
+          <span className="lbl">缓存命中率</span>
+          <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--ok)' }}>{overall ? `${(overall.cache_hit_rate * 100).toFixed(1)}%` : '—'}</b>
         </div>
-      </div>
+        <div className="appearance-row">
+          <span className="lbl">本月费用</span>
+          <b style={{ fontFamily: 'var(--font-mono)' }}>{overall ? `$${overall.actual_cost.toFixed(4)}` : '—'}</b>
+        </div>
+        {report.error && <div className="note" style={{ color: 'var(--err)' }}>{report.error}</div>}
+      </Card>
     </>
   )
-}
-
-function ProvidersTab() {
-  return <ServerPlaceholder title="提供方" sub="模型提供方 · 用量" note="提供方列表与用量统计将对接 GET /v1/agents 与 GET /v1/usage/report（后续 commit 接线）。" />
 }
 
 function ModelsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
@@ -349,7 +357,43 @@ function ModelsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) 
 }
 
 function CredentialsTab() {
-  return <ServerPlaceholder title="凭证" sub="API Keys · 加密存储" note="已保存凭证列表、测试连接与添加流程将对接 /v1/credentials（后续 commit 接线）。本地加密存储，不落明文。" />
+  const { items, loading, error, reload } = useServerList<CredentialRecord>('/credentials')
+  return (
+    <>
+      <SecHead title="凭证" sub="API Keys · 加密存储" />
+      <Card title="已保存凭证">
+        <RowList
+          items={items}
+          loading={loading}
+          error={error}
+          empty="暂无凭证"
+          statusOf={(c) => (c.secret ? '可用' : '未验证')}
+          action={(c) => (
+            <button
+              className="btn btn--small"
+              onClick={() => {
+                void transport.request('DELETE', `/credentials/${c.id}`).then(reload)
+              }}
+            >删除</button>
+          )}
+        />
+      </Card>
+      <Card title="操作">
+        <AppearanceRow label="添加凭证">
+          <button
+            className="btn btn--small"
+            onClick={() => {
+              const name = window.prompt('凭证名称（如 deepseek）')
+              if (!name) return
+              const secret = window.prompt('API Key（本地加密存储，不落明文）')
+              void transport.request('POST', '/credentials', { name, secret_value: secret }).then(reload)
+            }}
+          >＋ 添加凭证</button>
+        </AppearanceRow>
+        <div className="note" style={{ fontSize: 11 }}>本地加密存储，不落明文；删除后需重新配置。</div>
+      </Card>
+    </>
+  )
 }
 
 function MemoryTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
@@ -389,6 +433,7 @@ function PermissionsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettin
 }
 
 function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
+  const audit = useServerResource<AuditVerifyResult>('/audit/verify')
   return (
     <>
       <SecHead title="安全" sub="审计 · 浏览器指纹 · 密钥" />
@@ -396,6 +441,12 @@ function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>
         <SwitchRow label="启用审计日志" checked={s.auditEnabled} onChange={(v) => set({ auditEnabled: v })} />
         <InputRow label="日志路径" value={s.auditPath} onChange={(v) => set({ auditPath: v })} />
         <SwitchRow label="审计先于校验" note="硬约束" checked={s.auditBeforeValidate} onChange={(v) => set({ auditBeforeValidate: v })} />
+        <div className="cred-row">
+          <span className="name">审计链完整性</span>
+          <span className={audit.data?.valid ? 'st' : 'st st--warning'}>
+            {audit.loading ? '校验中…' : audit.data ? (audit.data.valid ? '有效' : '无效') : audit.error ?? '未配置'}
+          </span>
+        </div>
       </Card>
       <Card title="浏览器">
         <SwitchRow label="指纹规避" checked={s.cdpStealth} onChange={(v) => set({ cdpStealth: v })} />
@@ -409,15 +460,22 @@ function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>
 }
 
 function SkillsToolsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
+  const skills = useServerList<SkillRecord>('/skill-hub')
+  const tools = useServerList<{ name?: string }>('/tools')
   return (
     <>
       <SecHead title="技能与工具" sub="技能库 · 工具开关" />
       <Card title="技能库">
-        <div className="cred-row"><span className="name">网页搜索</span><span className="st">内置 · 启用</span></div>
-        <div className="cred-row"><span className="name">文件操作</span><span className="st">内置 · 启用</span></div>
-        <div className="cred-row"><span className="name">浏览器自动化</span><span className="st st--warning">需 CDP 配置</span></div>
+        <RowList
+          items={skills.items}
+          loading={skills.loading}
+          error={skills.error}
+          empty="技能库为空"
+          statusOf={(x) => (x.executable ? '可执行' : '只读')}
+        />
       </Card>
       <Card title="工具">
+        <RowList items={tools.items} loading={tools.loading} error={tools.error} empty="工具列表为空" statusOf={() => '已注册'} />
         <SwitchRow label="工具卡片自动展开" checked={s.toolAutoExpand} onChange={(v) => set({ toolAutoExpand: v })} />
         <SwitchRow label="破坏性操作需确认" checked={s.toolConfirmDestructive} onChange={(v) => set({ toolConfirmDestructive: v })} />
       </Card>
@@ -426,12 +484,12 @@ function SkillsToolsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettin
 }
 
 function ConnectorsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
+  const mcp = useServerList<MCPToolRecord>('/mcp-hub')
   return (
     <>
       <SecHead title="连接器" sub="MCP · 桥接 · 浏览器" />
       <Card title="MCP 服务器">
-        <div className="cred-row"><span className="name">文件系统</span><span className="st">stdio</span></div>
-        <div className="cred-row"><span className="name">浏览器</span><span className="st st--warning">sse · 未连接</span></div>
+        <RowList items={mcp.items} loading={mcp.loading} error={mcp.error} empty="未安装 MCP 工具" statusOf={() => 'stdio'} />
       </Card>
       <Card title="桥接">
         <div className="cred-row"><span className="name">飞书</span><span className="st st--warning">未连接</span></div>
@@ -446,7 +504,42 @@ function ConnectorsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSetting
 }
 
 function SchedulesTab() {
-  return <ServerPlaceholder title="调度" sub="定时任务 · Webhook" note="定时任务列表、启停与新建将对接 /v1/schedules（后续 commit 接线）。" />
+  const { items, loading, error, reload } = useServerList<ScheduleRecord>('/schedules')
+  return (
+    <>
+      <SecHead title="调度" sub="定时任务 · Webhook" />
+      <Card title="定时任务">
+        <RowList
+          items={items}
+          loading={loading}
+          error={error}
+          empty="暂无定时任务"
+          statusOf={(x) => (x.enabled ? '运行中' : '已停止')}
+          action={(x) => (
+            <button
+              className="btn btn--small"
+              onClick={() => {
+                void transport.request('POST', `/schedules/${x.id}/${x.enabled ? 'stop' : 'start'}`, {}).then(reload)
+              }}
+            >{x.enabled ? '停止' : '启动'}</button>
+          )}
+        />
+      </Card>
+      <Card title="操作">
+        <AppearanceRow label="新建调度">
+          <button
+            className="btn btn--small"
+            onClick={() => {
+              const name = window.prompt('调度名称')
+              const flow = window.prompt('Flow 名称')
+              if (!name || !flow) return
+              void transport.request('POST', '/schedules', { name, flow }).then(reload)
+            }}
+          >＋ 新建调度</button>
+        </AppearanceRow>
+      </Card>
+    </>
+  )
 }
 
 function ExperimentsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
