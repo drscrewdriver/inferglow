@@ -86,6 +86,20 @@ graph TD
 > 下面是一个完整的端到端示例，演示如何用 inferglow 组装一个带工具调用的 Agent。
 > 无需真实 LLM API Key，使用 MockLLM 即可运行。
 
+### 0. 桌面 GUI（React 19 + Vite + Zustand）
+
+GUI 前端构建产物内嵌进 server（`//go:embed webui`），浏览器打开 `/gui` 即用：
+
+```bash
+cd server
+go run ./cmd/inferglow-server -demo-agent   # 内置 echo agent，无需真实模型
+# 浏览器访问 http://localhost:8080/gui/
+```
+
+- 聊天 SSE 流式、会话管理（置顶/归档/重命名）、15 tab 设置面板完整对接 REST。
+- 前端工程见 `web/`（`npm run dev` 开发、`npm run build` 产物入库）；
+  架构与契约见 [docs/guides/gui.md](docs/guides/gui.md)。
+
 ### 1. 创建一个最简单的 Agent
 
 ```go

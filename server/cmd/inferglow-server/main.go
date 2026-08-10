@@ -37,11 +37,12 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", ":8080", "Listen address")
-		apiKey   = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
-		cors     = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
-		timeout  = flag.Duration("timeout", 30*time.Second, "Request read timeout")
-		usageDir = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
+		addr      = flag.String("addr", ":8080", "Listen address")
+		apiKey    = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
+		cors      = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
+		timeout   = flag.Duration("timeout", 30*time.Second, "Request read timeout")
+		usageDir  = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
+		demoAgent = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
 	)
 	flag.Parse()
 
@@ -55,7 +56,13 @@ func main() {
 		cfg.CORSOrigins = splitComma(*cors)
 	}
 
-	srv := server.NewServer(cfg, nil) // TODO: wire real AgentStore
+	var agentStore server.AgentStore
+	if *demoAgent {
+		agentStore = newDemoAgentStore()
+		log.Println("demo agent wired: id=a1 (echo)")
+	}
+
+	srv := server.NewServer(cfg, agentStore) // TODO: wire real AgentStore
 
 	// C-3: demo wiring of the in-memory message bus (out-of-the-box).
 	srv.SetMessageBus(messagebus.NewInMemoryMessageBus())
@@ -131,4 +138,48 @@ func trim(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// demoAgent is a local echo agent for GUI testing without a real provider.
+// It implements server.AgentLike (Run) and is wired by -demo-agent.
+type demoAgent struct{}
+
+// Run echoes the user message back, prefixed for visibility.
+func (demoAgent) Run(_ context.Context, userMessage string) (string, error) {
+	return "demo echo: " + userMessage, nil
+}
+
+// demoAgentStore is an in-memory AgentStore holding the demo agent as "a1".
+// It satisfies server.AgentStore so the GUI chat endpoints resolve an agent.
+type demoAgentStore struct {
+	agents map[string]server.AgentLike
+}
+
+func newDemoAgentStore() *demoAgentStore {
+	return &demoAgentStore{agents: map[string]server.AgentLike{"a1": demoAgent{}}}
+}
+
+// Get returns the agent with the given ID, or nil if not found.
+func (s *demoAgentStore) Get(id string) server.AgentLike {
+	return s.agents[id]
+}
+
+// List returns all agents.
+func (s *demoAgentStore) List() []server.AgentLike {
+	out := make([]server.AgentLike, 0, len(s.agents))
+	for _, a := range s.agents {
+		out = append(out, a)
+	}
+	return out
+}
+
+// Create registers a new demo agent and returns its ID.
+func (s *demoAgentStore) Create(_ server.AgentConfig) (string, error) {
+	return "", fmt.Errorf("demo agent store is read-only")
+}
+
+// Delete removes an agent by ID.
+func (s *demoAgentStore) Delete(id string) error {
+	delete(s.agents, id)
+	return nil
 }
