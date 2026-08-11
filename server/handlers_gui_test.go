@@ -69,12 +69,12 @@ func TestGUI_ServesAssets(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("shell: want 200, got %d", w.Code)
 	}
-	asset := regexp.MustCompile(`src="(/assets/[^"]+)"`).FindStringSubmatch(w.Body.String())
+	asset := regexp.MustCompile(`src="(/gui/assets/[^"]+)"`).FindStringSubmatch(w.Body.String())
 	if len(asset) < 2 {
 		t.Fatal("shell html missing script asset")
 	}
 
-	req = httptest.NewRequest("GET", "/gui"+asset[1], nil)
+	req = httptest.NewRequest("GET", asset[1], nil)
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

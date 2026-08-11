@@ -46,6 +46,28 @@ func createSessionViaAPI(t *testing.T, srv *Server) string {
 	return created.ID
 }
 
+// TestCreateSession_TitlePersisted verifies POST /v1/sessions accepts an
+// optional title that is stored on the record (GUI new-session flow).
+func TestCreateSession_TitlePersisted(t *testing.T) {
+	srv := NewServer(DefaultConfig(), newMockStore())
+	srv.SetSessionStore(NewSessionStore())
+
+	body := `{"agent_id":"a1","title":"新会话 3"}`
+	req := httptest.NewRequest("POST", "/v1/sessions", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: want 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	var rec SessionRecord
+	if err := json.NewDecoder(w.Body).Decode(&rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Title != "新会话 3" {
+		t.Fatalf("title = %q, want 新会话 3", rec.Title)
+	}
+}
+
 // TestUpdateSessionMeta_PatchGroupPinRename verifies PATCH updates title/group/
 // pinned in one request and returns the refreshed record.
 func TestUpdateSessionMeta_PatchGroupPinRename(t *testing.T) {
