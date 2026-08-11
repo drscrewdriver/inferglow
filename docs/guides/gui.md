@@ -83,6 +83,9 @@ web/src/
   `security` 审计链→`/v1/audit/verify`。
 - **本地**（localStorage，key `inferglow.settings.v1`）：外观/界面/快捷键/权限/
   推理/实验等纯 UI 偏好；主题卡片点击即时切换 20 套主题。
+- **鉴权**：服务端以 `-api-key` 启动时，GUI 所有 `/v1` 请求自动携带
+  `Authorization: Bearer <key>`；key 在设置 → 安全 →「GUI API Key」输入，
+  单独存于 `localStorage['inferglow.apikey']`（不入设置 blob）。
 
 ## 新增端点（本 GUI 版引入）
 
