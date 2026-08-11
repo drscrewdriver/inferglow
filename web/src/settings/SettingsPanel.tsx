@@ -4,7 +4,7 @@ import { useSettingsStore } from './settingsStore'
 import { THEME_GROUPS, THEMES } from '../theme/themes'
 import { applyTheme } from '../theme/ThemeProvider'
 import { RowList, useServerList, useServerResource } from './serverData'
-import { transport, type AuditVerifyResult, type CredentialRecord, type MCPToolRecord, type ScheduleRecord, type SkillRecord } from '../api'
+import { transport, type AuditEntriesResult, type AuditVerifyResult, type CredentialRecord, type MCPToolRecord, type ScheduleRecord, type SkillRecord } from '../api'
 
 // ─── generic setting control primitives (mirror prototype helpers) ───
 
@@ -434,6 +434,7 @@ function PermissionsTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettin
 
 function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>) => void }) {
   const audit = useServerResource<AuditVerifyResult>('/audit/verify')
+  const entries = useServerResource<AuditEntriesResult>('/audit/entries')
   return (
     <>
       <SecHead title="安全" sub="审计 · 浏览器指纹 · 密钥" />
@@ -447,6 +448,13 @@ function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>
             {audit.loading ? '校验中…' : audit.data ? (audit.data.valid ? '有效' : '无效') : audit.error ?? '未配置'}
           </span>
         </div>
+        {entries.data && entries.data.count > 0 && (
+          <div className="note" style={{ fontSize: 11, lineHeight: 1.7, marginTop: 4 }}>
+            最近审计条目：{entries.data.count} 条
+            <br />
+            {entries.data.entries.slice(0, 3).map((e) => `${e.action}@${e.source}`).join(' · ')}
+          </div>
+        )}
       </Card>
       <Card title="浏览器">
         <SwitchRow label="指纹规避" checked={s.cdpStealth} onChange={(v) => set({ cdpStealth: v })} />
@@ -454,6 +462,16 @@ function SecurityTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings>
       </Card>
       <Card title="密钥">
         <SwitchRow label="本地落盘加密" checked={s.encryptAtRest} onChange={(v) => set({ encryptAtRest: v })} />
+        <AppearanceRow label="GUI API Key">
+          <input
+            type="password"
+            value={s.apiKey}
+            placeholder="服务端启用 -api-key 时填写"
+            onChange={(e) => set({ apiKey: e.target.value })}
+            style={{ background: 'var(--bg-elev)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 8px', fontSize: 12, width: 220 }}
+          />
+        </AppearanceRow>
+        <div className="note" style={{ fontSize: 11 }}>GUI 所有 /v1 请求将携带 Bearer 鉴权头。</div>
       </Card>
     </>
   )

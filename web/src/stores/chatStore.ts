@@ -35,6 +35,8 @@ interface ChatState {
   appendHistory: (page: MessagePage) => void
   loadOlder: (sessionId: string) => Promise<void>
   sendMessage: (sessionId: string, agentId: string, message: string) => Promise<void>
+  /** Thread-level approval decision via the agent input endpoint. */
+  approveInput: (agentId: string, approve: boolean) => Promise<void>
   stop: () => void
   clear: () => void
 }
@@ -201,6 +203,19 @@ export const createChatStore = (t: Transport) =>
     stop() {
       get().controller?.abort()
       set({ streaming: false, running: false })
+    },
+
+    async approveInput(agentId, approve) {
+      try {
+        // POST /v1/agents/{id}/input carries the preempt/approval decision;
+        // the agent maps "approve"/"reject" to its own continuation policy.
+        await t.request<{ response: string }>('POST', `/agents/${agentId}/input`, {
+          message: approve ? 'approve' : 'reject',
+          preempt_mode: 'force',
+        })
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : String(err) })
+      }
     },
 
     clear() {

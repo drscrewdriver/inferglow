@@ -106,6 +106,14 @@ describe('chatStore', () => {
     expect(tool?.toolStatus).toBe('error')
   })
 
+  it('posts approval decisions to the agent input endpoint', async () => {
+    const t = mockTransport()
+    const store = createChatStore(t)
+    await store.getState().approveInput('a1', true)
+    await store.getState().approveInput('a1', false)
+    expect(t.calls.filter((c) => c.startsWith('POST /agents/a1/input'))).toHaveLength(2)
+  })
+
   it('loads history pages and prepends them', async () => {
     const store = createChatStore(mockTransport())
     const page = await store.getState().loadHistory('s1')

@@ -4,9 +4,14 @@ import { DEFAULT_SETTINGS, SETTINGS_VERSION, type AppSettings } from './settings
 function load(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_VERSION)
-    if (!raw) return DEFAULT_SETTINGS
-    const parsed = JSON.parse(raw) as Partial<AppSettings>
-    return { ...DEFAULT_SETTINGS, ...parsed, shortcuts: { ...DEFAULT_SETTINGS.shortcuts, ...(parsed.shortcuts ?? {}) } }
+    const parsed = raw ? (JSON.parse(raw) as Partial<AppSettings>) : {}
+    const apiKey = localStorage.getItem('inferglow.apikey') ?? ''
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      apiKey,
+      shortcuts: { ...DEFAULT_SETTINGS.shortcuts, ...(parsed.shortcuts ?? {}) },
+    }
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -24,6 +29,12 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const next = { ...get().settings, ...patch }
     try {
       localStorage.setItem(SETTINGS_VERSION, JSON.stringify(next))
+      // The API key travels separately so transport can read it without
+      // parsing the full settings blob.
+      if (patch.apiKey !== undefined) {
+        if (patch.apiKey) localStorage.setItem('inferglow.apikey', patch.apiKey)
+        else localStorage.removeItem('inferglow.apikey')
+      }
     } catch {
       // localStorage unavailable (private mode etc.) — keep in-memory state.
     }
@@ -32,6 +43,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   reset: () => {
     try {
       localStorage.removeItem(SETTINGS_VERSION)
+      localStorage.removeItem('inferglow.apikey')
     } catch {
       // ignore
     }

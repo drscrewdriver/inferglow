@@ -94,3 +94,19 @@ export interface AuditVerifyResult {
   chain_length?: number
   [key: string]: unknown
 }
+
+export interface AuditEntry {
+  prev_hash: string
+  hash: string
+  id: string
+  timestamp: string
+  source: string
+  action: string
+  error?: string
+  metadata?: Record<string, string>
+}
+
+export interface AuditEntriesResult {
+  entries: AuditEntry[]
+  count: number
+}

@@ -14,6 +14,8 @@ export type {
   SkillRecord,
   MCPToolRecord,
   AuditVerifyResult,
+  AuditEntry,
+  AuditEntriesResult,
 } from './types'
 
 /** Shared transport instance; stores and hooks depend only on this. */

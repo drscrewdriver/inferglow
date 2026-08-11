@@ -98,7 +98,7 @@ function Sidebar() {
   )
 }
 
-function ToolCardView({ m }: { m: ChatMessage }) {
+function ToolCardView({ m, onApprove, onReject }: { m: ChatMessage; onApprove?: () => void; onReject?: () => void }) {
   const status = m.toolStatus ?? 'run'
   const statusIcon = status === 'run' ? '⟳' : status === 'ok' ? '✓' : '✕'
   return (
@@ -107,6 +107,12 @@ function ToolCardView({ m }: { m: ChatMessage }) {
         <span className={`tool-status tool-status--${status}`}>{statusIcon}</span>
         <span className="tool-card__name">{m.toolName ?? 'tool'}</span>
         <span className="tool-card__tail">
+          {status === 'run' && onApprove && (
+            <>
+              <button className="btn btn--small" onClick={onApprove}>允许</button>
+              <button className="btn btn--small btn--danger" onClick={onReject}>拒绝</button>
+            </>
+          )}
           <span className="tool-card__dur">{status === 'run' ? '运行中…' : status === 'ok' ? '完成' : '失败'}</span>
           <span className="tool-card__chev">▾</span>
         </span>
@@ -120,11 +126,25 @@ function ToolCardView({ m }: { m: ChatMessage }) {
   )
 }
 
-function MessageList({ messages, onScrollTop }: { messages: ChatMessage[]; onScrollTop?: () => void }) {
+function MessageList({
+  messages,
+  streaming,
+  thoughtVisible,
+  onScrollTop,
+  onApproveTool,
+  onRejectTool,
+}: {
+  messages: ChatMessage[]
+  streaming: boolean
+  thoughtVisible: boolean
+  onScrollTop?: () => void
+  onApproveTool?: () => void
+  onRejectTool?: () => void
+}) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
-  }, [messages.length])
+  }, [messages.length, streaming])
   return (
     <div
       className="messages"
@@ -138,7 +158,7 @@ function MessageList({ messages, onScrollTop }: { messages: ChatMessage[]; onScr
           <div key={m.id} className="msg msg--a">
             <span className="msg__avatar">⚙</span>
             <div className="msg__body" style={{ background: 'transparent', border: 'none', maxWidth: 760 }}>
-              <ToolCardView m={m} />
+              <ToolCardView m={m} onApprove={onApproveTool} onReject={onRejectTool} />
             </div>
           </div>
         ) : (
@@ -150,7 +170,8 @@ function MessageList({ messages, onScrollTop }: { messages: ChatMessage[]; onScr
           </div>
         ),
       )}
-      {messages.length === 0 && (
+      {thoughtVisible && <div className="thought">正在思考…</div>}
+      {messages.length === 0 && !thoughtVisible && (
         <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--fg-faint)', fontSize: 13 }}>
           选择左侧会话开始对话，或新建一个会话。
         </div>
@@ -221,12 +242,17 @@ function ChatMain({ live }: { live: boolean }) {
   const activeId = useSessionStore((s) => s.activeId)
   const sessions = useSessionStore((s) => s.sessions)
   const active = sessions.find((s) => s.id === activeId)
+  const agentId = active?.agent_id ?? 'a1'
   const messages = useChatStore((s) => s.messages)
   const error = useChatStore((s) => s.error)
+  const streaming = useChatStore((s) => s.streaming)
+  const running = useChatStore((s) => s.running)
   const loadHistory = useChatStore((s) => s.loadHistory)
   const appendHistory = useChatStore((s) => s.appendHistory)
   const loadOlder = useChatStore((s) => s.loadOlder)
   const clear = useChatStore((s) => s.clear)
+  const approveInput = useChatStore((s) => s.approveInput)
+  const cmdApproval = useSettingsStore((s) => s.settings.cmdApproval)
 
   // Load history when switching sessions; clear local state otherwise.
   useEffect(() => {
@@ -247,7 +273,14 @@ function ChatMain({ live }: { live: boolean }) {
         <span className="model">{active?.agent_id ?? 'agent'} · {live ? 'live' : 'demo'}</span>
         <span className="spacer" />
       </div>
-      <MessageList messages={messages} onScrollTop={activeId ? () => void loadOlder(activeId) : undefined} />
+      <MessageList
+        messages={messages}
+        streaming={streaming}
+        thoughtVisible={streaming && running}
+        onScrollTop={activeId ? () => void loadOlder(activeId) : undefined}
+        onApproveTool={cmdApproval ? () => void approveInput(agentId, true) : undefined}
+        onRejectTool={cmdApproval ? () => void approveInput(agentId, false) : undefined}
+      />
       {error && (
         <div style={{ padding: '4px 16px', fontSize: 12, color: 'var(--err)', background: 'rgba(229,83,75,.08)' }}>
           {error}

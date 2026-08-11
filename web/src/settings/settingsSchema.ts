@@ -60,6 +60,8 @@ export interface AppSettings {
   cdpStealth: boolean
   cdpAutomation: boolean
   encryptAtRest: boolean
+  /** GUI request auth token (Bearer); synced to localStorage 'inferglow.apikey'. */
+  apiKey: string
   // skills-tools
   toolConfirmDestructive: boolean
   // connectors
@@ -128,6 +130,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   cdpStealth: true,
   cdpAutomation: true,
   encryptAtRest: true,
+  apiKey: '',
   toolConfirmDestructive: true,
   browserProfile: true,
   browserPartition: true,

@@ -28,6 +28,17 @@ export interface Transport {
 
 const API_BASE = '/v1'
 
+/** Bearer token for API-key protected servers (set in Settings → 安全).
+ * Stored under its own localStorage key, separate from UI preferences. */
+function authHeaders(): Record<string, string> | undefined {
+  try {
+    const key = localStorage.getItem('inferglow.apikey')
+    return key ? { Authorization: `Bearer ${key}` } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 async function parseJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     let message = `HTTP ${resp.status}`
@@ -47,7 +58,10 @@ export const restTransport: Transport = {
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const resp = await fetch(API_BASE + path, {
       method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...authHeaders(),
+      },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
     return parseJson<T>(resp)
@@ -56,7 +70,10 @@ export const restTransport: Transport = {
   async streamRun(agentId, req, handlers, signal): Promise<void> {
     const resp = await fetch(`${API_BASE}/agents/${agentId}/stream-run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+      },
       body: JSON.stringify(req),
       signal,
     })
