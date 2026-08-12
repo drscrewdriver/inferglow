@@ -367,7 +367,7 @@ export default function App() {
         </footer>
 
         {termOpen && (
-          <div className="term-drawer">
+          <div className="term-drawer term-drawer--open">
             <div className="term-drawer__inner">
               <div className="term-rails" />
               <div className="term-view" />

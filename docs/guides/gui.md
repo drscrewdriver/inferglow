@@ -32,6 +32,62 @@ npm run build      # tsc + vite build → ../server/webui（产物入库，Go em
 `go build` 与 CI 无需 Node 工具链即可编译（与 `dashboard.html` 先例一致）；
 `web/node_modules`、`web/dist` 不入库。
 
+## 启动与打包流程
+
+### 启动（两种模式）
+
+**开发模式（双进程，前端热更新）**
+
+```bash
+# 终端 1：后端（REST + embed 挂载点）
+cd server
+go run ./cmd/inferglow-server -demo-agent
+
+# 终端 2：前端 dev server（:5173），/v1 与 /health 代理到 :8080
+cd web
+npm install && npm run dev
+# 浏览器访问 http://localhost:5173（改代码即时生效）
+```
+
+**生产模式（单二进制，前端产物已 embed）**
+
+```bash
+cd server
+go run ./cmd/inferglow-server -demo-agent
+# 浏览器访问 http://localhost:8080/gui/（直接由 //go:embed webui 提供）
+```
+
+关键 flag：`-demo-agent`（内置 echo agent，无需真实模型）、`-api-key`（Bearer 鉴权）、
+`-usage-dir`（用量数据目录）、`-addr`（监听地址）。
+
+### 打包（发布一个可交付的二进制）
+
+```bash
+# 1. 构建前端 → server/webui/（产物入库，改动前端后必须重新 build 并提交）
+cd web
+npm install
+npm run lint && npm run test && npm run build
+
+# 2. 构建 server 单二进制（embed 最新 webui 产物）
+cd ../server
+go build -o inferglow-server.exe ./cmd/inferglow-server
+
+# 3. 交付：单文件 inferglow-server.exe 即可运行完整 GUI（无需 Node/前端源码）
+./inferglow-server.exe -demo-agent
+```
+
+### CI 流程（.github/workflows/ci.yml）
+
+- **test / vet / lint**：纯 Go 三 job，覆盖全部 23 个 module（产物已入库，无需 Node）。
+- **web job**：`setup-node@v4` + Node 22 → `npm ci` → `npm run lint` → `npm run test`
+  → `npm run build`，并校验 `server/webui/index.html` 存在，保证 embed 产物新鲜；
+  产物变更需一并提交，否则 CI 的 Go job 使用的仍是旧产物。
+
+### 发布（里程碑）
+
+前端改版 + 后端变更完成后：`git tag v0.2.x` + `git push --tags`。
+产物入库约定下，tag 即完整可交付状态（checkout tag → `go build` → 单二进制）。
+
 ## 架构
 
 ### 通道架构（REST 主通道 + transport 抽象预留 Wails）

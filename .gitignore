@@ -3,3 +3,4 @@ graphify-out/
 # Build artifacts
 bin/inferglow-cli
 cli/inferglow-cli
+server/inferglow-server.exe
