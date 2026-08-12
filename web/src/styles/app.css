@@ -10,6 +10,10 @@
   --radius:10px;
   --font-ui:"PingFang SC","Microsoft YaHei","Segoe UI",-apple-system,sans-serif;
   --font-mono:Consolas,"Cascadia Code","SF Mono",ui-monospace,monospace;
+  /* Dark is the default render: color-scheme must match or the browser
+     paints form controls (select dropdowns, scrollbars, autofill) with
+     light-system chrome — white background with black text in dark UI. */
+  color-scheme:dark;
   /* 鈹€鈹€ InferGlow 鍏煎鍒悕锛堟槧灏勫埌 openhanako 鑹插僵浣撶郴锛?鈹€鈹€ */
   --bg-soft:var(--bg2); --bg-elev:var(--panel); --bg-elev-2:var(--panel2);
   --sidebar-bg:var(--panel); --sidebar-hover:var(--panel2);
