@@ -41,10 +41,10 @@ type Handle interface {
 
 ```go
 type Command struct {
-    Argv       []string        // 命令及参数
-    WorkDir    string          // 工作目录
-    Env        map[string]string // 环境变量
-    Timeout    time.Duration   // 超时
+    Argv    []string // 命令及参数
+    Env     []string // 环境变量（"KEY=VALUE" 列表）
+    Workdir string   // 工作目录
+    Stdin   io.Reader // 标准输入
 }
 ```
 
@@ -73,7 +73,7 @@ const (
 )
 ```
 
-**ModeAuto 降级链**: gvisor → docker → local → trusted_local
+**ModeAuto 降级链**: gvisor → docker → local（Windows 上 local 内部为 AppContainer → RestrictedToken；Windows Sandbox 因企业版/弹窗/通信限制被排除）
 
 ## 执行策略
 
@@ -81,13 +81,13 @@ const (
 
 ```go
 type ExecutionPolicy struct {
-    Mode             SandboxMode
-    ResourceLimit    *ResourceLimit    // CPU/Memory/Disk/进程数
-    NetworkPolicy    *NetworkPolicy    // 网络访问控制
-    FilesystemPolicy *FilesystemPolicy // 文件系统限制
-    CommandWhitelist []string          // 命令白名单
-    Timeout          time.Duration     // 超时
-    IsolationLevel   IsolationLevel    // 隔离级别
+    SandboxMode      SandboxMode
+    ResourceLimit    ResourceLimit    // CPU/内存/磁盘/进程数
+    NetworkAccess    NetworkPolicy    // 网络访问控制
+    FilesystemAccess FilesystemPolicy // 文件系统限制
+    AllowedCommands  []string         // 命令白名单
+    Timeout          time.Duration    // 超时
+    IsolationLevel   IsolationLevel   // 隔离级别
 }
 ```
 
@@ -95,10 +95,10 @@ type ExecutionPolicy struct {
 
 ```go
 type ResourceLimit struct {
-    CPU       float64   // CPU 占比
-    Memory    int64     // 内存限制（字节）
-    Disk      int64     // 磁盘限制（字节）
-    MaxProcesses int    // 最大进程数
+    CPUShares   int64 // CPU 份额
+    MemoryBytes int64 // 内存限制（字节）
+    DiskBytes   int64 // 磁盘限制（字节）
+    NPROC       int   // 最大进程数
 }
 ```
 
@@ -106,9 +106,10 @@ type ResourceLimit struct {
 
 ```go
 type NetworkPolicy struct {
-    Enabled     bool
-    AllowedPorts []int
-    AllowedHosts []string
+    AllowInternet bool
+    AllowedPorts  []int
+    AllowedHosts  []string
+    Level         NetworkAccessLevel // none | egress_only | full
 }
 ```
 
@@ -116,12 +117,10 @@ type NetworkPolicy struct {
 
 ```go
 type FilesystemPolicy struct {
-    ReadOnly    bool
-    PathAllowlist  []string
-    PathDenylist   []string
-    AllowCreate     bool
-    AllowUpdate     bool
-    AllowDelete     bool
+    ReadOnlyRoot bool
+    Mounts       []MountEntry
+    AllowedPaths []string
+    DeniedPaths  []string
 }
 ```
 
@@ -131,10 +130,10 @@ type FilesystemPolicy struct {
 |------|------|------|
 | docker.go | DockerProvider | Docker 容器沙箱 |
 | gvisor.go | GVisorProvider | gVisor 用户态内核沙箱 |
-| local_sandbox.go | LocalSandboxProvider | 本地进程级沙箱 |
+| local_sandbox.go | LocalSandboxProvider | 本地进程级沙箱（自动选择平台最优后端） |
 | trusted_local.go | TrustedLocalProvider | 可信本地执行（无隔离） |
 | seatbelt.go | SeatbeltProvider | macOS Seatbelt 沙箱 |
-| windows_*.go | WindowsAppContainerProvider | Windows AppContainer 沙箱 |
+| windows_runtime.go | WindowsRuntimeProvider | Windows 三后端：RestrictedToken（进程级）/ AppContainer（应用级，默认强隔离）/ WindowsSandbox（VM 级，需企业版且无法无头运行，默认不选） |
 
 ## Manager — 管理器
 

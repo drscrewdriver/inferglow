@@ -24,6 +24,8 @@ package sandbox
 
 import (
 	"os/exec"
+	"syscall"
+	"unsafe"
 )
 
 // WindowsBackend represents one of the three supported Windows isolation backends.
@@ -75,34 +77,36 @@ type SharedFolder struct {
 	ReadOnly    bool   `json:"read_only"`
 }
 
-// WindowsSandboxCapabilities holds the capability enumeration for AppContainer.
-type WindowsSandboxCapabilities int
-
-const (
-	// CapFile is a placeholder for file system capability identifier.
-	CapFile WindowsSandboxCapabilities = iota
-	// CapRegistry is a placeholder for registry capability identifier.
-	CapRegistry
-	// CapDevice is a placeholder for device capability identifier.
-	CapDevice
-)
-
-// WindowsCapability holds a unique identifier for an AppContainer capability.
-type WindowsCapability struct {
-	LUID uint64
+// osVersionInfoEx mirrors the Win32 OSVERSIONINFOEXW structure used by
+// RtlGetVersion to report the real OS version (GetVersionEx lies under
+// manifest-based version probing).
+type osVersionInfoEx struct {
+	osVersionInfoSize uint32
+	majorVersion      uint32
+	minorVersion      uint32
+	buildNumber       uint32
+	platformID        uint32
+	csdVersion        [128]uint16
+	servicePackMajor  uint16
+	servicePackMinor  uint16
+	suiteMask         uint16
+	productType       byte
+	reserved          byte
 }
 
-// winAPIAvailable checks whether the Windows sandbox-related APIs are available.
-func winAPIAvailable() bool {
-	// Check if we're on Windows 8.1+ where AppContainer is available
-	return win10OrLater()
-}
-
-// win10OrLater checks if the current system is Windows 10 or later.
+// win10OrLater reports whether the current OS is Windows 10 or later, which
+// is the floor for AppContainer APIs. It queries RtlGetVersion from
+// ntdll.dll; on failure it fails open (modern OS) so availability checks do
+// not spuriously disable the backend on exotic systems.
 func win10OrLater() bool {
-	// On Windows 10+, all sandbox APIs are available.
-	// The real implementation would use RtlGetVersion from ntdll.dll.
-	return true
+	var info osVersionInfoEx
+	info.osVersionInfoSize = uint32(unsafe.Sizeof(info))
+	ntdll := syscall.NewLazyDLL("ntdll.dll")
+	r1, _, _ := ntdll.NewProc("RtlGetVersion").Call(uintptr(unsafe.Pointer(&info)))
+	if r1 != 0 {
+		return true
+	}
+	return info.majorVersion >= 10
 }
 
 // windowsSandboxAvailable checks if Windows Sandbox is installed and available.

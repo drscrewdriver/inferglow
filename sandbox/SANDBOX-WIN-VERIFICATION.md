@@ -119,9 +119,13 @@ TestLiveGVisorHandleEcho         → SKIP
 |------|------|------|
 | 受限 Token 创建 | ✅ 已实现 | `createRestrictedTokenFromCurrent()` — 移除 13 项高权限 |
 | 高权限移除 | ✅ 已实现 | SeDebugPrivilege, SeTcbPrivilege, SeBackupPrivilege 等 |
-| CreateProcessAsUser | ✅ 已实现 | 通过 `kernel32.CreateProcessAsUserW` 启动 |
+| CreateProcessAsUser | ✅ 已实现 | 通过 `kernel32.CreateProcessAsUserW` 启动（自动启用 SeIncreaseQuotaPrivilege + TOKEN_ASSIGN_PRIMARY） |
+| stdout/stderr 管道捕获 | ✅ 已实现 | `launchProcessWithIO`：CreatePipe + STARTF_USESTDHANDLES + 双 goroutine 并发读（防 64KB 死锁）+ 16MiB 输出上限 |
+| 真实 Duration | ✅ 已实现 | 启动到退出码获取的墙钟时间 |
+| 超时终止 | ✅ 已实现 | ctx.Done → TerminateProcess → 关闭写端触发 broken pipe → 等待回收 |
+| 并发安全 | ✅ 已实现 | Execute 在锁内 DuplicateHandle 复制令牌，并发 Stop 不会使句柄失效；LazyProc 加载 sync.Once |
 | 命令白名单 | ✅ 已实现 | `policy.AllowedCommands` |
-| 路径黑名单 | ✅ 已实现 | `policy.FilesystemAccess.DeniedPaths` |
+| 路径黑名单 | ✅ 已实现 | `policy.FilesystemAccess.DeniedPaths`（执行前字符串检查，非强制隔离） |
 | 超时控制 | ✅ 已实现 | `policy.Timeout` → context.WithTimeout |
 | 环境变量传递 | ✅ 已实现 | `cmd.Env` |
 | 工作目录设置 | ✅ 已实现 | `cmd.Workdir` |
@@ -131,12 +135,14 @@ TestLiveGVisorHandleEcho         → SKIP
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
-| AppContainer Profile 创建 | ✅ 已实现 | `userenv.CreateAppContainerProfile` |
-| AppContainer SID 管理 | ✅ 已实现 | `DeriveAppContainerSidFromAppContainerName` |
-| 文件系统 ACL | ✅ 框架 | `SetEntriesInAclW` 接口已定义，目录创建已实现 |
-| 注册表访问限制 | ✅ 框架 | `AddAppContainerRegistryCapability` 接口已定义 |
+| AppContainer Profile 创建 | ✅ 已实现 | `userenv.CreateAppContainerProfile`（修复 HRESULT 语义：S_OK=0 为成功；修复参数错位：补齐 dwCapabilityCount 与 ppSid） |
+| AppContainer SID 管理 | ✅ 已实现 | `DeriveAppContainerSidFromAppContainerName`；Stop 时 `LocalFree`（修正原"无需释放"错误注释） |
+| 容器身份启动 | ✅ 已实现 | `kernelbase.CreateAppContainerToken`（SECURITY_CAPABILITIES 零能力，deny-by-default）→ 复用 `launchProcessWithIO`；不再 exec 普通启动 |
+| 文件系统 ACL | ✅ 已实现 | `icacls <dir> /grant *SID:(OI)(CI)F`（*SID 字面量语法，保留原 DACL；SetEntriesInAclW TRUSTEE_IS_SID 路径在本环境异常 0x534，改走 icacls） |
+| 注册表访问限制 | ✅ 默认隔离 | AppContainer 注册表虚拟化提供基线；`configureRegistryAccess` 文档化为 v1 策略 |
+| 失败回滚 | ✅ 已实现 | `rollbackProfile()`：初始化任一步失败 → DeleteAppContainerProfile + LocalFree(SID) |
 | Profile 清理 | ✅ 已实现 | `DeleteAppContainerProfile` on Stop |
-| 可用性检测 | ✅ 已实现 | `featureDetection(userenv, "CreateAppContainerProfile")` |
+| 可用性检测 | ✅ 已实现 | `featureDetection(userenv, "CreateAppContainerProfile")` + `RtlGetVersion`（修复 win10OrLater 恒真占位） |
 
 ### 5.3 WindowsSandboxHandle（VM 级隔离）
 
@@ -164,9 +170,11 @@ TestLiveGVisorHandleEcho         → SKIP
 ## 6. 关键发现
 
 ### 已知限制
-1. **ModeAuto 不可用**: `AllowTrustedFallback=false` 默认不允许回退到 `trusted_local`，而 gvisor/docker 在当前环境不可用，因此 `SelectSandbox(ModeAuto)` 返回 `ErrNoAvailableSandbox`。这是期望行为。
-2. **AppContainer ACL 未完全实现**: `configureFilesystemAccess()` 和 `configureRegistryAccess()` 的 `SetEntriesInAclW` 调用使用占位代码，需在实际部署前完成。
-3. **RestrictedToken stdout/stderr 捕获**: `executeWithToken` 使用 `CreateProcessAsUserW` 但未设置管道，stdout/stderr 暂不可用。需添加 `STARTF_USESTDHANDLES` 配置。
+1. **ModeAuto 顶层不可用**: `AllowTrustedFallback=false` 默认不允许回退到 `trusted_local`，而 gvisor/docker 在当前环境不可用，因此 `SelectSandbox(ModeAuto)` 返回 `ErrNoAvailableSandbox`。Windows 本地链路（`local` → WindowsRuntimeProvider）的 auto_select 已修正为 **AppContainer → RestrictedToken**，Windows Sandbox 因企业版/弹窗/通信限制被排除在选择链外（代码保留）。
+2. **白名单/黑名单非强制**: RestrictedToken 与 AppContainer 的命令白名单/路径黑名单均为执行前字符串检查（`strings.Contains`），属尽力而为机制，非内核强制隔离。
+3. **读侧/网络隔离（机制固有）**: RestrictedToken 只移除特权，同一用户身份下读访问不隔离、网络不隔离；AppContainer 默认无网络（零能力），读侧由 SID ACL 控制。
+4. **SetEntriesInAclW TRUSTEE_IS_SID 异常**: 本环境（Windows 11 25H2）下 `SetEntriesInAclW` 对 SID 直传（含用户 SID）返回 0x534（ERROR_NONE_MAPPED），ACL 授权改由 `icacls *SID` 实现（已验证生效）。
+5. **TOKEN_APPCONTAINER_INFORMATION 结构版本差异**: Windows 11 25H2 中该结构返回 48 字节（旧版 8 字节），`tokenAppContainerSID` 采用两段式 size-then-allocate 查询并读取首个 PSID 字段，兼容两种布局。
 
 ### 架构亮点
 - 统一的 `Provider` / `Handle` 接口抽象，3 个 Windows 后端共享同一接口

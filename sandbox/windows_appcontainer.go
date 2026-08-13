@@ -23,11 +23,9 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,11 +46,13 @@ type AppContainerHandle struct {
 	processStarted   bool
 	profileName      string
 	sid              *syscall.SID
+	appToken         syscall.Token
 }
 
 // Start initializes the AppContainer environment and launches the process.
 // It creates an AppContainer profile, configures filesystem/registry ACLs,
-// and launches the process under the AppContainer identity.
+// derives an AppContainer token, and stores the token for Execute to start
+// processes under the container identity.
 func (h *AppContainerHandle) Start(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -66,12 +66,36 @@ func (h *AppContainerHandle) Start(ctx context.Context) error {
 
 	// Set up the AppContainer environment (profile + ACLs).
 	if err := h.setupAppContainerEnvironment(); err != nil {
+		h.rollbackProfile()
 		return fmt.Errorf("setup AppContainer environment: %w", err)
 	}
+
+	// Derive the AppContainer token used to start child processes under the
+	// container identity. A failure here must roll the profile back so a
+	// half-initialized container is never left behind.
+	token, err := createAppContainerToken(h.sid)
+	if err != nil {
+		h.rollbackProfile()
+		return fmt.Errorf("create AppContainer token: %w", err)
+	}
+	h.appToken = token
 
 	h.status = StatusRunning
 	h.processStarted = true
 	return nil
+}
+
+// rollbackProfile deletes the AppContainer profile and frees the SID after a
+// failed initialization, so no persistent system state is left behind.
+func (h *AppContainerHandle) rollbackProfile() {
+	if h.sid != nil {
+		freeSID(h.sid)
+		h.sid = nil
+	}
+	if h.profileName != "" {
+		_ = deleteAppContainerProfile(h.profileName)
+		h.profileName = ""
+	}
 }
 
 // Execute runs a command inside the AppContainer sandbox.
@@ -129,59 +153,18 @@ func (h *AppContainerHandle) Execute(ctx context.Context, cmd *Command) (*Execut
 		return nil, err
 	}
 
-	var name string
-	var args []string
-	if len(argv) > 1 && argv[0] == "cmd" {
-		name = argv[0]
-		args = argv[1:]
-	} else {
-		name = argv[0]
-		if len(argv) > 1 {
-			args = argv[1:]
-		}
+	// Launch under the AppContainer token via the shared launcher. Fail
+	// closed: without a valid container token the process would run with the
+	// full caller identity, which defeats the AppContainer isolation.
+	if h.appToken == 0 {
+		return nil, fmt.Errorf("%w: AppContainer token not initialized (call Start first)", ErrHandleNotRunning)
 	}
-
-	cmdExec := exec.CommandContext(execCtx, name, args...)
-	cmdExec.Stdin = cmd.Stdin
-	if cmd.Workdir != "" {
-		cmdExec.Dir = cmd.Workdir
-	} else if h.sandboxDir != "" {
-		cmdExec.Dir = h.sandboxDir
-	}
-	if cmd.Env != nil {
-		cmdExec.Env = cmd.Env
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmdExec.Stdout = &stdout
-	cmdExec.Stderr = &stderr
-
-	start := time.Now()
-	runErr := cmdExec.Run()
-	duration := time.Since(start)
-
-	result := &ExecutionResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		Duration: duration,
-	}
-
-	if cmdExec.ProcessState != nil {
-		result.ExitCode = cmdExec.ProcessState.ExitCode()
-	}
-
-	if runErr != nil {
-		if execCtx.Err() != nil {
-			return result, fmt.Errorf("%w: %v", execCtx.Err(), runErr)
-		}
-		return result, nil
-	}
-
-	return result, nil
+	return launchProcessWithIO(execCtx, h.appToken, argv, cmd, h.sandboxDir)
 }
 
 // Stop terminates the running process and cleans up resources.
-// It kills the process, deletes the AppContainer profile, and frees the SID.
+// It kills the process, deletes the AppContainer profile, closes the
+// AppContainer token, and frees the SID.
 func (h *AppContainerHandle) Stop(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -191,17 +174,21 @@ func (h *AppContainerHandle) Stop(ctx context.Context) error {
 		h.proc = nil
 	}
 
+	// Close the AppContainer token if it was created.
+	if h.appToken != 0 {
+		h.appToken.Close()
+		h.appToken = 0
+	}
+
 	// Clean up the AppContainer profile.
 	if h.profileName != "" {
 		_ = deleteAppContainerProfile(h.profileName)
 		h.profileName = ""
 	}
 
-	// Free the SID if allocated.
-	if h.sid != nil {
-		// SID memory is managed by the AppContainer API; no explicit free needed.
-		h.sid = nil
-	}
+	// Free the SID allocated by CreateAppContainerProfile (LocalAlloc-backed).
+	freeSID(h.sid)
+	h.sid = nil
 
 	h.status = StatusStopped
 	h.processStarted = false
@@ -260,8 +247,13 @@ func isAppContainerAvailable() bool {
 }
 
 // configureFilesystemAccess sets up filesystem isolation for the AppContainer.
-// It uses SetEntriesInAcl to grant the AppContainer SID read/write access to
-// the sandbox directory while restricting access to other paths.
+// It grants the AppContainer SID GENERIC_ALL access to the sandbox directory
+// (merged into the existing DACL) so container processes can work inside it
+// while everything else stays deny-by-default.
+//
+// This is fail-closed: any failure returns an error and the caller rolls the
+// AppContainer profile back, so a half-configured container is never left
+// behind.
 func (h *AppContainerHandle) configureFilesystemAccess() error {
 	if h.sandboxDir == "" {
 		return nil
@@ -272,36 +264,22 @@ func (h *AppContainerHandle) configureFilesystemAccess() error {
 		return fmt.Errorf("create sandbox directory: %w", err)
 	}
 
-	// In production, this would use SetEntriesInAclW from advapi32.dll to
-	// set ACL entries granting the AppContainer SID access to the sandbox
-	// directory. The ACL entry would look like:
-	//
-	//   EXPLICIT_ACCESS{
-	//     grfAccessPermissions: GENERIC_ALL,
-	//     grfAccessMode: GRANT_ACCESS,
-	//     grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-	//     Trustee{ TrusteeForm: TRUSTEE_IS_SID, ptstrName: sid }
-	//   }
-	//
-	// For now, we rely on the directory permissions set by MkdirAll and
-	// the AppContainer's inherent restrictions.
-
+	// Grant the AppContainer SID full access to the sandbox directory,
+	// preserving the pre-existing DACL entries.
+	if err := grantDirectoryAccess(h.sandboxDir, h.sid); err != nil {
+		return fmt.Errorf("grant sandbox directory access: %w", err)
+	}
 	return nil
 }
 
-// configureRegistryAccess restricts registry access for the AppContainer.
-// In production, this would create registry capabilities using
-// AddAppContainerRegistryCapability to restrict access to specific
-// registry hives (e.g., HKCU only).
+// configureRegistryAccess documents the registry isolation posture for v1.
+//
+// AppContainer processes are inherently denied access to the host registry
+// hives unless a capability-gated key is explicitly granted, so no explicit
+// API call is required for the deny-by-default baseline. A future iteration
+// may use AddAppContainerRegistryCapability to whitelist specific hives
+// (e.g. HKCU\Software\InferGlow); the current version intentionally ships
+// with the default full isolation.
 func (h *AppContainerHandle) configureRegistryAccess() error {
-	// AppContainer inherently has restricted registry access.
-	// The production implementation would use:
-	// 1. RegCreateKeyExW with SECURITY_CAPABILITIES to create a
-	//    capability-gated registry key.
-	// 2. SetEntriesInAclW to grant the AppContainer SID read access
-	//    to HKCU\Software\InferGlow.
-	//
-	// The AppContainer's default registry isolation ensures it cannot
-	// access the host's registry hive without explicit capabilities.
 	return nil
 }

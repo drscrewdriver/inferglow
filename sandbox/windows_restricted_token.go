@@ -23,16 +23,12 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
-	"unsafe"
 )
 
 // RestrictedTokenHandle implements Handle for restricted token process isolation.
@@ -80,12 +76,6 @@ func (h *RestrictedTokenHandle) Start(ctx context.Context) error {
 	return nil
 }
 
-// restrictedToken is the token created by Start for use in Execute.
-// It is a syscall.Token (uintptr underneath) to avoid import cycles.
-type restrictedTokenHandle struct {
-	token syscall.Token
-}
-
 // Execute runs a command inside the restricted token sandbox.
 // When a restricted token is available, it uses CreateProcessAsUser to
 // launch the process under the restricted identity.
@@ -97,8 +87,21 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 	h.mu.Lock()
 	running := h.status == StatusRunning
 	policy := h.policy
-	token := h.restrictedToken
+	// Duplicate the token under the lock so a concurrent Stop (which closes
+	// the original) cannot invalidate the handle while Execute is running.
+	var token syscall.Token
+	if running {
+		dup, err := h.duplicateTokenLocked()
+		if err != nil {
+			h.mu.Unlock()
+			return nil, err
+		}
+		token = dup
+	}
 	h.mu.Unlock()
+	if token != 0 {
+		defer token.Close()
+	}
 
 	if !running {
 		return nil, fmt.Errorf("%w: call Start first", ErrHandleNotRunning)
@@ -151,164 +154,39 @@ func (h *RestrictedTokenHandle) Execute(ctx context.Context, cmd *Command) (*Exe
 		return h.executeWithToken(execCtx, token, argv, cmd)
 	}
 
-	// Fallback: execute without token restriction (should not happen after Start).
-	return h.executeDirect(execCtx, argv, cmd)
+	// Fail closed: without the restricted token the process would run with
+	// the full caller identity, which is never acceptable for this handle.
+	return nil, fmt.Errorf("%w: restricted token not initialized (call Start first)", ErrHandleNotRunning)
 }
 
-// executeWithToken runs a command using CreateProcessAsUser with the restricted token.
+// duplicateTokenLocked returns a duplicated handle to the restricted token
+// that survives a concurrent Stop (which closes the original handle).
+// Callers must hold h.mu and must Close the returned handle.
+func (h *RestrictedTokenHandle) duplicateTokenLocked() (syscall.Token, error) {
+	if h.restrictedToken == 0 {
+		return 0, fmt.Errorf("%w: restricted token not initialized (call Start first)", ErrHandleNotRunning)
+	}
+	p, _ := syscall.GetCurrentProcess()
+	var dupHandle syscall.Handle
+	if err := syscall.DuplicateHandle(
+		syscall.Handle(p),
+		syscall.Handle(h.restrictedToken),
+		syscall.Handle(p),
+		&dupHandle,
+		0,  // dwDesiredAccess: ignored with DUPLICATE_SAME_ACCESS
+		false, // bInheritHandle
+		0x2, // dwOptions: DUPLICATE_SAME_ACCESS keeps the source handle's access rights
+	); err != nil {
+		return 0, fmt.Errorf("duplicate restricted token: %w", err)
+	}
+	return syscall.Token(dupHandle), nil
+}
+
+// executeWithToken runs a command using CreateProcessAsUser with the
+// restricted token, capturing stdout/stderr through anonymous pipes wired
+// via STARTF_USESTDHANDLES (see launchProcessWithIO).
 func (h *RestrictedTokenHandle) executeWithToken(ctx context.Context, token syscall.Token, argv []string, cmd *Command) (*ExecutionResult, error) {
-	loadKernel32Procs()
-
-	var name string
-	var args []string
-	if len(argv) > 1 && argv[0] == "cmd" {
-		name = argv[0]
-		args = argv[1:]
-	} else {
-		name = argv[0]
-		if len(argv) > 1 {
-			args = argv[1:]
-		}
-	}
-
-	// Resolve the executable path.
-	exePath, err := exec.LookPath(name)
-	if err != nil {
-		return nil, fmt.Errorf("lookpath %q: %w", name, err)
-	}
-
-	// Build the command line string.
-	cmdLine := exePath
-	for _, a := range args {
-		cmdLine += " " + syscall.EscapeArg(a)
-	}
-	cmdLinePtr, _ := syscall.UTF16PtrFromString(cmdLine)
-
-	// Set up working directory.
-	workDir := cmd.Workdir
-	if workDir == "" {
-		workDir = h.sandboxDir
-	}
-	var workDirPtr *uint16
-	if workDir != "" {
-		workDirPtr, _ = syscall.UTF16PtrFromString(workDir)
-	}
-
-	// Set up environment block.
-	var envPtr *uint16
-	if len(cmd.Env) > 0 {
-		envStr := strings.Join(cmd.Env, "\x00") + "\x00\x00"
-		envPtr, _ = syscall.UTF16PtrFromString(envStr)
-	}
-
-	// PROCESS_INFORMATION and STARTUPINFO structures.
-	var si syscall.StartupInfo
-	var pi syscall.ProcessInformation
-	si.Cb = uint32(unsafe.Sizeof(si))
-
-	// CreateProcessAsUserW call.
-	r1, _, callErr := procCreateProcessAsUser.Call(
-		uintptr(token),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(exePath))),
-		uintptr(unsafe.Pointer(cmdLinePtr)),
-		0, // lpProcessAttributes
-		0, // lpThreadAttributes
-		0, // bInheritHandles
-		0, // dwCreationFlags
-		uintptr(unsafe.Pointer(envPtr)),
-		uintptr(unsafe.Pointer(workDirPtr)),
-		uintptr(unsafe.Pointer(&si)),
-		uintptr(unsafe.Pointer(&pi)),
-	)
-	if r1 == 0 {
-		return nil, fmt.Errorf("CreateProcessAsUser: %w", callErr)
-	}
-
-	// Wait for the process to complete.
-	procHandle := pi.Process
-	defer syscall.CloseHandle(procHandle)
-	defer syscall.CloseHandle(pi.Thread)
-
-	// Use a goroutine to wait for process completion with context support.
-	done := make(chan error, 1)
-	go func() {
-		_, waitErr := syscall.WaitForSingleObject(procHandle, syscall.INFINITE)
-		done <- waitErr
-	}()
-
-	select {
-	case <-ctx.Done():
-		syscall.TerminateProcess(procHandle, 1)
-		return nil, ctx.Err()
-	case waitErr := <-done:
-		if waitErr != nil {
-			return nil, fmt.Errorf("WaitForSingleObject: %w", waitErr)
-		}
-	}
-
-	// Get exit code.
-	var exitCode uint32
-	syscall.GetExitCodeProcess(procHandle, &exitCode)
-
-	// Read stdout/stderr is not directly possible with CreateProcessAsUser
-	// without pipe setup. For now, return exit code only.
-	return &ExecutionResult{
-		ExitCode: int(exitCode),
-		Duration: 0, // Duration tracked by caller.
-	}, nil
-}
-
-// executeDirect runs a command using exec.CommandContext (fallback path).
-func (h *RestrictedTokenHandle) executeDirect(ctx context.Context, argv []string, cmd *Command) (*ExecutionResult, error) {
-	var name string
-	var args []string
-	if len(argv) > 1 && argv[0] == "cmd" {
-		name = argv[0]
-		args = argv[1:]
-	} else {
-		name = argv[0]
-		if len(argv) > 1 {
-			args = argv[1:]
-		}
-	}
-
-	cmdExec := exec.CommandContext(ctx, name, args...)
-	cmdExec.Stdin = cmd.Stdin
-	if cmd.Workdir != "" {
-		cmdExec.Dir = cmd.Workdir
-	} else if h.sandboxDir != "" {
-		cmdExec.Dir = h.sandboxDir
-	}
-	if cmd.Env != nil {
-		cmdExec.Env = cmd.Env
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmdExec.Stdout = &stdout
-	cmdExec.Stderr = &stderr
-
-	start := time.Now()
-	runErr := cmdExec.Run()
-	duration := time.Since(start)
-
-	result := &ExecutionResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		Duration: duration,
-	}
-
-	if cmdExec.ProcessState != nil {
-		result.ExitCode = cmdExec.ProcessState.ExitCode()
-	}
-
-	if runErr != nil {
-		if ctx.Err() != nil {
-			return result, fmt.Errorf("%w: %v", ctx.Err(), runErr)
-		}
-		return result, nil
-	}
-
-	return result, nil
+	return launchProcessWithIO(ctx, token, argv, cmd, h.sandboxDir)
 }
 
 // Stop terminates the running process and cleans up resources.

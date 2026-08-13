@@ -25,6 +25,7 @@ package sandbox
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -260,12 +261,18 @@ func TestAppContainerConfigValidation(t *testing.T) {
 	_ = err
 }
 
-// TestAppContainerFilesystemIsolation tests that sandbox_directory is respected.
+// TestAppContainerFilesystemIsolation verifies that a process running under
+// the AppContainer token can write inside the granted sandbox directory but
+// cannot write to an un-granted host directory (deny-by-default).
 func TestAppContainerFilesystemIsolation(t *testing.T) {
 	tmpDir := t.TempDir()
 	appContainerDir := tmpDir + "\\.sandbox"
+	hostDir := filepath.Join(tmpDir, "host-private")
 	if err := os.MkdirAll(appContainerDir, 0755); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
+		t.Fatalf("MkdirAll sandbox failed: %v", err)
+	}
+	if err := os.MkdirAll(hostDir, 0755); err != nil {
+		t.Fatalf("MkdirAll host failed: %v", err)
 	}
 
 	p := NewWindowsRuntimeProvider()
@@ -284,24 +291,34 @@ func TestAppContainerFilesystemIsolation(t *testing.T) {
 
 	ctx := context.Background()
 	if err := handle.Start(ctx); err != nil {
-		t.Fatalf("Start failed: %v", err)
+		t.Skipf("AppContainer unavailable: %v", err)
 	}
 	defer handle.Stop(ctx)
 
-	// Execute a command that writes to a file.
+	// 1. Writing inside the granted sandbox directory must succeed.
 	result, err := handle.Execute(ctx, &Command{
 		Argv:    []string{"cmd", "/c", "echo", "test", ">", "sandbox.txt"},
 		Workdir: appContainerDir,
 	})
 	if err != nil {
-		// Execution may fail in AppContainer due to filesystem restrictions.
-		// Verify this is expected behavior for AppContainer isolation.
-		t.Logf("Execute (expected to possibly fail in AppContainer): %v", err)
-		return
+		t.Fatalf("Execute in sandbox dir failed: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("sandbox write exit code = %d, want 0 (stderr=%q)", result.ExitCode, result.Stderr)
+	}
+	if _, statErr := os.Stat(filepath.Join(appContainerDir, "sandbox.txt")); statErr != nil {
+		t.Errorf("sandbox.txt not created in sandbox dir: %v", statErr)
 	}
 
-	if result != nil {
-		t.Logf("Execute result: exitCode=%d, stdout=%q", result.ExitCode, result.Stdout)
+	// 2. Writing to an un-granted host directory must fail: the container
+	// process runs under the AppContainer SID which has no ACE on hostDir.
+	result, err = handle.Execute(ctx, &Command{
+		Argv: []string{"cmd", "/c", "echo", "pwned", ">", filepath.Join(hostDir, "pwned.txt")},
+	})
+	if err == nil && result != nil && result.ExitCode == 0 {
+		if _, statErr := os.Stat(filepath.Join(hostDir, "pwned.txt")); statErr == nil {
+			t.Error("container process wrote to un-granted host directory: isolation broken")
+		}
 	}
 }
 

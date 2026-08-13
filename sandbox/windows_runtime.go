@@ -83,11 +83,23 @@ func (p *WindowsRuntimeProvider) InspectAvailability() (*AvailabilityResult, err
 
 // CreateHandle parses the configuration and returns the appropriate Handle
 // based on the backend specified in the config.
+//
+// The backend may be given as an int (WindowsBackend value) or as a string
+// ("restricted_token", "appcontainer", "windows_sandbox").
 func (p *WindowsRuntimeProvider) CreateHandle(cfg map[string]any, policy *ExecutionPolicy) (Handle, error) {
 	// Determine backend
 	backend := BackendRestrictedToken // default
 	if b, ok := cfg["backend"].(int); ok {
 		backend = WindowsBackend(b)
+	} else if s, ok := cfg["backend"].(string); ok {
+		switch s {
+		case "appcontainer":
+			backend = BackendAppContainer
+		case "windows_sandbox":
+			backend = BackendWindowsSandbox
+		default:
+			backend = BackendRestrictedToken
+		}
 	}
 
 	autoSelect, _ := cfg["auto_select"].(bool)
@@ -131,11 +143,14 @@ func (p *WindowsRuntimeProvider) CreateHandle(cfg map[string]any, policy *Execut
 	}
 }
 
-// selectStrongestAvailable returns the strongest available backend for auto-select.
-// Ordering: WindowsSandbox > AppContainer > RestrictedToken
+// selectStrongestAvailable returns the strongest available backend for
+// auto-select. Windows Sandbox is intentionally excluded: it requires an
+// enterprise edition, always opens a visible window (no headless startup),
+// and its host communication model is not fully supported. Ordering:
+// AppContainer > RestrictedToken.
 func (p *WindowsRuntimeProvider) selectStrongestAvailable() WindowsBackend {
-	// Check in strongest-first order
-	strongest := []WindowsBackend{BackendWindowsSandbox, BackendAppContainer, BackendRestrictedToken}
+	// Check in strongest-first order.
+	strongest := []WindowsBackend{BackendAppContainer, BackendRestrictedToken}
 
 	for _, b := range strongest {
 		for _, avail := range p.availableBackends {
@@ -145,7 +160,7 @@ func (p *WindowsRuntimeProvider) selectStrongestAvailable() WindowsBackend {
 		}
 	}
 
-	// Fallback to first available
+	// Fallback to first available.
 	if len(p.availableBackends) > 0 {
 		return p.availableBackends[0]
 	}
