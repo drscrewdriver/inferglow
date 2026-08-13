@@ -8,6 +8,16 @@ Go 语言实现的 AI Agent 基础设施框架，对标 [Agently](https://github
 
 > **一句话定位**：Go 生态里兼具**契约优先**（L1-L4 约束生成）与**高可靠工程**（SSE 流式、取消语义、并发安全、不可篡改审计）的 Agent 基础设施框架。
 
+## 文档导航
+
+| 文档 | 内容 |
+|---|---|
+| [构建与测试总览](docs/guides/build-and-test.md) | 全仓库（30 个 go.mod）make 目标、Windows 替代、已知注意事项 |
+| [GUI 使用与打包](docs/guides/gui.md) | `/gui` 使用、启动双模式、单二进制打包、SSE 契约、设置面板 |
+| [开发工作流](docs/guides/development-workflow.md) | TDD 规范（Red/Green/Refactor）、Go 代码约束 |
+| [工具目录](docs/guides/tool-catalog.md) | 内置工具/动作清单 |
+| [扩展指南](EXTENDING.md) | 如何扩展/接入新模块 |
+
 ## 为什么
 
 Go 生态缺乏一个对标 Agently 设计理念的框架：**契约优先、可单测编排、内置沙箱、明确的 Pause/Resume/Persist 能力**。Inferglow 提供一套可组合的基础设施模块，为下游引用 AI Agent 框架（inferglow）提供支撑（已经初步合并）。

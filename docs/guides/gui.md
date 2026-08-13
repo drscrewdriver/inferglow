@@ -1,5 +1,8 @@
 # InferGlow GUI 使用指南
 
+> 入口：仓库 README 顶部「文档导航」→ [GUI 使用与打包](../README.md#文档导航)。
+> 全仓库构建/测试方法见 [build-and-test.md](build-and-test.md)。
+
 InferGlow 的桌面 GUI 是一套 React 19 + Vite + Zustand + TypeScript 前端，构建产物
 内嵌进 server（`//go:embed webui`），与 REST API 同源交付：浏览器打开 `/gui` 即用。
 
