@@ -1,4 +1,4 @@
-.PHONY: build build-sandbox build-seatbelt-loader test test-sandbox test-all vet lint clean
+.PHONY: build build-sandbox build-seatbelt-loader test test-sandbox test-all vet lint lint-strict clean
 
 build:
 	go build ./...
@@ -33,6 +33,13 @@ vet:
 lint:
 	golangci-lint run ./...
 	find . -mindepth 2 -name go.mod -execdir golangci-lint run ./... \;
+
+# Strict lint only for the new strict code domains (cli/composer etc.), never
+# the whole repo, so a grow bloat count cannot turn the global step red.
+# Local execution requires a golangci-lint built with the cli module's Go
+# toolchain (cli/go.mod targets go1.25); see docs/requirements/strict-lint-scope.md.
+lint-strict:
+	cd cli && golangci-lint run -c .golangci-strict.yaml ./composer/... ./config/...
 
 clean:
 	go clean -testcache

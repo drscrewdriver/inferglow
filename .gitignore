@@ -1,5 +1,8 @@
 graphify-out/
 
+# Local dsh tooling runtime state
+.dsh/
+
 # Build artifacts
 bin/inferglow-cli
 cli/inferglow-cli

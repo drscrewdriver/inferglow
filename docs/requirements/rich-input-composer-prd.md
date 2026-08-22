@@ -7,6 +7,14 @@
 
 ## 0. TL;DR
 
+> **实现状态注记（2026-08-22）**：本 PRD 的 input 线 P0–P2 已随 `rich-input-capability-delivery` spec 在
+> `inferglow-github` 落地并全绿（见 `.trae/specs/rich-input-capability-delivery/tasks.md`）：
+> - **P0（M0–M4 状态机）已交付**：`cli/composer/rich_composer.go`（98.3% 覆盖率）+ `cli/tui_model.go` 接线（验收 1/2/3/4/8/9）。
+> - **P1（剪贴板）已交付**：`cli/clipboard.go` 文本/图片剪贴板 + `Ctrl+V/Y`、`Ctrl+C` 选区复制；图片经 **#2 引擎多模态**（`Agent.WithContentBlocks` + `SessionExtension.AddUserContentBlocks` + `PreparePrompt` 映射 `ContentBlocks`）真正送入模型；提交前 `SupportsVision` TUI 预检 + 模型层 `gateMultimodal` 兜底（验收 5/6/10）。
+> - **P2（rich/raw）已交付**：`Ctrl+R` + `renderTranscript` 富/纯文本分支（验收 7）。
+> - **后续阶段能力（backlog #1–#5）已全部实现**：ask_suggestion、/resume 真实切换、evidence 证据门、/vision 视觉桥与读图 agent（见 `docs/requirements/tui-capability-backlog.md`）。
+> - 遗留：`make lint-strict` 需 go1.25 兼容 golangci（本地工具链 go1.24，CI 可跑）。
+>
 > **v0.4 变更记录**（2026-08-22，需求族拆分）：非 input 线需求整体迁出至
 > [docs/requirements/](requirements/) 文件夹按需求族管理——媒体能力门控（原 §13.1 + §11.3 缺口 1）、
 > provider 配置存储（原 §13.2）、严格 lint 范围（原 §13.3 + §12.1）、TUI 能力 backlog
