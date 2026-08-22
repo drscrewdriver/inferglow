@@ -82,6 +82,24 @@ type Config struct {
 
 	// Backtrack controls same-group backtrack injection (A-9).
 	Backtrack BacktrackConfig `json:"backtrack"`
+
+	// RetainRatio is the fraction of the window kept at L0 during mechanical
+	// reorganization (retained tail, analogous to harness retainRatio).
+	// Default: 0.16. RetainTokens, when non-zero, wins over RetainRatio.
+	RetainRatio float64 `json:"retain_ratio"`
+	// RetainTokens is the absolute retained-tail budget in steps. Zero means
+	// fall back to RetainRatio.
+	RetainTokens int `json:"retain_tokens"`
+	// OverflowCapTokens forces mechanical reorganization to ignore the
+	// retained tail when total context tokens exceed this cap (analogous to
+	// harness overflow bypass). Zero disables the overflow behaviour.
+	OverflowCapTokens int `json:"overflow_cap_tokens"`
+	// MaxSummaryTokens caps the output of one summarization call during
+	// compression. Default: 8192.
+	MaxSummaryTokens int `json:"max_summary_tokens"`
+	// MechanicalPressureThreshold is the window-pressure ratio at which
+	// BuildContext triggers a cheap mechanical reorganization. Default: 0.8.
+	MechanicalPressureThreshold float64 `json:"mechanical_pressure_threshold"`
 }
 
 // RetrievalConfig holds three-way fusion retrieval settings (A-7). The zero
@@ -269,6 +287,9 @@ func DefaultConfig() Config {
 		Decay:              DefaultDecayConfig(),
 		Retrieval:          DefaultRetrievalConfig(),
 		Backtrack:          DefaultBacktrackConfig(),
+		RetainRatio:        0.16,
+		MaxSummaryTokens:   8192,
+		MechanicalPressureThreshold: 0.8,
 	}
 }
 

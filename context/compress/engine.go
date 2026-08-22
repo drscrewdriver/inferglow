@@ -30,6 +30,8 @@ package compress
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -138,8 +140,15 @@ func NewEngine(chain *CompressModelChain, store contextmgr.StepStoreLike, cfg co
 }
 
 // CompressStep compresses a single step to the target level (§6.4 8-step process).
-// L3 is derived from L2's first line (mask header).
+// L3 is derived from L2's first line (mask header). Each standalone call
+// starts its own compression transaction.
 func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) error {
+	return e.CompressStepInBatch(ctx, stepID, targetLevel, newCompactionID())
+}
+
+// CompressStepInBatch compresses a single step within an explicit compression
+// transaction; every L1/L2/L3 record written carries compactionID.
+func (e *Engine) CompressStepInBatch(ctx context.Context, stepID, targetLevel int, compactionID string) error {
 	// Step 1: Read current ref
 	ref, err := e.store.GetRef(stepID)
 	if err != nil {
@@ -180,6 +189,11 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 		compressed = MechanicalL3(stepID, step.ToolName, step.KeyParams, input)
 	}
 
+	// Enforce the summarization output budget (default 8192 tokens).
+	if e.cfg.MaxSummaryTokens > 0 {
+		compressed = capSummary(compressed, e.cfg.MaxSummaryTokens)
+	}
+
 	// Step 5: Write to store
 	tokenEst := len(compressed) / 4
 	switch targetLevel {
@@ -189,6 +203,7 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 			Content:          compressed,
 			TokenCount:       tokenEst,
 			CompressedAtStep: stepID,
+			CompactionID:     compactionID,
 		})
 	case 2:
 		// L2 stores mask header + facts
@@ -198,6 +213,7 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 			Facts:            facts,
 			TokenCount:       tokenEst,
 			CompressedAtStep: stepID,
+			CompactionID:     compactionID,
 		})
 	case 3:
 		// L3 is derived from L2: first line is the mask header
@@ -210,12 +226,14 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 			Facts:            facts,
 			TokenCount:       tokenEst,
 			CompressedAtStep: stepID,
+			CompactionID:     compactionID,
 		})
 		err = e.store.AppendL3(contextmgr.L3Record{
 			StepID:           stepID,
 			Mask:             mask,
 			TokenCount:       tokenEst,
 			CompressedAtStep: stepID,
+			CompactionID:     compactionID,
 		})
 	}
 	if err != nil {
@@ -225,6 +243,26 @@ func (e *Engine) CompressStep(ctx context.Context, stepID int, targetLevel int) 
 	// Step 6: Update ref level
 	ref.Level = targetLevel
 	return e.store.UpsertRef(*ref)
+}
+
+// capSummary truncates an oversized summarization output to the token budget
+// (4 bytes per token estimate), preserving the head and marking the cut.
+func capSummary(s string, maxTokens int) string {
+	limit := maxTokens * 4
+	if maxTokens <= 0 || len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "\n...[truncated]"
+}
+
+// newCompactionID returns a fresh, collision-resistant compression
+// transaction identity.
+func newCompactionID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("compaction-%d", time.Now().UnixNano())
+	}
+	return "compaction-" + hex.EncodeToString(b[:])
 }
 
 func (e *Engine) getContentAtLevel(stepID, level int) (string, error) {
@@ -256,15 +294,70 @@ func (e *Engine) getContentAtLevel(stepID, level int) (string, error) {
 	}
 }
 
+// pairingBalanced enforces tool-call/result pairing on a candidate set.
+//
+// Steps of Type "tool" are grouped by CallID; every group must be fully
+// inside or fully outside the batch. An orphan tool step (no matching pair
+// in the store) is skipped when selected. It returns the corrected candidate
+// set and the step IDs removed from the batch.
+func (e *Engine) pairingBalanced(ids []int, include map[int]bool) (map[int]bool, []int) {
+	groups := make(map[string][]int)
+	for _, id := range ids {
+		step, err := e.store.GetStep(id)
+		if err != nil || step.Type != "tool" || step.CallID == "" {
+			continue
+		}
+		groups[step.CallID] = append(groups[step.CallID], id)
+	}
+
+	var removed []int
+	for _, group := range groups {
+		if len(group) < 2 {
+			// Orphan call or result: no pair exists, skip if selected.
+			if include[group[0]] {
+				delete(include, group[0])
+				removed = append(removed, group[0])
+			}
+			continue
+		}
+		allIn := true
+		for _, id := range group {
+			if !include[id] {
+				allIn = false
+				break
+			}
+		}
+		if allIn {
+			continue
+		}
+		// Partial group: drop the whole group from the batch so the
+		// model never sees a compressed call with an uncompressed
+		// result (or vice versa).
+		for _, id := range group {
+			if include[id] {
+				delete(include, id)
+				removed = append(removed, id)
+			}
+		}
+	}
+	return include, removed
+}
+
 // BatchCompress runs the full 8-step batch compression process (§6.4).
 func (e *Engine) BatchCompress(ctx context.Context) (*contextmgr.CompressResult, error) {
-	result := &contextmgr.CompressResult{NewLevels: make(map[int]int)}
+	result := &contextmgr.CompressResult{
+		NewLevels:    make(map[int]int),
+		CompactionID: newCompactionID(),
+	}
 
 	ids, err := e.store.AllActiveStepIDs()
 	if err != nil {
 		return nil, err
 	}
 
+	// Stage 1: select candidates with the existing heuristics.
+	candidates := make(map[int]bool)
+	targets := make(map[int]int)
 	for _, id := range ids {
 		ref, err := e.store.GetRef(id)
 		if err != nil {
@@ -299,13 +392,32 @@ func (e *Engine) BatchCompress(ctx context.Context) (*contextmgr.CompressResult,
 			continue
 		}
 
-		// Step 4: Execute compression
-		if err := e.CompressStep(ctx, id, target); err != nil {
+		candidates[id] = true
+		targets[id] = target
+	}
+
+	// Stage 2: pairing guard on the selected set.
+	candidates, _ = e.pairingBalanced(ids, candidates)
+
+	// Stage 3: execute compression in ascending step order.
+	for _, id := range ids {
+		if !candidates[id] {
 			continue
 		}
-
+		if err := e.CompressStepInBatch(ctx, id, targets[id], result.CompactionID); err != nil {
+			continue
+		}
 		result.StepsCompressed++
-		result.NewLevels[id] = target
+		result.NewLevels[id] = targets[id]
+		result.ShadowedStepIDs = append(result.ShadowedStepIDs, id)
+	}
+
+	// Stage 4: record the shadowed step span.
+	if len(result.ShadowedStepIDs) > 0 {
+		result.ShadowedRange = contextmgr.ShadowRange{
+			StartStep: result.ShadowedStepIDs[0],
+			EndStep:   result.ShadowedStepIDs[len(result.ShadowedStepIDs)-1],
+		}
 	}
 
 	return result, nil

@@ -21,36 +21,123 @@
 package compress
 
 import (
+	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/inferglow/context"
 )
 
 // mockStepStore implements the minimal methods needed for tests.
-type mockStepStore struct{}
+type mockStepStore struct {
+	steps map[int]contextmgr.StepRecord
+	refs  map[int]contextmgr.RefRecord
+	l1    map[int]contextmgr.L1Record
+	l2    map[int]contextmgr.L2Record
+	l3    map[int]contextmgr.L3Record
+}
 
-func (m *mockStepStore) AppendStep(step contextmgr.StepRecord) error { return nil }
+func newMockStepStore() *mockStepStore {
+	return &mockStepStore{
+		steps: make(map[int]contextmgr.StepRecord),
+		refs:  make(map[int]contextmgr.RefRecord),
+		l1:    make(map[int]contextmgr.L1Record),
+		l2:    make(map[int]contextmgr.L2Record),
+		l3:    make(map[int]contextmgr.L3Record),
+	}
+}
+
+func (m *mockStepStore) addStep(step contextmgr.StepRecord) {
+	m.steps[step.StepID] = step
+	m.refs[step.StepID] = contextmgr.RefRecord{StepID: step.StepID}
+}
+
+func (m *mockStepStore) AppendStep(step contextmgr.StepRecord) error {
+	m.steps[step.StepID] = step
+	if _, ok := m.refs[step.StepID]; !ok {
+		m.refs[step.StepID] = contextmgr.RefRecord{StepID: step.StepID}
+	}
+	return nil
+}
 func (m *mockStepStore) GetStep(stepID int) (*contextmgr.StepRecord, error) {
-	return &contextmgr.StepRecord{}, nil
+	s, ok := m.steps[stepID]
+	if !ok {
+		return nil, fmt.Errorf("step %d not found", stepID)
+	}
+	return &s, nil
 }
-func (m *mockStepStore) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) { return nil, nil }
-func (m *mockStepStore) UpsertRef(ref contextmgr.RefRecord) error                 { return nil }
+func (m *mockStepStore) RangeSteps(from, to int) ([]contextmgr.StepRecord, error) {
+	var out []contextmgr.StepRecord
+	for id := from; id <= to; id++ {
+		if s, ok := m.steps[id]; ok {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+func (m *mockStepStore) UpsertRef(ref contextmgr.RefRecord) error {
+	m.refs[ref.StepID] = ref
+	return nil
+}
 func (m *mockStepStore) GetRef(stepID int) (*contextmgr.RefRecord, error) {
-	return &contextmgr.RefRecord{}, nil
+	r, ok := m.refs[stepID]
+	if !ok {
+		return nil, fmt.Errorf("ref %d not found", stepID)
+	}
+	return &r, nil
 }
-func (m *mockStepStore) AllActiveStepIDs() ([]int, error)               { return nil, nil }
-func (m *mockStepStore) RemoveRef(stepID int) error                     { return nil }
-func (m *mockStepStore) AppendL1(rec contextmgr.L1Record) error         { return nil }
-func (m *mockStepStore) GetL1(stepID int) (*contextmgr.L1Record, error) { return nil, nil }
-func (m *mockStepStore) AppendL2(rec contextmgr.L2Record) error         { return nil }
-func (m *mockStepStore) GetL2(stepID int) (*contextmgr.L2Record, error) { return nil, nil }
+func (m *mockStepStore) AllActiveStepIDs() ([]int, error) {
+	var ids []int
+	for id := range m.refs {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids, nil
+}
+func (m *mockStepStore) RemoveRef(stepID int) error {
+	delete(m.refs, stepID)
+	return nil
+}
+func (m *mockStepStore) AppendL1(rec contextmgr.L1Record) error {
+	m.l1[rec.StepID] = rec
+	return nil
+}
+func (m *mockStepStore) GetL1(stepID int) (*contextmgr.L1Record, error) {
+	r, ok := m.l1[stepID]
+	if !ok {
+		return nil, fmt.Errorf("l1 %d not found", stepID)
+	}
+	return &r, nil
+}
+func (m *mockStepStore) AppendL2(rec contextmgr.L2Record) error {
+	m.l2[rec.StepID] = rec
+	return nil
+}
+func (m *mockStepStore) GetL2(stepID int) (*contextmgr.L2Record, error) {
+	r, ok := m.l2[stepID]
+	if !ok {
+		return nil, fmt.Errorf("l2 %d not found", stepID)
+	}
+	return &r, nil
+}
 func (m *mockStepStore) HotFacts(minRefCount int, minStrength float64) ([]contextmgr.L2Record, error) {
 	return nil, nil
 }
-func (m *mockStepStore) AppendL3(rec contextmgr.L3Record) error                     { return nil }
-func (m *mockStepStore) GetL3(stepID int) (*contextmgr.L3Record, error)             { return nil, nil }
-func (m *mockStepStore) UpsertLongMem(mem contextmgr.LongMemRecord) error           { return nil }
-func (m *mockStepStore) GetLongMem(memID string) (*contextmgr.LongMemRecord, error) { return nil, nil }
+func (m *mockStepStore) AppendL3(rec contextmgr.L3Record) error {
+	m.l3[rec.StepID] = rec
+	return nil
+}
+func (m *mockStepStore) GetL3(stepID int) (*contextmgr.L3Record, error) {
+	r, ok := m.l3[stepID]
+	if !ok {
+		return nil, fmt.Errorf("l3 %d not found", stepID)
+	}
+	return &r, nil
+}
+func (m *mockStepStore) UpsertLongMem(mem contextmgr.LongMemRecord) error { return nil }
+func (m *mockStepStore) GetLongMem(memID string) (*contextmgr.LongMemRecord, error) {
+	return nil, fmt.Errorf("not found")
+}
 func (m *mockStepStore) SearchLongMem(query string, category string, limit int) ([]contextmgr.LongMemRecord, error) {
 	return nil, nil
 }

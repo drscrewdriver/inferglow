@@ -32,6 +32,9 @@ type StepRecord struct {
 	ToolName   string `json:"tool_name,omitempty"`  // for tool steps
 	KeyParams  string `json:"key_params,omitempty"` // summarized key params
 	CreatedAt  int64  `json:"created_at,omitempty"` // unix timestamp
+	// CallID pairs a tool-call step with its tool/result step (compression
+	// pairing guard). Empty for non-tool steps.
+	CallID string `json:"call_id,omitempty"`
 
 	// Causal tracking metadata (B1)
 	FilesRead     []string `json:"files_read,omitempty"`     // files read in this step
@@ -89,6 +92,7 @@ type L1Record struct {
 	Content          string `json:"content"`            // denoised/slimmed content
 	TokenCount       int    `json:"token_count"`        // compressed token count
 	CompressedAtStep int    `json:"compressed_at_step"` // step number when compression occurred
+	CompactionID     string `json:"compaction_id,omitempty"` // owning compression transaction
 }
 
 // L2Record is the fact extraction stored in {uuid}.l2.jsonl.
@@ -97,6 +101,7 @@ type L2Record struct {
 	Facts            []string `json:"facts"`              // extracted key facts
 	TokenCount       int      `json:"token_count"`        // compressed token count
 	CompressedAtStep int      `json:"compressed_at_step"` // step number when compression occurred
+	CompactionID     string   `json:"compaction_id,omitempty"` // owning compression transaction
 }
 
 // L3Record is the behavior mask stored in {uuid}.l3.jsonl.
@@ -105,6 +110,7 @@ type L3Record struct {
 	Mask             string `json:"mask"`               // one-line behavior mask
 	TokenCount       int    `json:"token_count"`        // compressed token count
 	CompressedAtStep int    `json:"compressed_at_step"` // step number when compression occurred
+	CompactionID     string `json:"compaction_id,omitempty"` // owning compression transaction
 }
 
 // LongMemRecord is a long-term memory entry promoted from L2 facts.
@@ -126,6 +132,10 @@ type RenderedBlock struct {
 	StepID  int    `json:"step_id"`
 	Level   int    `json:"level"`   // compression level used for rendering
 	Content string `json:"content"` // rendered text (with ⟨§N·type·Lx⟩ marker)
+	// SourceStepIDs lists the original step IDs this block represents
+	// (shadowing record for compressed blocks; normally the block's own
+	// StepID). Mirrors the shadowedSeqs concept of harness compaction.
+	SourceStepIDs []int `json:"source_step_ids,omitempty"`
 }
 
 // StepSessionLink maps a step_id to its position in Session.FullContext.
@@ -141,4 +151,11 @@ type CheckpointMeta struct {
 	AtStep       int    `json:"at_step"`     // current step at snapshot time
 	HeaderVer    string `json:"header_ver"`  // head_buffer version at snapshot time
 	CacheValid   bool   `json:"cache_valid"` // cache validity marker
+	CompactionID string `json:"compaction_id,omitempty"` // owning compaction transaction
+}
+
+// IsCheckpointSource reports whether this checkpoint belongs to the given
+// compaction transaction (backend-independent recognition).
+func (c CheckpointMeta) IsCheckpointSource(compactionID string) bool {
+	return c.IsCheckpoint && c.CompactionID != "" && c.CompactionID == compactionID
 }

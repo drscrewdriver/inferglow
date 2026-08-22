@@ -31,7 +31,12 @@ package contextmgr
 
 import (
 	"context"
+	"errors"
 )
+
+// ErrCompressionBusy is returned when a compression or reorganize operation
+// is already in flight for this manager (concurrent-call guard).
+var ErrCompressionBusy = errors.New("compression already in progress")
 
 // Mode represents the context management mode.
 type Mode string
@@ -108,6 +113,21 @@ type CompressResult struct {
 	TokensSaved int
 	// NewLevels maps step IDs to their new compression levels.
 	NewLevels map[int]int
+	// CompactionID is the stable identity of this compression transaction,
+	// shared by every L1/L2/L3 record written during the run.
+	CompactionID string
+	// ShadowedRange is the step-ID span [StartStep, EndStep] covered by
+	// this compaction (analogous to harness shadowedRange).
+	ShadowedRange ShadowRange
+	// ShadowedStepIDs lists every original step ID compressed by this run,
+	// in ascending order (analogous to harness shadowedSeqs).
+	ShadowedStepIDs []int
+}
+
+// ShadowRange is an inclusive step-ID span covered by one compaction.
+type ShadowRange struct {
+	StartStep int `json:"start_step"`
+	EndStep   int `json:"end_step"`
 }
 
 // SearchQuery holds parameters for context search.

@@ -22,7 +22,10 @@ package contextmgr
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -79,6 +82,21 @@ type HybridManager struct {
 	recencyIndex *retrieval.RecencyIndex
 	fusionMu     sync.Mutex // serializes reindex; guards fusionDirty
 	fusionDirty  bool
+
+	// --- compression lock (T2.3): one in-flight compression at a time ---
+	compactionMu  sync.Mutex
+	compactionRun *compactionRunInfo
+
+	// reorgEngine is the LLM compression engine used by Reorganize when the
+	// caller passes nil; attach via SetReorganizeEngine.
+	reorgEngine CompressEngine
+}
+
+// compactionRunInfo tracks one in-flight compression transaction.
+type compactionRunInfo struct {
+	ID        string
+	StartedAt time.Time
+	Owner     string // "trigger" | "reorganize" | ...
 }
 
 // ArchivedHead is a previous head buffer kept for audit/rollback.
@@ -111,6 +129,7 @@ func NewHybridManager(cfg Config, store StepStoreLike) (ContextManager, error) {
 	if cfg.Retrieval.EnableFusion {
 		h.enableFusionRetrieval(cfg.Retrieval)
 	}
+	h.checkOrphanCompactions()
 	return h, nil
 }
 
@@ -266,8 +285,23 @@ func (h *HybridManager) sumTokens(from, to int) int {
 	return total
 }
 
+// SetReorganizeEngine attaches the LLM compression engine used by Reorganize
+// when the caller passes a nil engine. Passing nil detaches the fallback.
+func (h *HybridManager) SetReorganizeEngine(e CompressEngine) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reorgEngine = e
+}
+
 // BuildContext assembles the 5-zone context window (§4.5).
 func (h *HybridManager) BuildContext(ctx context.Context, windowTokens int) ([]RenderedBlock, error) {
+	// T3.3: cheap mechanical reorganization as a pressure-triggered safety
+	// net before assembly (never blocks on an LLM).
+	if h.cfg.MechanicalPressureThreshold > 0 && h.windowPressure() > h.cfg.MechanicalPressureThreshold {
+		if _, err := h.MechanicalReorganize(ctx, false); err != nil {
+			log.Printf("contextmgr: BuildContext mechanical reorganize failed: %v", err)
+		}
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -407,13 +441,28 @@ func (h *HybridManager) renderStepContent(stepID, level int) (string, error) {
 	return renderFromStore(stepID, level, h.store)
 }
 
+// windowPressure estimates the current window pressure as the ratio of
+// total active tokens to the configured window (0.0-1.0+).
+func (h *HybridManager) windowPressure() float64 {
+	window := h.cfg.WindowTokens
+	if window <= 0 {
+		return 0
+	}
+	total := h.totalTokens()
+	if total <= 0 {
+		return 0
+	}
+	return float64(total) / float64(window)
+}
+
 // renderBlock creates a RenderedBlock with the ⟨§N·type·Lx⟩ marker (§4.7).
 func renderBlock(stepID, level int, content, stepType string) RenderedBlock {
 	marker := fmt.Sprintf("⟨§%d·%s·L%d⟩", stepID, stepType, level)
 	return RenderedBlock{
-		StepID:  stepID,
-		Level:   level,
-		Content: marker + " " + content,
+		StepID:        stepID,
+		Level:         level,
+		Content:       marker + " " + content,
+		SourceStepIDs: []int{stepID},
 	}
 }
 
@@ -546,8 +595,21 @@ func truncateRespectingMarker(content string, keep int) string {
 }
 
 // TriggerCompression performs batch compression (§6.4 8-step process).
+// It is guarded by a compression lock: a concurrent second call fails with
+// ErrCompressionBusy, and the run is bracketed by log-only compaction/start
+// and compaction/end audit markers for crash/orphan detection.
 func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpts) (*CompressResult, error) {
-	result := &CompressResult{NewLevels: make(map[int]int)}
+	if !h.tryAcquireCompactionLock("trigger") {
+		return nil, ErrCompressionBusy
+	}
+	defer h.releaseCompactionLock()
+	h.recordCompactionMarker("compaction/start")
+	defer h.recordCompactionMarker("compaction/end")
+
+	result := &CompressResult{
+		NewLevels:    make(map[int]int),
+		CompactionID: h.currentCompactionID(),
+	}
 
 	ids, err := h.store.AllActiveStepIDs()
 	if err != nil {
@@ -582,10 +644,92 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 			}
 			result.StepsCompressed++
 			result.NewLevels[id] = target
+			result.ShadowedStepIDs = append(result.ShadowedStepIDs, id)
+		}
+	}
+
+	if len(result.ShadowedStepIDs) > 0 {
+		result.ShadowedRange = ShadowRange{
+			StartStep: result.ShadowedStepIDs[0],
+			EndStep:   result.ShadowedStepIDs[len(result.ShadowedStepIDs)-1],
 		}
 	}
 
 	return result, nil
+}
+
+// --- compression lock helpers ---
+
+// tryAcquireCompactionLock takes the compression lock, creating a fresh
+// transaction identity. It returns false when a run is already in flight.
+func (h *HybridManager) tryAcquireCompactionLock(owner string) bool {
+	h.compactionMu.Lock()
+	defer h.compactionMu.Unlock()
+	if h.compactionRun != nil {
+		return false
+	}
+	h.compactionRun = &compactionRunInfo{
+		ID:        newCompactionID(),
+		StartedAt: time.Now(),
+		Owner:     owner,
+	}
+	return true
+}
+
+// releaseCompactionLock releases the compression lock.
+func (h *HybridManager) releaseCompactionLock() {
+	h.compactionMu.Lock()
+	defer h.compactionMu.Unlock()
+	h.compactionRun = nil
+}
+
+// currentCompactionID returns the in-flight transaction ID, or "" when idle.
+func (h *HybridManager) currentCompactionID() string {
+	h.compactionMu.Lock()
+	defer h.compactionMu.Unlock()
+	if h.compactionRun == nil {
+		return ""
+	}
+	return h.compactionRun.ID
+}
+
+// recordCompactionMarker appends a log-only compaction lifecycle marker to
+// stores that support it (JSONL); other backends are skipped silently.
+func (h *HybridManager) recordCompactionMarker(action string) {
+	ms, ok := h.store.(interface {
+		AppendCompactionMarker(action, compactionID string) error
+	})
+	if !ok {
+		return
+	}
+	_ = ms.AppendCompactionMarker(action, h.currentCompactionID())
+}
+
+// checkOrphanCompactions warns about compaction/start markers without a
+// matching compaction/end (crash-mid-compaction evidence) at startup.
+func (h *HybridManager) checkOrphanCompactions() {
+	os, ok := h.store.(interface{ OrphanCompactions() ([]string, error) })
+	if !ok {
+		return
+	}
+	orphans, err := os.OrphanCompactions()
+	if err != nil {
+		log.Printf("contextmgr: orphan compaction scan failed: %v", err)
+		return
+	}
+	if len(orphans) > 0 {
+		log.Printf("contextmgr: detected %d orphan compression lock(s): %v", len(orphans), orphans)
+	}
+}
+
+// newCompactionID returns a fresh, collision-resistant compression
+// transaction identity (contextmgr-local copy; compress has its own).
+func newCompactionID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("compaction-%d", time.Now().UnixNano())
+	}
+	return "compaction-" + hex.EncodeToString(b[:])
 }
 
 // Search performs RAG search across context history.

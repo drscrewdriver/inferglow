@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	contextmgr "github.com/inferglow/context"
@@ -835,6 +836,72 @@ func TestContextReorganizeTool_InvalidInput(t *testing.T) {
 	_, err := tool.Execute(context.Background(), json.RawMessage(`not json`))
 	if err == nil {
 		t.Error("expected error for invalid JSON input")
+	}
+}
+
+// engineCapturingProvider records the engine forwarded by the tool.
+type engineCapturingProvider struct {
+	mockReorgProvider
+	gotEngine contextmgr.CompressEngine
+}
+
+func (m *engineCapturingProvider) Reorganize(ctx context.Context, engine contextmgr.CompressEngine, focus string) (*contextmgr.ReorganizeResult, error) {
+	m.gotEngine = engine
+	return m.reorgRes, m.reorgErr
+}
+
+// stubEngine is a CompressEngine stub for tool tests.
+type stubEngine struct{}
+
+func (stubEngine) Call(ctx context.Context, prompt string) (string, error) {
+	return `{"q1_constitutional_append":[],"q2_new_head_summary":"","q3_step_decisions":[]}`, nil
+}
+
+func TestContextReorganizeTool_ExecutesWithInjectedEngine(t *testing.T) {
+	prov := &engineCapturingProvider{}
+	prov.reorgRes = &contextmgr.ReorganizeResult{StepsAdjusted: 1}
+	tool := NewContextReorganizeTool(prov, stubEngine{})
+
+	raw, err := tool.Execute(context.Background(), json.RawMessage(`{"focus":"x"}`))
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if prov.gotEngine == nil {
+		t.Error("injected engine must be forwarded to the provider")
+	}
+	if !strings.Contains(string(raw), "steps_adjusted") {
+		t.Errorf("expected steps_adjusted in output, got %s", raw)
+	}
+}
+
+// mechReorgProvider counts mechanical reorganize calls.
+type mechReorgProvider struct {
+	mockReorgProvider
+	mechCalls int
+	t         *testing.T
+}
+
+func (m *mechReorgProvider) MechanicalReorganize(ctx context.Context, aggressive bool) (*contextmgr.ReorganizeResult, error) {
+	m.mechCalls++
+	if !aggressive {
+		m.t.Errorf("expected aggressive=true for tool-routed mechanical reorganize")
+	}
+	return &contextmgr.ReorganizeResult{StepsAdjusted: 5}, nil
+}
+
+func TestContextReorganizeTool_AggressiveRoutesToMechanical(t *testing.T) {
+	prov := &mechReorgProvider{t: t}
+	tool := NewContextReorganizeTool(prov, stubEngine{})
+
+	raw, err := tool.Execute(context.Background(), json.RawMessage(`{"aggressive":true}`))
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if prov.mechCalls != 1 {
+		t.Errorf("mechanical reorganize calls = %d, want 1", prov.mechCalls)
+	}
+	if !strings.Contains(string(raw), "机械重组") {
+		t.Errorf("expected mechanical hint in output, got %s", raw)
 	}
 }
 

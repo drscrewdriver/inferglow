@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/inferglow/context"
 )
@@ -570,4 +571,44 @@ func (s *Store) AppendAudit(rec contextmgr.AuditRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.appendJSONL(s.path(".audit.jsonl"), rec)
+}
+
+// AppendCompactionMarker records a compression lock lifecycle marker
+// ("compaction/start" or "compaction/end") in the audit trail. Markers are
+// log-only: they never join rendered context.
+func (s *Store) AppendCompactionMarker(action, compactionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendJSONL(s.path(".audit.jsonl"), contextmgr.AuditRecord{
+		Timestamp: time.Now().Unix(),
+		Action:    action,
+		Detail:    compactionID,
+	})
+}
+
+// OrphanCompactions scans the audit trail for "compaction/start" markers
+// without a matching "compaction/end" (crash-mid-compaction evidence).
+func (s *Store) OrphanCompactions() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	err := s.loadJSONL(s.path(".audit.jsonl"), func(data []byte) error {
+		var rec contextmgr.AuditRecord
+		if err := json.Unmarshal(data, &rec); err != nil {
+			return err
+		}
+		switch rec.Action {
+		case "compaction/start":
+			ids = append(ids, rec.Detail)
+		case "compaction/end":
+			for i, id := range ids {
+				if id == rec.Detail {
+					ids = append(ids[:i], ids[i+1:]...)
+					break
+				}
+			}
+		}
+		return nil
+	})
+	return ids, err
 }

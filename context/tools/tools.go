@@ -137,6 +137,12 @@ type ReorganizeProvider interface {
 	Reorganize(ctx context.Context, engine contextmgr.CompressEngine, focus string) (*contextmgr.ReorganizeResult, error)
 }
 
+// MechanicalReorganizeProvider is implemented by managers that support the
+// LLM-free mechanical reorganization mode (aggressive fast reduction).
+type MechanicalReorganizeProvider interface {
+	MechanicalReorganize(ctx context.Context, aggressive bool) (*contextmgr.ReorganizeResult, error)
+}
+
 // estimatePressure estimates the current window pressure from manager stats.
 func estimatePressure(mgr contextmgr.ContextManager) float64 {
 	stats := mgr.Stats()
@@ -644,8 +650,19 @@ type ContextReorganizeInput struct {
 }
 
 // ContextReorganizeTool implements context_reorganize.
+//
+// The tool is safe to register without an engine: the manager falls back to
+// its attached engine (SetReorganizeEngine) and returns a clear error when
+// none is available instead of panicking.
 type ContextReorganizeTool struct {
-	mgr ReorganizeProvider
+	mgr    ReorganizeProvider
+	engine contextmgr.CompressEngine
+}
+
+// NewContextReorganizeTool builds the reorganize tool with an optional LLM
+// compression engine (may be nil when the manager owns one).
+func NewContextReorganizeTool(mgr ReorganizeProvider, engine contextmgr.CompressEngine) *ContextReorganizeTool {
+	return &ContextReorganizeTool{mgr: mgr, engine: engine}
 }
 
 func (t *ContextReorganizeTool) Name() string        { return "context_reorganize" }
@@ -660,10 +677,26 @@ func (t *ContextReorganizeTool) Execute(ctx context.Context, input json.RawMessa
 		return nil, fmt.Errorf("context_reorganize: invalid input: %w", err)
 	}
 
-	// Note: engine is nil here — in production, the tool should receive
-	// the compress engine via constructor injection. For now, return a
-	// placeholder that indicates the reorganize was requested.
-	result, err := t.mgr.Reorganize(ctx, nil, in.Focus)
+	// Aggressive mode routes to the cheap mechanical reorganizer so the
+	// model can force a fast reduction without an LLM round trip.
+	if in.Aggressive {
+		mr, ok := t.mgr.(MechanicalReorganizeProvider)
+		if !ok {
+			return nil, fmt.Errorf("context_reorganize: manager does not support aggressive mechanical reorganize")
+		}
+		result, err := mr.MechanicalReorganize(ctx, true)
+		if err != nil {
+			return nil, fmt.Errorf("context_reorganize: %w", err)
+		}
+		return json.Marshal(map[string]interface{}{
+			"constitutional_added": 0,
+			"head_rewritten":       false,
+			"steps_adjusted":       result.StepsAdjusted,
+			"hint":                 fmt.Sprintf("机械重组完成：step调整=%d", result.StepsAdjusted),
+		})
+	}
+
+	result, err := t.mgr.Reorganize(ctx, t.engine, in.Focus)
 	if err != nil {
 		return nil, fmt.Errorf("context_reorganize: %w", err)
 	}

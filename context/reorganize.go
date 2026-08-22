@@ -23,8 +23,10 @@ package contextmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,7 +64,19 @@ type CompressEngine interface {
 // Reorganize executes the three-in-one merged reorganization.
 // It makes a single LLM call that answers Q1 (constitutional append),
 // Q2 (head rewrite), and Q3 (step level decisions) simultaneously.
+//
+// A nil engine falls back to the manager's attached engine (see
+// SetReorganizeEngine); with neither available the call fails with a clear
+// error instead of panicking.
 func (h *HybridManager) Reorganize(ctx context.Context, engine CompressEngine, focus string) (*ReorganizeResult, error) {
+	if engine == nil {
+		h.mu.RLock()
+		engine = h.reorgEngine
+		h.mu.RUnlock()
+	}
+	if engine == nil {
+		return nil, errors.New("reorganize: no compression engine available (call SetReorganizeEngine or pass an engine)")
+	}
 	prompt := h.buildMergedReorganizePrompt(focus)
 
 	resp, err := engine.Call(ctx, prompt)
@@ -95,25 +109,125 @@ func (h *HybridManager) Reorganize(ctx context.Context, engine CompressEngine, f
 
 	// Apply Q3: step level decisions
 	if len(decision.StepDecisions) > 0 {
-		count := 0
-		for _, d := range decision.StepDecisions {
-			ref, err := h.store.GetRef(d.StepID)
-			if err != nil {
-				continue
-			}
-			if d.TargetLevel == -1 {
-				// Mark for discard (L4)
-				ref.Level = 4
-			} else if d.TargetLevel > ref.Level {
-				ref.Level = d.TargetLevel
-			}
-			_ = h.store.UpsertRef(*ref)
-			count++
-		}
-		result.StepsAdjusted = count
+		result.StepsAdjusted = h.applyStepDecisions(decision.StepDecisions)
 	}
 
 	return &result, nil
+}
+
+// applyStepDecisions applies Q3-style step level decisions to the store and
+// returns the number of steps whose level changed.
+func (h *HybridManager) applyStepDecisions(decisions []StepLevelDecision) int {
+	count := 0
+	for _, d := range decisions {
+		ref, err := h.store.GetRef(d.StepID)
+		if err != nil {
+			continue
+		}
+		if d.TargetLevel == -1 {
+			// Mark for discard (L4)
+			ref.Level = 4
+		} else if d.TargetLevel > ref.Level {
+			ref.Level = d.TargetLevel
+		}
+		_ = h.store.UpsertRef(*ref)
+		count++
+	}
+	return count
+}
+
+// MechanicalReorganize performs a cheap, LLM-free reorganization: Q3-style
+// step level decisions are derived mechanically from decay, size, and the
+// retained tail, without any model call. Q1/Q2 remain LLM-only.
+//
+// The retained tail (RetainRatio of active steps, or RetainTokens when set)
+// stays at L0 unless aggressive is true or total tokens exceed
+// OverflowCapTokens (overflow bypass).
+func (h *HybridManager) MechanicalReorganize(ctx context.Context, aggressive bool) (*ReorganizeResult, error) {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return nil, err
+	}
+
+	current := int(atomic.LoadInt32(&h.currentStep))
+	retainSteps := h.retainTailSteps()
+	overflow := h.cfg.OverflowCapTokens > 0 && h.totalTokens() > h.cfg.OverflowCapTokens
+	ignoreTail := aggressive || overflow
+
+	var decisions []StepLevelDecision
+	for _, id := range ids {
+		ref, err := h.store.GetRef(id)
+		if err != nil {
+			continue
+		}
+		step, err := h.store.GetStep(id)
+		if err != nil {
+			continue
+		}
+
+		maxLvl := MaxLevelForType(step.Type)
+		if ref.Level >= maxLvl || ref.LockL0 {
+			continue
+		}
+		// Retained tail: recent steps stay at L0 unless bypassed.
+		if !ignoreTail && id > current-retainSteps {
+			continue
+		}
+
+		rawDecay := step.TokenCount * len(ids) // simplified
+		decay := EffectiveDecay(*ref, rawDecay, false, false)
+		target := TargetLevel(decay, step.Type, h.cfg.Thresholds)
+		if target > maxLvl {
+			target = maxLvl
+		}
+		if target <= ref.Level {
+			continue
+		}
+		decisions = append(decisions, StepLevelDecision{
+			StepID:      id,
+			TargetLevel: target,
+			Reason:      "mechanical",
+		})
+	}
+
+	result := &ReorganizeResult{StepsAdjusted: h.applyStepDecisions(decisions)}
+	return result, nil
+}
+
+// retainTailSteps returns the retained-tail budget in steps: RetainTokens
+// when set, otherwise RetainRatio of the active step count (minimum 1).
+func (h *HybridManager) retainTailSteps() int {
+	if h.cfg.RetainTokens > 0 {
+		return h.cfg.RetainTokens
+	}
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return 0
+	}
+	ratio := h.cfg.RetainRatio
+	if ratio <= 0 {
+		ratio = 0.16
+	}
+	n := int(float64(len(ids)) * ratio)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// totalTokens sums the L0 token counts of all active steps.
+func (h *HybridManager) totalTokens() int {
+	ids, err := h.store.AllActiveStepIDs()
+	if err != nil {
+		return 0
+	}
+	total := 0
+	for _, id := range ids {
+		if step, err := h.store.GetStep(id); err == nil {
+			total += step.TokenCount
+		}
+	}
+	return total
 }
 
 // buildMergedReorganizePrompt constructs the merged three-question prompt.
