@@ -218,3 +218,173 @@ func TestIsPathAllowed(t *testing.T) {
 		}
 	}
 }
+
+func TestExecute_WithOffsetChunkedRead(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "data.txt")
+	body := "0123456789"
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+	a := NewFileReadAction(FileReadConfig{AllowedDirs: []string{dir}})
+
+	res, err := a.Executor.Execute(context.Background(), map[string]any{
+		"path":   target,
+		"offset": float64(5),
+		"limit":  float64(3),
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK=true, got %+v", res)
+	}
+	out, ok := res.Result.(FileReadResult)
+	if !ok {
+		t.Fatalf("Result not FileReadResult: %T", res.Result)
+	}
+	if out.Content != "567" {
+		t.Errorf("Content = %q, want %q", out.Content, "567")
+	}
+	if out.Offset != 5 {
+		t.Errorf("Offset = %d, want 5", out.Offset)
+	}
+	if out.Truncated {
+		t.Errorf("Truncated = true, want false (exact segment)")
+	}
+
+	// Segment shorter than limit at file end.
+	res, _ = a.Executor.Execute(context.Background(), map[string]any{
+		"path":   target,
+		"offset": float64(8),
+		"limit":  float64(10),
+	})
+	out, _ = res.Result.(FileReadResult)
+	if out.Content != "89" {
+		t.Errorf("tail Content = %q, want %q", out.Content, "89")
+	}
+	if !out.Truncated {
+		t.Errorf("expected Truncated=true at file end")
+	}
+
+	// Offset beyond end of file.
+	res, _ = a.Executor.Execute(context.Background(), map[string]any{
+		"path":   target,
+		"offset": float64(100),
+	})
+	if res.OK {
+		t.Errorf("expected OK=false for offset beyond EOF")
+	}
+}
+
+func TestExecute_OversizeReturnsDigestNotInline(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "big.log")
+	body := strings.Repeat("x", 1000) + "TAILMARK"
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+	a := NewFileReadAction(FileReadConfig{
+		AllowedDirs:    []string{dir},
+		MaxInlineBytes: 100,
+		HardCapBytes:   1 << 20,
+		SpillStore:     action.NewLocalSpillStore(t.TempDir()),
+	})
+	res, err := a.Executor.Execute(context.Background(), map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK=true, got %+v", res)
+	}
+	out, ok := res.Result.(FileReadResult)
+	if !ok {
+		t.Fatalf("Result not FileReadResult: %T", res.Result)
+	}
+	if out.Content != "" {
+		t.Errorf("Content should be empty for oversized file, got %d bytes", len(out.Content))
+	}
+	if out.Locator == "" || out.RetrievalHint == "" {
+		t.Errorf("expected locator + retrieval hint, got %+v", out)
+	}
+	if out.Digest == nil {
+		t.Fatalf("expected positional digest")
+	}
+	if !strings.Contains(out.Digest.Tail, "TAILMARK") {
+		t.Errorf("digest Tail missing tail content: %q", out.Digest.Tail)
+	}
+	if out.TotalBytes != int64(len(body)) {
+		t.Errorf("TotalBytes = %d, want %d", out.TotalBytes, len(body))
+	}
+	if res.Metadata == nil || res.Metadata["spilled"] != true {
+		t.Errorf("expected spilled metadata, got %+v", res.Metadata)
+	}
+	// Spill artifact must contain the full content.
+	full, err := os.ReadFile(out.Locator)
+	if err != nil {
+		t.Fatalf("read spill artifact: %v", err)
+	}
+	if string(full) != body {
+		t.Errorf("spill artifact content mismatch (%d vs %d bytes)", len(full), len(body))
+	}
+}
+
+func TestExecute_HardCapReturnsStatsOnly(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "huge.bin")
+	body := strings.Repeat("z", 5000)
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+	a := NewFileReadAction(FileReadConfig{
+		AllowedDirs:    []string{dir},
+		MaxInlineBytes: 100,
+		HardCapBytes:   1000,
+		SpillStore:     action.NewLocalSpillStore(t.TempDir()),
+	})
+	res, err := a.Executor.Execute(context.Background(), map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK=true, got %+v", res)
+	}
+	out, ok := res.Result.(FileReadResult)
+	if !ok {
+		t.Fatalf("Result not FileReadResult: %T", res.Result)
+	}
+	if out.Content != "" || out.Locator != "" {
+		t.Errorf("expected no inline content and no locator, got %+v", out)
+	}
+	if out.Digest == nil || out.Digest.TotalBytes != int64(len(body)) {
+		t.Errorf("expected stats digest with TotalBytes=%d, got %+v", len(body), out.Digest)
+	}
+	if res.Metadata == nil || res.Metadata["refused_inline"] != true {
+		t.Errorf("expected refused_inline metadata, got %+v", res.Metadata)
+	}
+}
+
+func TestExecute_OversizeWithoutSpillFallsBackToDigest(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "nospill.txt")
+	body := strings.Repeat("n", 500)
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+	a := NewFileReadAction(FileReadConfig{
+		AllowedDirs:    []string{dir},
+		MaxInlineBytes: 50,
+		HardCapBytes:   1 << 20,
+	})
+	res, err := a.Executor.Execute(context.Background(), map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK=true, got %+v", res)
+	}
+	out, _ := res.Result.(FileReadResult)
+	if out.Content != "" || out.Digest == nil {
+		t.Errorf("expected digest-only fallback, got %+v", out)
+	}
+}
