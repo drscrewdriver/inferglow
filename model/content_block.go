@@ -20,6 +20,11 @@
 
 package model
 
+import (
+	"errors"
+	"fmt"
+)
+
 // ContentType classifies the kind of content carried by a ContentBlock.
 type ContentType string
 
@@ -162,4 +167,43 @@ func ExtractText(blocks []ContentBlock) string {
 		}
 	}
 	return s
+}
+
+// ErrUnsupportedContent 表示当前模型不支持请求携带的某种媒体内容块
+//（如非 vision 模型收到图片输入）。
+var ErrUnsupportedContent = errors.New("model does not support requested content")
+
+// gateMultimodal 在模型层对媒体 ContentBlock 做**已知能力**门控。
+//
+// 背景：模型能力注册表（ModelCapabilityRegistry）只覆盖已知模型。若对未知模型
+// 一律保守拒绝，会误伤本地部署 / 聚合平台（OpenRouter、SiliconFlow）/ 企业网关
+// 上传的任意自定义模型名。因此策略为：
+//
+//   - 模型**已知**且明确缺少对应能力（如 Vision=false）→ 拒绝并给出可读错误；
+//   - 模型**未知**或能力标记为 true → 放行，交由 provider 序列化（未知模型交由
+//     上游自行裁决），避免在接入侧浪费 token 前就被错误拦截。
+//
+// 各 provider 的 GenerateRequestData 在拼接 ContentBlocks 之前调用此函数。
+func gateMultimodal(modelName string, blocks []ContentBlock) error {
+	cap, found := LookupModelCapability(modelName)
+	if !found {
+		return nil
+	}
+	for i := range blocks {
+		switch blocks[i].Type {
+		case ContentImage:
+			if !cap.Vision {
+				return fmt.Errorf("%w: %s does not accept image input (Vision=false)", ErrUnsupportedContent, modelName)
+			}
+		case ContentAudio:
+			if !cap.Audio {
+				return fmt.Errorf("%w: %s does not accept audio input (Audio=false)", ErrUnsupportedContent, modelName)
+			}
+		case ContentVideo:
+			if !cap.Video {
+				return fmt.Errorf("%w: %s does not accept video input (Video=false)", ErrUnsupportedContent, modelName)
+			}
+		}
+	}
+	return nil
 }

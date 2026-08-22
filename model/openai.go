@@ -182,6 +182,9 @@ func (p *OpenAICompatibleProvider) GenerateRequestData(ctx context.Context, req 
 	}
 	// ContentBlocks 多模态处理：当存在图片/音频/视频等内容时，构建多模态消息
 	if len(req.ContentBlocks) > 0 {
+		if err := gateMultimodal(model, req.ContentBlocks); err != nil {
+			return nil, err
+		}
 		userMsg.ContentBlocks = append(userMsg.ContentBlocks, req.ContentBlocks...)
 	}
 	if userMsg.Content != "" || len(userMsg.ContentBlocks) > 0 {
