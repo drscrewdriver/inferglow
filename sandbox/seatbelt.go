@@ -27,23 +27,85 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
-// SeatbeltProvider provides sandbox handles using macOS Seatbelt (sandbox-exec).
+// seatbeltLoaderEnv is the environment variable that overrides the
+// seatbelt-loader binary path resolution.
+const seatbeltLoaderEnv = "INFERGLOW_SEATBELT_LOADER"
+
+// SeatbeltProvider provides sandbox handles using macOS Seatbelt.
+//
+// The preferred backend is the built-in seatbelt-loader binary, which calls
+// the private libsandbox API (sandbox_init) directly and no longer depends on
+// the deprecated sandbox-exec CLI. If the loader is missing or its --self-test
+// fails, the provider falls back to sandbox-exec when the CLI is still present
+// on the system; if neither is usable the provider is unavailable (fail-closed).
 type SeatbeltProvider struct {
-	sandboxExecPath string
+	loaderPath      string // resolved seatbelt-loader binary (preferred)
+	sandboxExecPath string // fallback sandbox-exec CLI (deprecated but may exist)
 	available       bool
 }
 
-// NewSeatbeltProvider creates a new SeatbeltProvider after verifying sandbox-exec is available.
+// NewSeatbeltProvider creates a new SeatbeltProvider.
+//
+// Detection order:
+//  1. resolve the seatbelt-loader binary (build output dir → PATH → env var)
+//     and verify it with `--self-test`;
+//  2. fall back to the sandbox-exec CLI if the loader is unusable;
+//  3. neither → available=false (fail-closed, no unconstrained passthrough).
 func NewSeatbeltProvider() *SeatbeltProvider {
-	path, err := exec.LookPath("sandbox-exec")
-	return &SeatbeltProvider{
-		sandboxExecPath: path,
-		available:       err == nil,
+	p := &SeatbeltProvider{}
+
+	if loader := resolveLoaderPath(); loader != "" && loaderSelfTest(loader) {
+		p.loaderPath = loader
+		p.available = true
+		return p
 	}
+
+	if path, err := exec.LookPath("sandbox-exec"); err == nil {
+		p.sandboxExecPath = path
+		p.available = true
+	}
+	return p
+}
+
+// resolveLoaderPath resolves the seatbelt-loader binary in order:
+// build output dir (next to the running executable) → PATH → env var.
+func resolveLoaderPath() string {
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for _, cand := range []string{
+			filepath.Join(dir, "bin", "seatbelt-loader"),
+			filepath.Join(dir, "seatbelt-loader"),
+		} {
+			if isExecutableFile(cand) {
+				return cand
+			}
+		}
+	}
+	if path, err := exec.LookPath("seatbelt-loader"); err == nil {
+		return path
+	}
+	return os.Getenv(seatbeltLoaderEnv)
+}
+
+// isExecutableFile reports whether path exists and is executable.
+func isExecutableFile(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		return false
+	}
+	return fi.Mode()&0111 != 0
+}
+
+// loaderSelfTest verifies that the loader binary can apply an empty profile.
+func loaderSelfTest(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, path, "--self-test").Run() == nil
 }
 
 // Name returns the provider name.
@@ -57,8 +119,16 @@ func (p *SeatbeltProvider) InspectAvailability() (*AvailabilityResult, error) {
 	return &AvailabilityResult{
 		Available:  p.available,
 		Platform:   "darwin",
-		BinaryPath: p.sandboxExecPath,
+		BinaryPath: p.binaryPath(),
 	}, nil
+}
+
+// binaryPath returns the backend binary actually used for execution.
+func (p *SeatbeltProvider) binaryPath() string {
+	if p.loaderPath != "" {
+		return p.loaderPath
+	}
+	return p.sandboxExecPath
 }
 
 // CreateHandle creates a new SeatbeltHandle from the given config and policy.
@@ -71,25 +141,31 @@ func (p *SeatbeltProvider) CreateHandle(cfg map[string]any, policy *ExecutionPol
 	profile := buildSBPLProfile(seCfg, policy)
 
 	return &SeatbeltHandle{
-		config:  seCfg,
-		policy:  policy,
-		status:  StatusCreated,
-		profile: profile,
+		config:          seCfg,
+		policy:          policy,
+		status:          StatusCreated,
+		profile:         profile,
+		loaderPath:      p.loaderPath,
+		sandboxExecPath: p.sandboxExecPath,
 	}, nil
 }
 
 var _ Provider = (*SeatbeltProvider)(nil)
 
-// SeatbeltHandle manages a sandbox-exec process lifecycle.
+// SeatbeltHandle manages a sandboxed process lifecycle. The sandbox is
+// applied either through the built-in seatbelt-loader binary (preferred) or
+// through the deprecated sandbox-exec CLI as a fallback.
 type SeatbeltHandle struct {
-	config     SeatbeltConfig
-	policy     *ExecutionPolicy
-	profile    string
-	status     HandleStatus
-	pid        int
-	proc       *os.Process
-	mu         sync.Mutex
-	policyFile string
+	config          SeatbeltConfig
+	policy          *ExecutionPolicy
+	profile         string
+	status          HandleStatus
+	pid             int
+	proc            *os.Process
+	mu              sync.Mutex
+	policyFile      string
+	loaderPath      string
+	sandboxExecPath string
 }
 
 // Start generates the SBPL policy file and prepares the sandbox.
@@ -116,7 +192,10 @@ func (h *SeatbeltHandle) Start(ctx context.Context) error {
 	return nil
 }
 
-// Execute runs a command inside the sandbox using sandbox-exec.
+// Execute runs a command inside the sandbox using the seatbelt backend.
+// The backend binary is the built-in seatbelt-loader when available, falling
+// back to the deprecated sandbox-exec CLI otherwise; both honor the same
+// policy file and command semantics.
 func (h *SeatbeltHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionResult, error) {
 	h.mu.Lock()
 	if h.status != StatusRunning {
@@ -130,8 +209,14 @@ func (h *SeatbeltHandle) Execute(ctx context.Context, cmd *Command) (*ExecutionR
 		return nil, fmt.Errorf("seatbelt handle: policy file not set")
 	}
 
-	// Build the sandbox-exec command
-	args := []string{"-f", policyFile}
+	// Build the backend command: seatbelt-loader <policy-file> <cmd> <args...>
+	// or, as a fallback, sandbox-exec -f <policy-file> <cmd> <args...>.
+	var args []string
+	if h.loaderPath != "" {
+		args = []string{h.loaderPath, policyFile}
+	} else {
+		args = []string{h.sandboxExecPath, "-f", policyFile}
+	}
 	if cmd != nil {
 		args = append(args, cmd.Argv...)
 	} else {

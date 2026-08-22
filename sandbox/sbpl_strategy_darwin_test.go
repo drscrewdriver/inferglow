@@ -246,7 +246,8 @@ func TestRealPathReturnsEmptyForNonexistent(t *testing.T) {
 }
 
 func TestWriteSBPLProfileCreatesValidFile(t *testing.T) {
-	profile := buildSBPLProfile(SeatbeltConfig{}, &DefaultPolicy())
+	pol := DefaultPolicy()
+	profile := buildSBPLProfile(SeatbeltConfig{}, &pol)
 	path, cleanup, err := writeSBPLProfile(profile)
 	if err != nil {
 		t.Fatalf("writeSBPLProfile failed: %v", err)

@@ -1,4 +1,4 @@
-﻿# sandbox - 沙箱执行框架
+# sandbox - 沙箱执行框架
 
 **模块路径**: `github.com/inferglow/sandbox`
 
@@ -132,7 +132,8 @@ type FilesystemPolicy struct {
 | gvisor.go | GVisorProvider | gVisor 用户态内核沙箱 |
 | local_sandbox.go | LocalSandboxProvider | 本地进程级沙箱（自动选择平台最优后端） |
 | trusted_local.go | TrustedLocalProvider | 可信本地执行（无隔离） |
-| seatbelt.go | SeatbeltProvider | macOS Seatbelt 沙箱 |
+| seatbelt.go | SeatbeltProvider | macOS Seatbelt 沙箱（内置 loader 二进制直调 libsandbox 私有 API，不再依赖 sandbox-exec CLI；loader 不可用时回退 sandbox-exec） |
+| seatbelt_loader/ | seatbelt-loader | 独立 loader 二进制：sandbox_init → execvp，参数 `<profile-file> <cmd> <args...>`，`--self-test` 供探测；退出码 125 表示 loader 失败 |
 | windows_runtime.go | WindowsRuntimeProvider | Windows 三后端：RestrictedToken（进程级）/ AppContainer（应用级，默认强隔离）/ WindowsSandbox（VM 级，需企业版且无法无头运行，默认不选） |
 
 ## Manager — 管理器

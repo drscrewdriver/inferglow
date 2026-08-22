@@ -162,8 +162,10 @@ func TestSeatbeltHandleCancel(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
 
-	if err := h.Cancel(ctx2); err != nil {
-		t.Fatalf("Cancel failed: %v", err)
+	if sh, ok := h.(interface{ Cancel(context.Context) error }); ok {
+		if err := sh.Cancel(ctx2); err != nil {
+			t.Fatalf("Cancel failed: %v", err)
+		}
 	}
 }
 

@@ -4,3 +4,5 @@ graphify-out/
 bin/inferglow-cli
 cli/inferglow-cli
 server/inferglow-server.exe
+sandbox/seatbelt_loader.exe
+bin/seatbelt-loader
