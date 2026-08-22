@@ -20,7 +20,37 @@
 
 package agent
 
-import "context"
+import (
+	"context"
+
+	"github.com/inferglow/action"
+)
+
+// ToolCallDecision 是 PreToolCall 钩子返回的干预决策。
+// 零值（或返回 nil）表示放行，行为与未安装钩子时完全一致（向后兼容硬约束）。
+type ToolCallDecision struct {
+	// Block 为 true 时阻断该次工具调用：调用不会进入执行器，
+	// 而是产出与 approval 拦截同形的 blocked 结果（模型可读）。
+	Block bool
+	// BlockReason 是阻断原因，写入 blocked 结果的 Error 字段，
+	// 随工具结果进入下一轮模型输入。Block 为 true 且原因为空时
+	// 使用默认文案。
+	BlockReason string
+	// RewriteParams 非空时替换该次调用的原始参数，执行器只会看到
+	// 改写后的参数（原始参数会记入审计，若审计钩子启用）。
+	RewriteParams map[string]any
+	// AppendContext 非空时作为附加上下文拼接到该次调用的工具结果
+	// 内容，随结果进入下一轮模型输入。
+	AppendContext string
+}
+
+// ToolCallFeedback 是 PostToolCall 钩子返回的反馈。
+// 零值（或返回 nil）表示不干预。
+type ToolCallFeedback struct {
+	// AppendContext 非空时作为附加上下文拼接到该次调用的工具结果
+	// 内容，随结果进入下一轮模型输入。
+	AppendContext string
+}
 
 // AgentCallbacks provides lifecycle hooks for observing Agent execution.
 // All fields are optional; nil fields are silently skipped (zero overhead).
@@ -50,6 +80,14 @@ type AgentCallbacks struct {
 	OnApprovalRequired func(ctx context.Context, toolName, recordID string)
 	// OnCompression is called when context compression occurs.
 	OnCompression func(ctx context.Context, stepsCompressed int)
+	// PreToolCall 在每个工具调用派发给执行器前调用，可返回干预决策：
+	// 阻断（Block）、改写参数（RewriteParams）、附加上下文（AppendContext）。
+	// 返回 nil 或零值决策 = 放行，行为与未安装钩子时完全一致。
+	PreToolCall func(ctx context.Context, toolName string, params map[string]any) *ToolCallDecision
+	// PostToolCall 在每个工具调用完成后（结果进入 session 前）调用，
+	// 可返回附加上下文（AppendContext）拼接进工具结果，供下一轮
+	// LLM 调用读取。返回 nil 或零值反馈 = 不干预。
+	PostToolCall func(ctx context.Context, toolName string, result *action.ActionResult) *ToolCallFeedback
 }
 
 // WithCallbacks installs lifecycle callbacks for this Run call.
@@ -129,4 +167,20 @@ func fireOnCompression(cb *AgentCallbacks, ctx context.Context, stepsCompressed 
 	if cb != nil && cb.OnCompression != nil {
 		cb.OnCompression(ctx, stepsCompressed)
 	}
+}
+
+// firePreToolCall 调用 PreToolCall 钩子；nil 回调或 nil 字段时返回 nil（放行）。
+func firePreToolCall(cb *AgentCallbacks, ctx context.Context, toolName string, params map[string]any) *ToolCallDecision {
+	if cb != nil && cb.PreToolCall != nil {
+		return cb.PreToolCall(ctx, toolName, params)
+	}
+	return nil
+}
+
+// firePostToolCall 调用 PostToolCall 钩子；nil 回调或 nil 字段时返回 nil（不干预）。
+func firePostToolCall(cb *AgentCallbacks, ctx context.Context, toolName string, result *action.ActionResult) *ToolCallFeedback {
+	if cb != nil && cb.PostToolCall != nil {
+		return cb.PostToolCall(ctx, toolName, result)
+	}
+	return nil
 }

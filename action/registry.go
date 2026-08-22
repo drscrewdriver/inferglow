@@ -22,6 +22,14 @@ package action
 
 import "sort"
 
+// SetSpiller attaches an optional post-execute spill policy to the registry.
+// A nil spiller detaches any previous policy.
+func (r *ActionRegistry) SetSpiller(sp OutputSpiller) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spiller = sp
+}
+
 // Unregister removes a registered Action by name.
 // Returns true if the action was found and removed, false otherwise.
 func (r *ActionRegistry) Unregister(name string) bool {

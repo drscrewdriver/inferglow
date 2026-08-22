@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -197,6 +198,11 @@ type Session struct {
 	// PromptVersion 记录当前使用的 prompt template 版本。
 	// 用于回放测试（F3）时将 golden session 与 prompt 版本关联。
 	PromptVersion string
+
+	// ephemeral 标记会话为进程内存态（R2）：不产生任何持久化文件。
+	// 通过 NewEphemeralSession 构造；为 true 时 SaveJSON/SaveYAML
+	// 成为 no-op（即使上层误配了持久化路径也不会落盘）。
+	ephemeral bool
 }
 
 // NewSession creates a Session with the given id and maximum context length.
@@ -210,6 +216,130 @@ func NewSession(id string, maxLength int) *Session {
 		AutoResize:     false,
 		resizeHandlers: make(map[string]ResizeHandler),
 	}
+}
+
+// forkSeq 是进程内单调递增的 fork 序号发生器，与纳秒时间戳组合，
+// 保证并发 Fork 与多次 Fork 生成的新 ID 互不冲突。
+var forkSeq atomic.Uint64
+
+// newForkID 基于原会话 ID 生成新的 fork 会话 ID。
+func newForkID(origID string) string {
+	if origID == "" {
+		origID = "session"
+	}
+	return fmt.Sprintf("%s-fork-%d-%d", origID, time.Now().UnixNano(), forkSeq.Add(1))
+}
+
+// Fork 深拷贝当前会话状态并生成新 ID，返回 fork 出的新会话；原会话不受影响。
+//
+// 深拷贝范围：
+//   - FullContext / ContextWindow：逐条复制消息；Content 为 []ContentBlock 时
+//     连块切片与块内 Meta 一并复制；
+//   - 每条消息的 Meta 与 Memo：独立 map 副本（改 B 不影响 A）；
+//   - MaxLength / AutoResize / PromptVersion：值复制；
+//   - resizeHandlers / analysisHandlers / defaultResizeName：注册表独立副本
+//     （handler 函数本身按引用共享，函数无会话态）；
+//   - securityHook / masker：按引用共享（接口实现要求并发安全、无会话态）；
+//   - ephemeral 标记随原会话继承（内存态会话 fork 出的仍是内存态）。
+//
+// 持久化说明：Session 本身不持有持久化句柄——JSON 落盘由调用方显式调用
+// SaveJSON(path) 指定路径，JSONL usage 记录由 UsageRecorder（独立于 Session
+// 构造）挂接。因此 Fork 采用与 NewSession 构造一致的最小方案：fork 出的
+// 会话不自动注册任何持久化 sink，需要落盘时由调用方显式调用 SaveJSON。
+func (s *Session) Fork() *Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	fork := &Session{
+		ID:                newForkID(s.ID),
+		FullContext:       deepCopyMessages(s.FullContext),
+		ContextWindow:     deepCopyMessages(s.ContextWindow),
+		Memo:              deepCopyMetaMap(s.Memo),
+		MaxLength:         s.MaxLength,
+		AutoResize:        s.AutoResize,
+		PromptVersion:     s.PromptVersion,
+		resizeHandlers:    make(map[string]ResizeHandler, len(s.resizeHandlers)),
+		analysisHandlers:  append([]AnalysisHandler(nil), s.analysisHandlers...),
+		defaultResizeName: s.defaultResizeName,
+		securityHook:      s.securityHook,
+		masker:            s.masker,
+		ephemeral:         s.ephemeral,
+	}
+	for name, handler := range s.resizeHandlers {
+		fork.resizeHandlers[name] = handler
+	}
+	return fork
+}
+
+// NewEphemeralSession 创建一个 ephemeral（进程内存态）会话（R2）。
+// 签名与 NewSession 完全对齐，差异仅在于：
+//   - 会话被标记为 ephemeral（可通过 IsEphemeral 查询）；
+//   - SaveJSON / SaveYAML 成为 no-op——即使上层误挂了持久化路径
+//     （如 SessionExtension 的 persistPath），也不会产生任何
+//     JSON/JSONL/YAML 持久化文件；
+//   - 上层组件（如 UsageRecorder 的 usage.jsonl 落盘）应通过
+//     IsEphemeral() 识别并跳过对 ephemeral 会话的持久化。
+//
+// 会话状态全程留在进程内存中，进程退出即消失。
+func NewEphemeralSession(id string, maxLength int) *Session {
+	s := NewSession(id, maxLength)
+	s.ephemeral = true
+	return s
+}
+
+// IsEphemeral 报告会话是否为 ephemeral（进程内存态、不落盘）。
+func (s *Session) IsEphemeral() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ephemeral
+}
+
+// deepCopyMessages 深拷贝消息切片：逐条复制消息结构，Content 为
+// []ContentBlock 时连块切片与块内 Meta 一并复制，确保修改副本
+// 不会波及原会话。
+func deepCopyMessages(msgs []ChatMessage) []ChatMessage {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]ChatMessage, len(msgs))
+	for i, m := range msgs {
+		cm := m
+		cm.Content = deepCopyContent(m.Content)
+		cm.Meta = deepCopyMetaMap(m.Meta)
+		out[i] = cm
+	}
+	return out
+}
+
+// deepCopyContent 深拷贝消息 Content：仅处理 []ContentBlock 复合类型；
+// string 等不可变标量直接复用原值。
+func deepCopyContent(c any) any {
+	blocks, ok := c.([]ContentBlock)
+	if !ok {
+		return c
+	}
+	out := make([]ContentBlock, len(blocks))
+	for i, b := range blocks {
+		cb := b
+		cb.Meta = deepCopyMetaMap(b.Meta)
+		out[i] = cb
+	}
+	return out
+}
+
+// deepCopyMetaMap 复制 map[string]any：返回新 map，键集合独立。
+// 值通常为 string/int 等标量或调用方自有结构（如 tool_calls），
+// 按键级独立已满足 fork 的隔离需求；对任意 any 值做通用深拷贝
+// 既不可行也无必要。
+func deepCopyMetaMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // RegisterResizeHandler 注册一个命名 resize 策略。

@@ -52,11 +52,17 @@ type InputResponse struct {
 	Error error
 }
 
-// InputQueue is a bounded FIFO queue for user inputs submitted while the
-// agent is busy. It is safe for concurrent use.
+// InputQueue is a bounded priority queue for user inputs submitted while
+// the agent is busy. It is safe for concurrent use.
+//
+// Requests are bucketed by PreemptMode into three priority buckets
+// (later/queue is lowest, now/force is highest); Dequeue always returns
+// the highest-priority pending request first, preserving FIFO order
+// within each bucket.
 type InputQueue struct {
-	mu       sync.Mutex
-	pending  []InputRequest
+	mu sync.Mutex
+	// buckets[0]=queue (later), buckets[1]=safe_point (next), buckets[2]=force (now).
+	buckets  [3][]InputRequest
 	capacity int
 	// notify is a cap=1 channel used to wake consumers when a new request
 	// is enqueued. Non-blocking send on Enqueue; consumers select on WaitCh().
@@ -70,10 +76,33 @@ func NewInputQueue(capacity int) *InputQueue {
 		capacity = 8
 	}
 	return &InputQueue{
-		pending:  make([]InputRequest, 0, capacity),
 		capacity: capacity,
 		notify:   make(chan struct{}, 1),
 	}
+}
+
+// bucketFor maps a PreemptMode to its priority bucket index: queue
+// (later) is lowest, force (now) is highest. Unknown modes fall back to
+// the queue bucket so callers never lose inputs.
+func bucketFor(mode PreemptMode) int {
+	switch mode {
+	case PreemptForce:
+		return 2
+	case PreemptSafePoint:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// lenLocked returns the total number of pending requests across all
+// buckets. Callers must hold q.mu.
+func (q *InputQueue) lenLocked() int {
+	n := 0
+	for b := 0; b < 3; b++ {
+		n += len(q.buckets[b])
+	}
+	return n
 }
 
 // Enqueue adds a request to the queue. Returns ErrQueueFull when the queue
@@ -89,10 +118,11 @@ func (q *InputQueue) Enqueue(req InputRequest) error {
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.pending) >= q.capacity {
+	if q.lenLocked() >= q.capacity {
 		return ErrQueueFull
 	}
-	q.pending = append(q.pending, req)
+	b := bucketFor(req.Mode)
+	q.buckets[b] = append(q.buckets[b], req)
 	// Wake consumers waiting on WaitCh(). Non-blocking: if a notification
 	// is already pending, skip (consumer will drain all pending on wake).
 	select {
@@ -102,40 +132,69 @@ func (q *InputQueue) Enqueue(req InputRequest) error {
 	return nil
 }
 
-// Dequeue removes and returns the next request from the queue. The second
-// return value is false when the queue is empty. Requests whose context has
-// been cancelled are skipped silently.
+// Dequeue removes and returns the highest-priority pending request (force
+// first, then safe-point, then queue; FIFO within each bucket). The second
+// return value is false when the queue is empty. Requests whose context
+// has been cancelled are skipped silently.
 func (q *InputQueue) Dequeue() (InputRequest, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for len(q.pending) > 0 {
-		req := q.pending[0]
-		q.pending = q.pending[1:]
-		// Skip requests whose context has been cancelled.
-		if req.Ctx != nil && req.Ctx.Err() != nil {
-			continue
+	for b := 2; b >= 0; b-- {
+		for len(q.buckets[b]) > 0 {
+			req := q.buckets[b][0]
+			q.buckets[b] = q.buckets[b][1:]
+			// Skip requests whose context has been cancelled.
+			if req.Ctx != nil && req.Ctx.Err() != nil {
+				continue
+			}
+			return req, true
 		}
-		return req, true
 	}
 	return InputRequest{}, false
 }
 
-// Peek returns the next request without removing it. Returns false when the
-// queue is empty.
+// Peek returns the highest-priority pending request without removing it.
+// Returns false when the queue is empty. Requests whose context has been
+// cancelled are ignored.
 func (q *InputQueue) Peek() (InputRequest, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.pending) == 0 {
-		return InputRequest{}, false
+	for b := 2; b >= 0; b-- {
+		for _, req := range q.buckets[b] {
+			if req.Ctx != nil && req.Ctx.Err() != nil {
+				continue
+			}
+			return req, true
+		}
 	}
-	return q.pending[0], true
+	return InputRequest{}, false
+}
+
+// Snapshot returns a priority-ordered copy of the pending requests
+// (force first, then safe-point, then queue; FIFO within each bucket),
+// for UI display. Requests whose context has been cancelled are omitted.
+// The returned requests share ResponseCh references with the originals;
+// callers must not send on those channels.
+func (q *InputQueue) Snapshot() []InputRequest {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]InputRequest, 0, q.lenLocked())
+	for b := 2; b >= 0; b-- {
+		for _, req := range q.buckets[b] {
+			if req.Ctx != nil && req.Ctx.Err() != nil {
+				continue
+			}
+			out = append(out, req)
+		}
+	}
+	return out
 }
 
 // Len returns the number of pending requests.
 func (q *InputQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.pending)
+	return q.lenLocked()
 }
 
 // WaitCh returns a channel that receives a signal when a new request is

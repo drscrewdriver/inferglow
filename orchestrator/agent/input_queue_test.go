@@ -112,6 +112,89 @@ func TestInputQueue_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestInputQueue_PriorityDequeue verifies that Dequeue returns the
+// highest-priority pending request first (force > safe-point > queue),
+// preserving FIFO order within each bucket.
+func TestInputQueue_PriorityDequeue(t *testing.T) {
+	q := NewInputQueue(8)
+	ctx := context.Background()
+
+	// Enqueue in reverse priority order; dequeue must return now first.
+	_ = q.Enqueue(InputRequest{Message: "later-1", Mode: PreemptQueue, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "later-2", Mode: PreemptQueue, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "next-1", Mode: PreemptSafePoint, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "now-1", Mode: PreemptForce, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "now-2", Mode: PreemptForce, Ctx: ctx})
+
+	want := []string{"now-1", "now-2", "next-1", "later-1", "later-2"}
+	for _, w := range want {
+		req, ok := q.Dequeue()
+		if !ok {
+			t.Fatalf("Dequeue = false, want %q", w)
+		}
+		if req.Message != w {
+			t.Errorf("Dequeue = %q, want %q", req.Message, w)
+		}
+	}
+	if _, ok := q.Dequeue(); ok {
+		t.Errorf("Dequeue from empty queue returned true")
+	}
+}
+
+// TestInputQueue_PriorityCancelledSkipped verifies that a cancelled request
+// in a higher-priority bucket is skipped in favour of the next valid one.
+func TestInputQueue_PriorityCancelledSkipped(t *testing.T) {
+	q := NewInputQueue(4)
+	ctx := context.Background()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_ = q.Enqueue(InputRequest{Message: "now-cancelled", Mode: PreemptForce, Ctx: cancelledCtx})
+	_ = q.Enqueue(InputRequest{Message: "next-valid", Mode: PreemptSafePoint, Ctx: ctx})
+
+	req, ok := q.Dequeue()
+	if !ok {
+		t.Fatalf("Dequeue = false, want 'next-valid'")
+	}
+	if req.Message != "next-valid" {
+		t.Errorf("Dequeue = %q, want 'next-valid' (cancelled now must be skipped)", req.Message)
+	}
+	if _, ok := q.Dequeue(); ok {
+		t.Errorf("Dequeue after skipping cancelled request returned true")
+	}
+}
+
+// TestInputQueue_Snapshot verifies that Snapshot returns a priority-ordered
+// copy without removing items, omitting cancelled requests.
+func TestInputQueue_Snapshot(t *testing.T) {
+	q := NewInputQueue(8)
+	ctx := context.Background()
+
+	_ = q.Enqueue(InputRequest{Message: "later", Mode: PreemptQueue, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "now", Mode: PreemptForce, Ctx: ctx})
+	_ = q.Enqueue(InputRequest{Message: "next", Mode: PreemptSafePoint, Ctx: ctx})
+	// Enqueue first, cancel after: Enqueue rejects already-cancelled
+	// contexts, so the cancelled request must be cancelled in the queue.
+	cancelledCtx2, cancel2 := context.WithCancel(context.Background())
+	_ = q.Enqueue(InputRequest{Message: "cancelled", Mode: PreemptQueue, Ctx: cancelledCtx2})
+	cancel2()
+
+	snap := q.Snapshot()
+	want := []string{"now", "next", "later"}
+	if len(snap) != len(want) {
+		t.Fatalf("Snapshot len = %d, want %d", len(snap), len(want))
+	}
+	for i, w := range want {
+		if snap[i].Message != w {
+			t.Errorf("Snapshot[%d] = %q, want %q", i, snap[i].Message, w)
+		}
+	}
+	// Snapshot must not pop items.
+	if q.Len() != 4 {
+		t.Errorf("Len = %d after Snapshot, want 4 (cancelled still counted until dequeued)", q.Len())
+	}
+}
+
 // TestInputQueue_Concurrent verifies thread safety under concurrent access.
 func TestInputQueue_Concurrent(t *testing.T) {
 	q := NewInputQueue(100)

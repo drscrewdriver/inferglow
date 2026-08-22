@@ -36,6 +36,7 @@ import (
 	"github.com/inferglow/audit"
 	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/actionruntime"
+	"github.com/inferglow/session"
 )
 
 // ErrToolCallCapReached is returned when the agent hits the hard cap on
@@ -130,6 +131,13 @@ type Engine struct {
 	// via runConfig.callbacks.
 	callbacks *AgentCallbacks
 
+	// rollout 是可选会话级 Rollout 记录器（R3）。nil 时 executeLoop 的所有
+	// 记录点零开销、零行为变化（向后兼容硬约束）。非 nil 时按发生顺序把
+	// user_message / tool_call / tool_result / assistant_message 追加为
+	// JSONL。通常经 RunOption WithRollout 注入；对 ephemeral 会话由调用方
+	// 以空目录构造 recorder 实现 no-op。
+	rollout *session.RolloutRecorder
+
 	// cacheBudgetHook is called after each LLM response with the
 	// cached_tokens count from UsageInfo. nil disables (default).
 	// Propagated from Agent.Run via runConfig.cacheBudgetUpdater.
@@ -185,7 +193,7 @@ func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.StreamR
 
 // RunLoop executes a complete PLAN→EXECUTE agent loop and returns the final
 // response text. It is the public entry point for external callers (e.g.
-// inferflow's Context) that need multi-turn agent capabilities without
+// inferflow's FlowContext) that need multi-turn agent capabilities without
 // depending on the internal executeLoop signature or the actionruntime.Decision
 // type.
 func (e *Engine) RunLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (string, error) {
@@ -314,6 +322,33 @@ func (e *Engine) LastPreemptState() *TurnState {
 	return e.lastPreemptState
 }
 
+// preemptDrainNext handles the exit of a preempted turn: it delivers an
+// ErrTurnInterrupted response to the in-flight interleave (non-blocking,
+// so a timed-out caller cannot stall the loop), then dequeues the next
+// highest-priority input so the loop can continue with it. It reports
+// whether a queued input was found (caller should continue the loop).
+func (e *Engine) preemptDrainNext() bool {
+	if e.pendingInterleave != nil {
+		if ch := e.pendingInterleave.ResponseCh; ch != nil {
+			select {
+			case ch <- InputResponse{Error: ErrTurnInterrupted}:
+			default: // caller already gone (timeout/ctx) — do not block
+			}
+		}
+		e.pendingInterleave = nil
+	}
+	if e.inputQueue == nil {
+		return false
+	}
+	req, ok := e.inputQueue.Dequeue()
+	if !ok {
+		return false
+	}
+	e.session.AddUserMessage(req.Message)
+	e.pendingInterleave = &req
+	return true
+}
+
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
 // or maxRounds is reached.
 func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (dec *actionruntime.Decision, err error) {
@@ -331,6 +366,8 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 
 	// Add user message to session
 	e.session.AddUserMessage(userMessage)
+	// R3：记录本轮用户消息入口。
+	e.recordRollout(session.RolloutItem{Type: session.RolloutUserMessage, Content: userMessage})
 
 	// Ensure the TurnLoop is left in the idle phase no matter how the loop
 	// exits (normal return, error, preempt, or cancel). Preempt already
@@ -405,7 +442,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelImmediate) {
 				e.cancelManager.CompleteCancel(nil)
 				e.capturePreemptState(round, toolCallRounds)
-				return nil, fmt.Errorf("agent cancelled")
+				if e.preemptDrainNext() {
+					prefixSet = false
+					halfwayWarned = false
+					continue // new turn processes the queued input
+				}
+				return nil, fmt.Errorf("%w", ErrTurnInterrupted)
 			}
 		}
 
@@ -572,7 +614,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					reason = e.turnLoop.PreemptReason()
 				}
 				e.capturePreemptState(round, toolCallRounds)
-				return nil, fmt.Errorf("agent preempted: %s", reason)
+				if e.preemptDrainNext() {
+					prefixSet = false
+					halfwayWarned = false
+					continue // new turn processes the queued input
+				}
+				return nil, fmt.Errorf("agent preempted: %s: %w", reason, ErrTurnInterrupted)
 			}
 		}
 		cancelTimeout()
@@ -742,6 +789,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 
 		// Check if we should continue
 		if !actionruntime.ShouldContinue(*decision, round, maxRounds) {
+			// R3：产出最终回复时记录 assistant_message（发生在所有
+			// tool_call / tool_result 之后，吻合 user→tool_call→
+			// tool_result→assistant 的会话级顺序）。
+			if decision.FinalResponse != "" {
+				e.recordRollout(session.RolloutItem{Type: session.RolloutAssistantMessage, Content: decision.FinalResponse})
+			}
 			return decision, nil
 		}
 
@@ -766,7 +819,10 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 
 		// Tool-call dedup (pre-execution): detect when the model is stuck
 		// calling the same tool with the same arguments. On the 3rd
-		// consecutive identical batch, refuse to execute and break.
+		// consecutive identical batch, recognize it as a stuck loop and
+		// trigger the synthesis fallback instead of executing the tool again
+		// or erroring. (ErrLoopDetected is now raised only by loopGuard at
+		// L411-433 for policy-level stuck detection.)
 		if len(decision.ActionCalls) > 0 {
 			var sigParts []string
 			for _, ac := range decision.ActionCalls {
@@ -781,10 +837,17 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				lastToolSig = curSig
 			}
 			if staleCount >= toolCallStaleThreshold {
-				log.Printf("[agent] stale tool-call hard stop: %d consecutive identical calls (tool=%s); refusing execution",
+				log.Printf("[agent] stale tool-call detected: %d consecutive identical calls (tool=%s); triggering synthesis",
 					staleCount, decision.ActionCalls[0].Name)
-				return nil, fmt.Errorf("%w: tool %q called identically %d times, execution refused",
-					ErrLoopDetected, decision.ActionCalls[0].Name, staleCount)
+				// Recognize the stuck loop: return an empty execute decision so
+				// RunLoop/Agent.Run triggers the synthesis fallback immediately
+				// (same semantics as the tool-call cap at L1133-1136). Do NOT
+				// wait for maxToolCallRounds and do NOT re-execute the identical
+				// tool this round.
+				return &actionruntime.Decision{
+					NextAction:    "execute",
+					FinalResponse: "",
+				}, nil
 			}
 		}
 
@@ -793,9 +856,75 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		// With a NoOpHook or nil hook this is zero overhead.
 		dispatcher := actionruntime.NewActionDispatcherWithAudit(e.actionExt.GetRegistry(), e.auditHook)
 
+		// PreToolCall 干预：在派发给 dispatcher 前，对每个调用逐个调用
+		// PreToolCall 钩子。未安装钩子时整体跳过（pendingCalls 直接复用
+		// decision.ActionCalls），行为与现状完全一致。
+		// pendingCalls 是实际派发的调用（参数可能被 RewriteParams 改写）；
+		// pendingIdx 记录派发调用在 decision.ActionCalls 中的原始下标；
+		// preBlocked 与 decision.ActionCalls 对齐，被 Block 的调用直接
+		// 填充与 approval 拦截同形的 blocked 结果，不进入 dispatcher；
+		// preContexts 与 decision.ActionCalls 对齐，记录 Pre 附加上下文。
+		hasPreHook := e.callbacks != nil && e.callbacks.PreToolCall != nil
+		var pendingCalls []actionruntime.ActionCall
+		var pendingIdx []int
+		var preBlocked []*action.ActionResult
+		var preContexts []string
+		if hasPreHook {
+			n := len(decision.ActionCalls)
+			preBlocked = make([]*action.ActionResult, n)
+			preContexts = make([]string, n)
+			for i, ac := range decision.ActionCalls {
+				d := firePreToolCall(e.callbacks, ctx, ac.Name, ac.Params)
+				if d != nil {
+					if len(d.RewriteParams) > 0 {
+						// 改写参数前把原始调用记入审计（若审计钩子存在且启用）。
+						if e.auditHook != nil && e.auditHook.IsEnabled() {
+							_, _ = e.auditHook.Append(&audit.AuditEntry{
+								Timestamp: time.Now(),
+								Source:    "agent",
+								Action:    "pre_tool_call_rewrite",
+								Input:     ac,
+								Output:    d.RewriteParams,
+								Metadata:  map[string]string{"action_name": ac.Name},
+							})
+						}
+						ac.Params = d.RewriteParams
+					}
+					if d.AppendContext != "" {
+						preContexts[i] = d.AppendContext
+					}
+					if d.Block {
+						reason := d.BlockReason
+						if reason == "" {
+							reason = "blocked by PreToolCall hook"
+						}
+						// 与 approval 拦截同形的 blocked 结果：OK=false、
+						// Status="blocked"、Error=阻断原因（模型可读）。
+						preBlocked[i] = &action.ActionResult{
+							OK:     false,
+							Status: "blocked",
+							Error:  reason,
+						}
+						continue
+					}
+				}
+				pendingCalls = append(pendingCalls, ac)
+				pendingIdx = append(pendingIdx, i)
+			}
+		} else {
+			pendingCalls = decision.ActionCalls
+		}
+
 		// Fire OnToolCallStart callbacks for each action.
 		for _, ac := range decision.ActionCalls {
 			fireOnToolCallStart(e.callbacks, ctx, ac.Name)
+		}
+
+		// R3：在派发前记录每个 tool_call。audit_record_id 在派发执行阶段
+		// 才生成、不回流到本处，故此处留空（见下方 tool_result 处：仅当
+		// 结果携带 recordID 时填充）。
+		for _, ac := range decision.ActionCalls {
+			e.recordRollout(session.RolloutItem{Type: session.RolloutToolCall, ToolName: ac.Name, Params: ac.Params})
 		}
 
 		// Execute actions, using ExecuteInterruptible when a preempt channel
@@ -803,9 +932,23 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		var results []*action.ActionResult
 		var toolPreempted bool
 		if preemptCh != nil {
-			results, toolPreempted = dispatcher.ExecuteInterruptible(ctx, decision.ActionCalls, preemptCh)
+			results, toolPreempted = dispatcher.ExecuteInterruptible(ctx, pendingCalls, preemptCh)
 		} else {
-			results = dispatcher.Execute(ctx, decision.ActionCalls)
+			results = dispatcher.Execute(ctx, pendingCalls)
+		}
+
+		// 把 Pre 阶段的 blocked 结果与派发结果按原始顺序合并，保持
+		// results 与 decision.ActionCalls 的下标对齐（后续的回调循环与
+		// session 写入均依赖该对齐）。toolPreempted 路径在上方已返回。
+		if hasPreHook {
+			aligned := make([]*action.ActionResult, len(decision.ActionCalls))
+			copy(aligned, preBlocked)
+			for j, idx := range pendingIdx {
+				if j < len(results) {
+					aligned[idx] = results[j]
+				}
+			}
+			results = aligned
 		}
 
 		// When a preempt was triggered during tool execution, capture
@@ -816,7 +959,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if e.turnLoop != nil {
 				reason = e.turnLoop.PreemptReason()
 			}
-			return nil, fmt.Errorf("agent preempted during tool execution: %s", reason)
+			if e.preemptDrainNext() {
+				prefixSet = false
+				halfwayWarned = false
+				continue // new turn processes the queued input
+			}
+			return nil, fmt.Errorf("agent preempted during tool execution: %s: %w", reason, ErrTurnInterrupted)
 		}
 
 		// Fire OnToolCallEnd callbacks for each action.
@@ -845,6 +993,54 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			} else {
 				fireOnToolCallEnd(e.callbacks, ctx, ac.Name, nil)
 			}
+		}
+
+		// PostToolCall 干预：对每个结果调用 PostToolCall 钩子，并把
+		// Pre/Post 的附加上下文拼接到结果内容（nil/零值 = 不干预、
+		// 不拼接），使上下文随工具结果进入下一轮 LLM 输入。
+		hasPostHook := e.callbacks != nil && e.callbacks.PostToolCall != nil
+		if hasPreHook || hasPostHook {
+			for i, ac := range decision.ActionCalls {
+				if i >= len(results) || results[i] == nil {
+					continue
+				}
+				var ctxParts []string
+				if hasPreHook && preContexts[i] != "" {
+					ctxParts = append(ctxParts, preContexts[i])
+				}
+				if hasPostHook {
+					if fb := firePostToolCall(e.callbacks, ctx, ac.Name, results[i]); fb != nil && fb.AppendContext != "" {
+						ctxParts = append(ctxParts, fb.AppendContext)
+					}
+				}
+				if len(ctxParts) > 0 {
+					results[i] = appendResultContext(results[i], strings.Join(ctxParts, "\n"))
+				}
+			}
+		}
+
+		// R3：记录每个 tool_result。此时 results 已按原始下标对齐到
+		// decision.ActionCalls，并已包含 Pre/Post 拼接的附加上下文。
+		// audit_record_id 仅在结果本身携带 recordID 时填充——普通派发路径
+		// 的 audit 记录 ID 不回流到引擎，故留空（如 approval / Pre 阻断
+		// 路径通过结果 metadata 带出 recordID 时则记录）。
+		for i, ac := range decision.ActionCalls {
+			if i >= len(results) || results[i] == nil {
+				continue
+			}
+			res := results[i]
+			item := session.RolloutItem{Type: session.RolloutToolResult, ToolName: ac.Name}
+			if res.Error != "" {
+				item.Error = res.Error
+			} else {
+				item.Result = formatToolResult(res)
+			}
+			if res.Metadata != nil {
+				if rid, ok := res.Metadata["recordID"]; ok {
+					item.AuditRecordID = fmt.Sprintf("%v", rid)
+				}
+			}
+			e.recordRollout(item)
 		}
 
 		// Add results to session using native tool message format when
@@ -893,7 +1089,13 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			e.cancelManager.CheckTimeoutEscalation()
 			if e.cancelManager.HasPendingCancel() && e.cancelManager.CheckCancel(CancelAfterToolCalls) {
 				e.cancelManager.CompleteCancel(nil)
-				return nil, fmt.Errorf("agent cancelled after tool calls")
+				e.capturePreemptState(round, toolCallRounds)
+				if e.preemptDrainNext() {
+					prefixSet = false
+					halfwayWarned = false
+					continue // new turn processes the queued input
+				}
+				return nil, fmt.Errorf("%w", ErrTurnInterrupted)
 			}
 		}
 
@@ -1042,6 +1244,21 @@ func formatToolResult(result *action.ActionResult) string {
 	return truncateToolResult(raw, defaultToolResultMaxBytes)
 }
 
+// appendResultContext 返回追加了附加上下文的结果副本（不修改原对象）。
+// 上下文随结果内容进入 session，供下一轮 LLM 调用读取。
+func appendResultContext(res *action.ActionResult, context string) *action.ActionResult {
+	if res == nil || context == "" {
+		return res
+	}
+	cp := *res
+	if cp.Error != "" {
+		cp.Error = cp.Error + "\n" + context
+	} else {
+		cp.Result = fmt.Sprintf("%v\n%s", cp.Result, context)
+	}
+	return &cp
+}
+
 // truncate returns the first n characters of s, or s itself if shorter.
 func truncate(s string, n int) string {
 	if len(s) <= n {
@@ -1058,4 +1275,15 @@ func (e *Engine) capturePreemptState(round, toolCallRounds int) {
 	}
 	st := e.turnLoop.Snapshot(round, toolCallRounds, 0)
 	e.lastPreemptState = &st
+}
+
+// recordRollout 把一条 Rollout item 追加到会话级记录器，绕过时零成本。
+// 记录器为 nil 时该方法立即返回（向后兼容硬约束，不产生任何副作用）。
+// SessionID / Seq / Timestamp 由 recorder.Record 内部填充，这里只传类型
+// 与业务字段。属于 R3 的弱耦合接线点，失败（如落盘错误）不打断主流程。
+func (e *Engine) recordRollout(item session.RolloutItem) {
+	if e.rollout == nil {
+		return
+	}
+	_ = e.rollout.Record(item)
 }

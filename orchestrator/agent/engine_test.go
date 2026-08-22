@@ -23,10 +23,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/inferglow/action"
 	"github.com/inferglow/model"
@@ -71,6 +74,111 @@ func makeStreamChunk(content string, isDone bool) *model.StreamChunk {
 	return &model.StreamChunk{Delta: content, IsDone: isDone}
 }
 
+func TestEngine_PreemptReturnsErrTurnInterrupted(t *testing.T) {
+	// A preempted turn must surface ErrTurnInterrupted (via errors.Is) so
+	// callers can distinguish steering from real failures.
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			ch := make(chan *model.StreamChunk, 1)
+			ch <- makeStreamChunk(`{"next_action":"response","final_response":"ok"}`, true)
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  mockReq,
+	}
+	cm := NewCancelManager(nil) // no turn loop: CancelImmediate still fires at Point 1
+	engine.cancelManager = cm
+
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, runErr = engine.executeLoop(context.Background(), "hi", 3, "")
+	}()
+	// Issue an immediate cancel (steer now) right after the run starts.
+	cm.Cancel(CancelImmediate, WithReason("test steer now"))
+	<-done
+
+	if !errors.Is(runErr, ErrTurnInterrupted) {
+		t.Fatalf("executeLoop error = %v, want ErrTurnInterrupted", runErr)
+	}
+}
+
+func TestEngine_PreemptDrainContinuesNextInput(t *testing.T) {
+	// When a preempt fires with a queued input, the engine must drain the
+	// next highest-priority request, continue with it, and deliver the
+	// response on its ResponseCh (no leak, no stall).
+	sess := NewSessionExtension(session.NewSession("test", 10000))
+	actExt := NewActionExtension()
+	callCount := 0
+	mockReq := &mockModelRequester{
+		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+			callCount++
+			ch := make(chan *model.StreamChunk, 1)
+			ch <- makeStreamChunk(`{"next_action":"response","final_response":"ok"}`, true)
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	engine := &Engine{
+		session:   sess,
+		actionExt: actExt,
+		modelReq:  mockReq,
+	}
+	cm := NewCancelManager(nil)
+	engine.cancelManager = cm
+	q := NewInputQueue(4)
+	engine.inputQueue = q
+
+	// Pre-queue a force input; its cancel preempts the initial turn at
+	// Point 1, and preemptDrainNext must continue with it.
+	respCh := make(chan InputResponse, 1)
+	if err := q.Enqueue(InputRequest{
+		Message:    "steered",
+		Mode:       PreemptForce,
+		Ctx:        context.Background(),
+		ResponseCh: respCh,
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	cm.Cancel(CancelImmediate, WithReason("steer now"))
+
+	// RunLoop (not executeLoop) is required: the pendingInterleave response
+	// is delivered by RunLoop after executeLoop returns.
+	finalResponse, err := engine.RunLoop(context.Background(), "initial", 3, "")
+	if err != nil {
+		t.Fatalf("RunLoop error: %v (drain should continue with the queued input)", err)
+	}
+	if callCount != 1 {
+		t.Errorf("LLM calls = %d, want 1 (initial turn preempted, drained steer turn only)", callCount)
+	}
+	if finalResponse != "ok" {
+		t.Errorf("FinalResponse = %q, want ok", finalResponse)
+	}
+
+	// The drained request must have received its response.
+	select {
+	case resp := <-respCh:
+		if resp.Error != nil {
+			t.Errorf("drained response error: %v", resp.Error)
+		}
+		if resp.Response != "ok" {
+			t.Errorf("drained response = %q, want ok", resp.Response)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("drained request got no response (ResponseCh leak)")
+	}
+}
+
+// TestEngine_DirectResponse tests the basic response path.
 func TestEngine_DirectResponse(t *testing.T) {
 	// Test when LLM directly returns a response without executing actions
 	sess := NewSessionExtension(session.NewSession("test", 10000))
@@ -169,10 +277,12 @@ func TestEngine_ToolCallCap(t *testing.T) {
 		responseFn: func(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
 			ch := make(chan *model.StreamChunk, 1)
 			callCount++
-			ch <- &model.StreamChunk{
-				Delta:  `{"next_action":"execute","action_calls":[{"name":"noop","params":{}}]}`,
-				IsDone: true,
-			}
+			// Vary the params each round so the stale-dedup detector never
+			// fires; this isolates the tool-call cap (maxToolCallRounds=5)
+			// path from the stale→synthesis path.
+			delta := `{"next_action":"execute","action_calls":[{"name":"noop","params":{"round":` +
+				strconv.Itoa(callCount) + `}}]}`
+			ch <- &model.StreamChunk{Delta: delta, IsDone: true}
 			close(ch)
 			return ch, nil
 		},

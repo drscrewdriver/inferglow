@@ -252,9 +252,9 @@ func TestEngine_ThreeRoundsAuditCount(t *testing.T) {
 
 	mockReq := &scriptedModelRequester{
 		responses: []string{
-			`{"next_action":"execute","action_calls":[{"name":"calc","params":{}}]}`,
-			`{"next_action":"execute","action_calls":[{"name":"calc","params":{}}]}`,
-			`{"next_action":"execute","action_calls":[{"name":"calc","params":{}}]}`,
+			`{"next_action":"execute","action_calls":[{"name":"calc","params":{"round":1}}]}`,
+			`{"next_action":"execute","action_calls":[{"name":"calc","params":{"round":2}}]}`,
+			`{"next_action":"execute","action_calls":[{"name":"calc","params":{"round":3}}]}`,
 			`{"next_action":"response","final_response":"done"}`,
 		},
 	}

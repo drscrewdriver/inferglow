@@ -83,7 +83,12 @@ func (s *Session) ToYAML() (string, error) {
 }
 
 // SaveJSON writes the session as JSON to the file at the given path.
+// ephemeral（进程内存态）会话为 no-op：不写任何文件，直接返回 nil（R2）。
 func (s *Session) SaveJSON(path string) error {
+	// ephemeral 会话保持内存态：即使调用方显式指定路径也不落盘。
+	if s.IsEphemeral() {
+		return nil
+	}
 	data, err := s.ToJSON()
 	if err != nil {
 		return err
@@ -92,7 +97,12 @@ func (s *Session) SaveJSON(path string) error {
 }
 
 // SaveYAML writes the session as YAML to the file at the given path.
+// ephemeral（进程内存态）会话为 no-op：不写任何文件，直接返回 nil（R2）。
 func (s *Session) SaveYAML(path string) error {
+	// ephemeral 会话保持内存态：即使调用方显式指定路径也不落盘。
+	if s.IsEphemeral() {
+		return nil
+	}
 	data, err := s.ToYAML()
 	if err != nil {
 		return err

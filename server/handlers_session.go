@@ -206,3 +206,55 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// handleSessionFork handles POST /v1/sessions/{id}/fork — fork an existing
+// session (R2). The fork gets a fresh ID allocated by the store (response
+// shape mirrors handleCreateSession), inherits the owner/agent binding and
+// the full message history, while the original session and its history
+// remain untouched. A "session.forked" event is published on the session
+// topic so listeners can cascade-attach child resources, mirroring the
+// session.created/terminated linkage.
+func (s *Server) handleSessionFork(w http.ResponseWriter, r *http.Request) {
+	if s.sessionStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store not configured")
+		return
+	}
+	id := r.PathValue("id")
+	orig := s.sessionStore.Get(id)
+	if orig == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	// Fork 元数据：继承 owner/agent 绑定；新 ID 与时间戳由 store 分配，
+	// 状态从 active 重新开始（fork 是一条全新的会话生命周期）。
+	newID, err := s.sessionStore.Create(SessionRecord{Owner: orig.Owner, AgentID: orig.AgentID, Title: orig.Title})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Fork 消息历史：复制到新会话名下（独立副本，之后向 fork 追加
+	// 消息不会影响原会话）。msgStore 未配置时仅 fork 元数据。
+	// 复用 ListBefore 全量取回（零 before + 足够大 limit = 全部消息，
+	// 由 msgs 的 session 键隔离，Append 会重新分配新会话的 ID/时间戳）。
+	if s.msgStore != nil {
+		all, _ := s.msgStore.ListBefore(id, time.Time{}, 1<<31-1)
+		for _, rec := range all {
+			msg := *rec
+			msg.ID = "" // Append 分配新 ID，避免两会话共用消息 ID
+			_, _ = s.msgStore.Append(newID, msg)
+		}
+	}
+
+	if s.bus != nil {
+		_ = s.bus.Publish(r.Context(), "session", messagebus.Message{
+			ID:        newID,
+			SessionID: newID,
+			Topic:     "session",
+			Kind:      "session.forked",
+			Payload:   map[string]any{"session_id": newID, "forked_from": id, "agent_id": orig.AgentID},
+		})
+	}
+	writeJSON(w, http.StatusCreated, s.sessionStore.Get(newID))
+}

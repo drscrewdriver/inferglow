@@ -103,6 +103,11 @@ func (m CancelMode) String() string {
 // timed out and was escalated to CancelImmediate.
 var ErrCancelTimeout = errors.New("cancel timed out, escalated to immediate")
 
+// ErrTurnInterrupted reports that the current turn was interrupted by a
+// user input (PreemptSafePoint or PreemptForce). It is not a failure;
+// callers may check it with errors.Is to distinguish steering from errors.
+var ErrTurnInterrupted = errors.New("agent: turn interrupted by user input")
+
 // CancelHandle represents a cancel operation that can be waited on. The done
 // channel is closed when the cancel is complete; err holds the outcome (nil on
 // success, ErrCancelTimeout on escalation).

@@ -127,6 +127,10 @@ type Agent struct {
 	// WithCallbacks on New; overridden by a per-call WithCallbacks on Run.
 	// nil disables callbacks (default).
 	callbacks *AgentCallbacks
+	// rollout is the persisted default session-level Rollout recorder.
+	// Set via WithRollout on New; overridden by a per-call WithRollout on
+	// Run. nil disables rollout recording (default, zero overhead).
+	rollout *session.RolloutRecorder
 	// middlewares is the persisted list of unified middlewares.
 	// Set via WithMiddleware on New; overridden by a per-call WithMiddleware
 	// on Run. Empty means the core handler is called directly (zero overhead).
@@ -184,6 +188,9 @@ type runConfig struct {
 	middlewares []middleware.Middleware
 	// callbacks provides lifecycle hooks for observability. nil disables.
 	callbacks *AgentCallbacks
+	// rollout 是可选的会话级 Rollout 记录器。nil 禁用（默认，零开销，
+	// 零行为变化）。经 RunOption WithRollout 注入。
+	rollout *session.RolloutRecorder
 	// cacheBudgetUpdater receives cached_tokens feedback. nil disables.
 	cacheBudgetUpdater CacheBudgetUpdater
 	// compactHook is called after each LLM turn for ModeSummary compaction.
@@ -215,8 +222,8 @@ func WithStreamTimeout(d time.Duration) RunOption {
 }
 
 // WithFlow 设置 flow 编排定义。设置后 Agent.Run 将使用 flow 编排模式
-// 而非默认的 PLAN→EXECUTE 循环。flow 步骤可通过 ContextFrom(ctx)
-// 获取 Context，访问 Action 执行、Model 调用、Session 读写等横切能力。
+// 而非默认的 PLAN→EXECUTE 循环。flow 步骤可通过 flow.FlowContextFrom(ctx)
+// 获取 FlowContext，访问 Action 执行、Model 调用、Session 读写等横切能力。
 func WithFlow(f *flow.Flow) RunOption {
 	return func(c *runConfig) {
 		c.flow = f
@@ -224,10 +231,10 @@ func WithFlow(f *flow.Flow) RunOption {
 }
 
 // WithTracer 安装一个 OpenTelemetry tracer。当传给 New 时持久化为 Agent
-// tracer 非 nil 时 executeFlow 会在
+// 默认；当传给 Run 时对该次调用做覆盖。tracer 非 nil 时 executeFlow 会在
 // 入口创建 SpanFlowExecute span、在暂停点创建 SpanPause span；ResumeFlow
 // 在入口创建 SpanResume span；flowContextImpl 也会持有该 tracer，让 step
-// 可以通过 Context.StartSpan 自建 SpanKindStep / SpanKindTool span。
+// 可以通过 FlowContext.StartSpan 自建 SpanKindStep / SpanKindTool span。
 // 传 nil 可显式禁用既有 tracer。
 func WithTracer(t SpanStarter) RunOption {
 	return func(c *runConfig) {
@@ -291,6 +298,15 @@ func WithAuditHook(hook audit.AuditHook) RunOption {
 	}
 }
 
+// WithRollout 安装会话级 Rollout 记录器（R3）。nil 禁用（默认，零开销，
+// 零行为变化）。对 ephemeral 会话请用空目录构造 recorder
+// （session.NewRolloutRecorder("", sessionID)），该 recorder 为 no-op。
+func WithRollout(r *session.RolloutRecorder) RunOption {
+	return func(c *runConfig) {
+		c.rollout = r
+	}
+}
+
 // New creates an Agent from the given components. Options applied here
 // (e.g. WithMaxRounds, WithSystemPrompt, WithStreamTimeout) are persisted
 // on the Agent and used by subsequent Run calls unless overridden by a
@@ -335,6 +351,7 @@ func New(sess *session.Session, actionExt *ActionExtension, modelReq model.Model
 		rateLimitHook: c.rateLimitHook,
 		callbacks:          c.callbacks,
 		middlewares:        c.middlewares,
+		rollout:            c.rollout,
 		cacheBudgetUpdater: c.cacheBudgetUpdater,
 	}
 }
@@ -361,6 +378,7 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	c.outputSchema = a.outputSchema
 	c.rateLimitHook = a.rateLimitHook
 	c.callbacks = a.callbacks
+	c.rollout = a.rollout
 	c.middlewares = a.middlewares
 	c.featuresSet = true
 	for _, opt := range opts {
@@ -393,6 +411,10 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 
 	// Propagate callbacks to the engine for lifecycle observability.
 	a.engine.callbacks = c.callbacks
+
+	// Propagate the rollout recorder to the engine for R3 session-level
+	// rollout recording. nil disables (zero overhead, no behavior change).
+	a.engine.rollout = c.rollout
 
 	// Propagate the cache budget hook so executeLoop feeds cached_tokens
 	// back to the context manager for sweet-spot adjustment. nil disables.
@@ -530,6 +552,11 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 // When set, SubmitInput can enqueue messages while the agent is busy.
 func (a *Agent) SetInputQueue(q *InputQueue) {
 	a.inputQueue = q
+}
+
+// InputQueue returns the queue installed by SetInputQueue, or nil.
+func (a *Agent) InputQueue() *InputQueue {
+	return a.inputQueue
 }
 
 // Callbacks returns the agent's persisted lifecycle callbacks.

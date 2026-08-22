@@ -53,6 +53,10 @@ type Action struct {
 	// CacheTTL enables result caching for this action (OT-11).
 	// Zero value means no caching. Only effective for non-write actions.
 	CacheTTL time.Duration
+	// Spec 携带该 Action 的规格声明（可选，nil 表示未声明）。
+	// 消费方（如 ActionDispatcher）通过 Registry 查询该声明来决定执行策略；
+	// 未声明时按各消费方的默认行为处理（例如视为并行安全）。
+	Spec *ActionSpec
 }
 
 // ActionExecutor is the runtime contract every Action must satisfy.
@@ -90,6 +94,7 @@ type ActionResult struct { //nolint:revive
 type ActionRegistry struct { //nolint:revive
 	mu      sync.RWMutex
 	actions map[string]*Action
+	spiller OutputSpiller
 }
 
 // Errors surfaced by the Action Runtime.
@@ -158,7 +163,10 @@ func (r *ActionRegistry) List() []string {
 //
 // A lookup miss returns ErrActionNotFound (wrapped). If the Executor
 // returns a non-nil error, it is converted into an error-shaped
-// ActionResult so callers always receive a structured result.
+// ActionResult so callers always receive a structured result. When an
+// OutputSpiller is attached and the result carries oversized plain text,
+// the spiller may replace it with a SpilledOutput digest; a spiller
+// failure is best-effort and never turns a successful call into an error.
 func (r *ActionRegistry) Execute(ctx context.Context, name string, input map[string]any) (*ActionResult, error) {
 	a, err := r.Get(name)
 	if err != nil {
@@ -171,6 +179,15 @@ func (r *ActionRegistry) Execute(ctx context.Context, name string, input map[str
 			Status: "error",
 			Error:  err.Error(),
 		}, nil
+	}
+	if result != nil && result.OK {
+		r.mu.RLock()
+		spiller := r.spiller
+		r.mu.RUnlock()
+		if spiller != nil {
+			// Best-effort: ignore spiller errors, keep the inline result.
+			_ = spiller.Spill(ctx, result)
+		}
 	}
 	return result, nil
 }

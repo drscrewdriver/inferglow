@@ -51,6 +51,11 @@ const (
 // timed out and was escalated to CancelImmediate.
 var ErrCancelTimeout = cancel.ErrCancelTimeout
 
+// ErrTurnInterrupted reports that the current turn was interrupted by a
+// user input (PreemptSafePoint or PreemptForce). It is not a failure;
+// callers may check it with errors.Is to distinguish steering from errors.
+var ErrTurnInterrupted = cancel.ErrTurnInterrupted
+
 // CancelHandle represents a cancel operation that can be waited on.
 type CancelHandle = cancel.CancelHandle
 

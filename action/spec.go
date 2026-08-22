@@ -78,6 +78,11 @@ type ActionSpec struct { //nolint:revive
 	ExecutorType       string          `json:"executor_type"`
 	ExecutionResources map[string]any  `json:"execution_resources"`
 	Meta               map[string]any  `json:"meta"`
+	// ParallelSafe 声明该 Action 是否可在同一轮调度中与其他调用并发执行：
+	//   - nil（零值）：默认并行安全，保持现有并发行为不变；
+	//   - 显式 false：该工具同轮须按调用顺序串行执行；
+	//   - 显式 true：并行安全（与 nil 等价，仅作显式声明）。
+	ParallelSafe *bool `json:"parallel_safe,omitempty"`
 }
 
 // DecisionAction 决策类型
