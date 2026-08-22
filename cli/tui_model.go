@@ -22,11 +22,15 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -35,6 +39,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/inferglow/cli/composer"
+	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/agent"
 )
 
@@ -134,6 +140,16 @@ type chatTUI struct {
 	// Quit control.
 	lastCtrlCAt time.Time
 	quit        bool
+	// restartResumeID, when set by /resume <id>, instructs RunTUI to relaunch
+	// the TUI against that persisted session (real conversation switch).
+	restartResumeID string
+
+	// Rich input composer (deterministic paste/enter decision state machine).
+	composer *composer.Composer
+	// pendingImage holds a clipboard image staged for attachment (P1).
+	pendingImage *pendingImageAttachment
+	// renderRaw toggles P2 rich/raw rendering (false = rich/ANSI, true = raw).
+	renderRaw bool
 }
 
 // waitForAgentEvent returns a tea.Cmd that blocks until an agent event arrives.
@@ -160,27 +176,69 @@ func elapsedTick() tea.Cmd {
 	return tea.Tick(time.Second, func(_ time.Time) tea.Msg { return elapsedTickMsg{} })
 }
 
+// composerTickMsg drives the composer flush tick.
+type composerTickMsg struct{}
+
+// composerTickCmd returns a tea.Cmd that re-arms the composer flush tick;
+// returns nil while the composer is idle.
+func (m *chatTUI) composerTickCmd() tea.Cmd {
+	if m.composer == nil || m.composer.Mode() == composer.ModeIdle {
+		return nil
+	}
+	return tea.Tick(m.composer.TickInterval(), func(_ time.Time) tea.Msg { return composerTickMsg{} })
+}
+
+// applyComposerActions applies composer actions to the textarea input.
+// Submit/BufferDiscard are handled by the caller.
+func (m *chatTUI) applyComposerActions(acts []composer.Action) {
+	for _, a := range acts {
+		switch a.Kind {
+		case composer.ActionTyped, composer.ActionPaste:
+			m.input.InsertString(a.Text)
+		case composer.ActionInsertNewline:
+			m.input.InsertString("\n")
+		}
+	}
+}
+
 // RunTUI starts the full-screen TUI mode.
 func RunTUI(ctx context.Context, cfg CLIConfig, resumeID string) error {
 	// Suppress agent debug logs (log.Printf) which would corrupt the alt-screen.
 	log.SetOutput(io.Discard)
 
-	rt, err := BuildRuntime(cfg, resumeID)
-	if err != nil {
-		return err
+	// Resume loop: /resume <id> arms a model.restartResumeID and requests a
+	// quit; on exit we tear down the current runtime and relaunch against the
+	// new session, so the TUI truly switches conversation context.
+	for {
+		rt, err := BuildRuntime(cfg, resumeID)
+		if err != nil {
+			return err
+		}
+		closed := false
+		closeRT := func() {
+			if !closed {
+				rt.Close(ctx)
+				closed = true
+			}
+		}
+
+		m := newChatTUI(rt.Agent, rt.Bridge, cfg, rt.SessionID)
+		p := tea.NewProgram(&m)
+
+		go func(p *tea.Program) {
+			<-ctx.Done()
+			p.Send(tuiShutdownMsg{})
+		}(p)
+
+		_, runErr := p.Run()
+		closeRT()
+
+		if m.restartResumeID == "" || runErr != nil {
+			return runErr
+		}
+		// Relaunch against the requested persisted session.
+		resumeID = m.restartResumeID
 	}
-	defer rt.Close(ctx)
-
-	m := newChatTUI(rt.Agent, rt.Bridge, cfg, rt.SessionID)
-	p := tea.NewProgram(&m)
-
-	go func() {
-		<-ctx.Done()
-		p.Send(tuiShutdownMsg{})
-	}()
-
-	_, err = p.Run()
-	return err
 }
 
 // newChatTUI creates an initialized chatTUI model.
@@ -213,6 +271,7 @@ func newChatTUI(ag *agent.Agent, bridge *MemoryBridge, cfg CLIConfig, sessionID 
 		sessionID:   sessionID,
 		modelLabel:  modelLabel,
 		state:       tuiIdle,
+		composer:    composer.New(composer.DefaultConfig()),
 		input:       ti,
 		spinner:     sp,
 		viewport:    vp,
@@ -302,7 +361,13 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.PasteMsg:
+		m.composer.Reset()
 		return m.handlePaste(msg)
+
+	case composerTickMsg:
+		acts := m.composer.Feed(composer.Event{Kind: composer.EventTick, Now: time.Now()})
+		m.applyComposerActions(acts)
+		return m, tea.Batch(append(cmds, m.composerTickCmd())...)
 
 	// Mouse wheel: scroll the transcript viewport.
 	case tea.MouseWheelMsg:
@@ -394,8 +459,79 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Composer: printable characters route through the input state
+		// machine; special keys (except Enter) flush pending state first.
+		// "v" is reserved for visual selection and must reach the switch.
+		if keyMsg.Text != "" && keyMsg.String() != "v" {
+			var kind composer.EventKind
+			rs := []rune(keyMsg.Text)
+			if len(rs) == 1 && rs[0] < utf8.RuneSelf {
+				kind = composer.EventPlainChar
+			} else {
+				kind = composer.EventPlainCharNoHold
+			}
+			acts := m.composer.Feed(composer.Event{Kind: kind, Text: keyMsg.Text, Now: time.Now()})
+			m.applyComposerActions(acts)
+			return m, tea.Batch(append(cmds, m.composerTickCmd())...)
+		}
+		if keyMsg.String() != "enter" {
+			acts := m.composer.Feed(composer.Event{Kind: composer.EventModifiedInput, Now: time.Now()})
+			m.applyComposerActions(acts)
+		}
+
 		switch keyMsg.String() {
+		case "ctrl+v", "ctrl+y":
+			// P1 clipboard bridge: paste image or text from the system
+			// clipboard. Ctrl+Y is a fallback for Windows terminals that
+			// intercept Ctrl+V.
+			if m.state != tuiIdle {
+				return m, tea.Batch(cmds...)
+			}
+			// Flush any pending burst buffer (IN-5 semantics) before
+			// reading the clipboard.
+			acts := m.composer.Feed(composer.Event{Kind: composer.EventModifiedInput, Now: time.Now()})
+			m.applyComposerActions(acts)
+
+			if img, err := ReadClipboardImagePNG(); err == nil && len(img) > 0 {
+				path, werr := writeTempPNG(img, "clipboard")
+				if werr != nil {
+					m.commitSystemNote(warnText("Could not save image attachment."))
+					return m, tea.Batch(cmds...)
+				}
+				w, h := 0, 0
+				if w, h, err = imageSizeOf(img); err != nil {
+					w, h = 0, 0
+				}
+				m.pendingImage = &pendingImageAttachment{Path: path, MIMEType: "image/png", Width: w, Height: h}
+				m.commitSystemNote(successText(fmt.Sprintf("Image attached: %s (%dx%d)", filepath.Base(path), w, h)))
+				return m, tea.Batch(cmds...)
+			}
+
+			txt, terr := ReadClipboardText()
+			if terr == nil && strings.TrimSpace(txt) != "" {
+				// Explicit paste: insert the full text (including internal
+				// newlines) in one shot.
+				m.input.InsertString(txt)
+				m.commitSystemNote(successText("Pasted clipboard text."))
+				return m, tea.Batch(cmds...)
+			}
+			if errors.Is(terr, ErrClipboardUnavailable) {
+				m.commitSystemNote(warnText("Clipboard unavailable"))
+				return m, tea.Batch(cmds...)
+			}
+			return m, tea.Batch(cmds...)
+
 		case "ctrl+c":
+			// In selection mode Ctrl+C copies the selection to the system
+			// clipboard (matching "v" copy semantics).
+			if m.selectionMode {
+				copied := m.copySelection()
+				m.exitSelectionMode()
+				if copied != "" {
+					m.commitSystemNote(successText("Copied to clipboard."))
+				}
+				return m, tea.Batch(cmds...)
+			}
 			if m.state == tuiRunning {
 				m.state = tuiIdle
 				m.answerIdx = -1
@@ -422,6 +558,14 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+o":
 			m.showReasoning = !m.showReasoning
+			return m, tea.Batch(cmds...)
+
+		case "ctrl+r":
+			// P2 render toggle: switch between rich (ANSI/markdown) and raw
+			// (plain-text source) transcript rendering. Input state unaffected.
+			m.renderRaw = !m.renderRaw
+			m.transcriptDirty = true
+			m.commitSystemNote(dim(fmt.Sprintf("Render mode: %s", map[bool]string{false: "rich", true: "raw"}[m.renderRaw])))
 			return m, tea.Batch(cmds...)
 
 		case "ctrl+z":
@@ -486,6 +630,36 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.state != tuiIdle {
 				return m, tea.Batch(cmds...)
+			}
+			acts := m.composer.Feed(composer.Event{Kind: composer.EventEnter, Now: time.Now()})
+			submit := false
+			for _, a := range acts {
+				switch a.Kind {
+				case composer.ActionTyped:
+					m.input.InsertString(a.Text)
+				case composer.ActionInsertNewline:
+					m.input.InsertString("\n")
+				case composer.ActionSubmit:
+					submit = true
+				}
+			}
+			if !submit {
+				return m, tea.Batch(append(cmds, m.composerTickCmd())...)
+			}
+			// P1 vision precheck (PRD §7 双层门控 TUI 侧): if a clipboard image
+			// is staged and the active model is KNOWN not to support vision,
+			// surface a readable warning and drop the attachment so we never
+			// silently send bytes a non-vision model cannot accept. Unknown /
+			// vision models keep the attachment (model-layer gateMultimodal
+			// still guards the wire path).
+			if m.pendingImage != nil {
+				cap, found := model.LookupModelCapability(m.modelLabel)
+				if found && !cap.Vision {
+					m.commitSystemNote(warnText(fmt.Sprintf(
+						"Non-vision model %s: dropped image attachment (switch to a vision model to send images).",
+						m.modelLabel)))
+					m.pendingImage = nil
+				}
 			}
 			val := strings.TrimSpace(m.input.Value())
 			if val == "" {
@@ -676,6 +850,22 @@ func (m *chatTUI) submitTurn(message string) {
 	sinkCB := agent.CallbacksFromSink(sink)
 	mergedCB := mergeCallbacks(m.agent.Callbacks(), sinkCB)
 
+	// P1 image attachment: if a clipboard image was staged (and not dropped
+	// by the vision pre-check), attach it as a ContentBlock so the engine
+	// sends it to the model. Cleared regardless once the turn starts.
+	runOpts := []agent.RunOption{
+		agent.WithSystemPrompt(sysPrompt),
+		agent.WithCallbacks(mergedCB),
+	}
+	if m.pendingImage != nil {
+		if data, err := os.ReadFile(m.pendingImage.Path); err == nil && len(data) > 0 {
+			runOpts = append(runOpts, agent.WithContentBlocks([]model.ContentBlock{
+				model.ImageBlock(m.pendingImage.MIMEType, data),
+			}))
+		}
+		m.pendingImage = nil
+	}
+
 	m.state = tuiRunning
 	m.runStart = time.Now()
 	m.elapsed = 0
@@ -688,10 +878,7 @@ func (m *chatTUI) submitTurn(message string) {
 
 	go func() {
 		defer closeSink()
-		_, _ = m.agent.Run(context.Background(), message,
-			agent.WithSystemPrompt(sysPrompt),
-			agent.WithCallbacks(mergedCB),
-		)
+		_, _ = m.agent.Run(context.Background(), message, runOpts...)
 
 		// CM-2: auto-trigger rebackground if Zone 1 is still empty
 		// after the agent turn completes.

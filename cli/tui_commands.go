@@ -65,6 +65,7 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 		m.commitLine(dim("  /receipt           Show last turn receipt"))
 		m.commitLine(dim("  /session           Show current session ID"))
 		m.commitLine(dim("  /resume [id]       List/resume previous sessions"))
+		m.commitLine(dim("  /vision <img> [q] Attach an image and ask the vision model about it"))
 		m.commitLine(dim("  /sandbox [mode]    Show/switch sandbox mode"))
 		m.commitLine(dim("  /config            Show config path and settings"))
 		m.commitLine(dim("  /showbackground    Show current project background context"))
@@ -120,7 +121,20 @@ func (m *chatTUI) tuiDispatchCommand(input string) (cmd tea.Cmd, quit bool) {
 		return nil, false
 
 	case "resume":
-		m.tuiHandleResume(args)
+		if m.tuiHandleResume(args) {
+			// Truthy: session file exists; quit so RunTUI relaunches with it.
+			return tea.Quit, true
+		}
+		return nil, false
+
+	case "vision", "see":
+		// B4/B5: vision bridge / read-image agent. Format: <path> [question]
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			m.commitLine(dim("Usage: /vision <image-path> [question]"))
+			return nil, false
+		}
+		m.runVision(fields[0], strings.TrimSpace(strings.TrimPrefix(args, fields[0])))
 		return nil, false
 
 	case "sandbox":

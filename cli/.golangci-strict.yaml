@@ -1,0 +1,17 @@
+# Strict lint scope for new code domains (PRD §12.1 / strict-lint-scope.md).
+# default:none + explicit enable so staldom file count never affects this path.
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - revive
+
+run:
+  timeout: 5m
+  # cli/go.mod targets go1.25, but installed golangci-lint is built with go1.24;
+  # pin the language level so strict lint can load. composer uses stdlib only.
+  go: "1.24"

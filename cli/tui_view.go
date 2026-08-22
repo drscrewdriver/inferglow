@@ -157,10 +157,20 @@ func (m *chatTUI) commitSystemNote(text string) {
 }
 
 // renderTranscript assembles the full viewport content from transcript blocks.
+// rich mode renders each block's ANSI/markdown Raw; raw mode renders the plain
+// Source (falling back to the stripped Raw when no Source is stored).
 func (m *chatTUI) renderTranscript() string {
 	parts := make([]string, len(m.transcript))
 	for i, b := range m.transcript {
-		parts[i] = b.Raw
+		if m.renderRaw {
+			src := b.Source
+			if src == "" {
+				src = stripAnsi(b.Raw)
+			}
+			parts[i] = src
+		} else {
+			parts[i] = b.Raw
+		}
 	}
 	return strings.Join(parts, "\n")
 }

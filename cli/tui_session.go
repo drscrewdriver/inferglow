@@ -34,27 +34,46 @@ func (m *chatTUI) tuiHandleSession(args string) {
 }
 
 // tuiHandleResume handles /resume [id] command.
-// Without args: lists recent sessions. With args: shows info (actual switch
-// requires agent rebuild which is deferred to future work).
-func (m *chatTUI) tuiHandleResume(args string) {
+// Empty args: lists recent sessions. With an id: validates the session file
+// exists, arms m.restartResumeID, and returns true so the caller can quit the
+// current TUI program and let RunTUI relaunch against that session.
+func (m *chatTUI) tuiHandleResume(args string) bool {
 	m.commitLine("")
 	if strings.TrimSpace(args) == "" {
 		// List recent sessions by scanning session files.
 		sessions := m.listRecentSessions(10)
 		if len(sessions) == 0 {
 			m.commitLine(dim("No previous sessions found."))
-			return
+			return false
 		}
 		m.commitLine(accent("Recent sessions:"))
 		for _, s := range sessions {
 			m.commitLine(dim("  " + s))
 		}
 		m.commitLine(dim("Usage: /resume <session-id>"))
-		return
+		return false
 	}
-	// Show target session info.
-	m.commitLine(dim(fmt.Sprintf("Target session: %s", args)))
-	m.commitLine(dim("Note: session switching requires agent rebuild (planned for future release)."))
+	id := strings.TrimSpace(args)
+	if !sessionFileExists(m.cfg, id) {
+		m.commitLine(errorText(fmt.Sprintf("Session %q not found.", id)))
+		return false
+	}
+	m.restartResumeID = id
+	m.commitLine(successText(fmt.Sprintf("Resuming session %s …", id)))
+	return true
+}
+
+// sessionFileExists reports whether a persisted session JSONL exists for id.
+func sessionFileExists(cfg CLIConfig, id string) bool {
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = defaultDataDir()
+	}
+	if id == "" || strings.ContainsAny(id, `/\`) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dataDir, "sessions", id+".jsonl"))
+	return err == nil
 }
 
 // listRecentSessions scans the data directory for session JSONL files.
