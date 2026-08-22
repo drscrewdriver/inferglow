@@ -37,6 +37,7 @@ func RestrictivePolicy() *action.ActionRegistry {
 		actions.NewURLFetchAction(actions.URLFetchConfig{}),
 		actions.NewFileReadAction(actions.FileReadConfig{}),
 		actions.NewJSONProcessorAction(),
+		actions.NewAskSuggestionAction(),
 	}
 	for _, a := range acts {
 		if err := r.Register(a); err != nil {

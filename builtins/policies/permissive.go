@@ -41,6 +41,7 @@ func PermissivePolicy() *action.ActionRegistry {
 		actions.NewFileWriteAction(actions.FileWriteConfig{}),
 		actions.NewCodeExecutorAction(nil),
 		actions.NewBashExecutorAction(nil),
+		actions.NewAskSuggestionAction(),
 	}
 	for _, a := range acts {
 		if err := r.Register(a); err != nil {

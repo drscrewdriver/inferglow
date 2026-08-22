@@ -38,6 +38,7 @@ func allActionIDs() []string {
 		actions.JSONProcessorActionID,
 		actions.CodeExecutorActionID,
 		actions.BashExecutorActionID,
+		actions.AskSuggestionActionID,
 	}
 }
 
@@ -59,6 +60,8 @@ func sideEffectLevel(name string) action.SideEffectLevel {
 		return actions.CodeExecutorSpec.SideEffectLevel
 	case actions.BashExecutorActionID:
 		return actions.BashExecutorSpec.SideEffectLevel
+	case actions.AskSuggestionActionID:
+		return actions.AskSuggestionSpec.SideEffectLevel
 	}
 	return ""
 }
@@ -119,6 +122,7 @@ func TestRestrictivePolicy(t *testing.T) {
 		actions.URLFetchActionID,
 		actions.FileReadActionID,
 		actions.JSONProcessorActionID,
+		actions.AskSuggestionActionID,
 	}
 	assertRegistered(t, r, want)
 	assertNotRegistered(t, r, []string{
@@ -138,6 +142,7 @@ func TestBalancedPolicy(t *testing.T) {
 		actions.FileReadActionID,
 		actions.JSONProcessorActionID,
 		actions.FileWriteActionID,
+		actions.AskSuggestionActionID,
 	}
 	assertRegistered(t, r, want)
 	assertNotRegistered(t, r, []string{

@@ -39,6 +39,7 @@ func BalancedPolicy() *action.ActionRegistry {
 		actions.NewFileReadAction(actions.FileReadConfig{}),
 		actions.NewJSONProcessorAction(),
 		actions.NewFileWriteAction(actions.FileWriteConfig{}),
+		actions.NewAskSuggestionAction(),
 	}
 	for _, a := range acts {
 		if err := r.Register(a); err != nil {
