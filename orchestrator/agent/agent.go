@@ -195,6 +195,10 @@ type runConfig struct {
 	cacheBudgetUpdater CacheBudgetUpdater
 	// compactHook is called after each LLM turn for ModeSummary compaction.
 	compactHook func(promptTokens int)
+	// contentBlocks carries multimodal input (image/audio/video) for the
+	// user message of this run. Empty disables (pure-text, zero behavior
+	// change). Populated via WithContentBlocks.
+	contentBlocks []model.ContentBlock
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -208,6 +212,16 @@ func WithMaxRounds(n int) RunOption {
 func WithSystemPrompt(prompt string) RunOption {
 	return func(c *runConfig) {
 		c.systemPrompt = prompt
+	}
+}
+
+// WithContentBlocks attaches multimodal content blocks (image/audio/video)
+// to the user message of this run. When non-empty they are combined with the
+// text userMessage into a single multimodal user message; the model layer
+// (model.ChatMessage.ContentBlocks + provider serialization) handles encoding.
+func WithContentBlocks(blocks []model.ContentBlock) RunOption {
+	return func(c *runConfig) {
+		c.contentBlocks = blocks
 	}
 }
 
@@ -433,6 +447,10 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	// Propagate the input queue to the engine so executeLoop can drain it
 	// at turn boundaries.
 	a.engine.inputQueue = a.inputQueue
+
+	// Propagate multimodal content blocks for the initial user message this
+	// run (see executeLoop AddUserContentBlocks). Reset after each run.
+	a.engine.initialContentBlocks = c.contentBlocks
 
 	// Propagate the PII masker to the session so that AddUserMessage
 	// (called inside executeLoop) redacts input via MaskInput. Only set

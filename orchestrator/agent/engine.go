@@ -153,6 +153,10 @@ type Engine struct {
 	// Propagated from Agent.inputQueue.
 	inputQueue *InputQueue
 
+	// initialContentBlocks carries multimodal content for the first user
+	// message of a run (image/audio/video). Consumed and reset by executeLoop.
+	initialContentBlocks []model.ContentBlock
+
 	// pendingInterleave holds the InputRequest currently being processed
 	// from the input queue. When the turn completes, the response is sent
 	// on pendingInterleave.ResponseCh. nil when no interleave is active.
@@ -365,7 +369,14 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 	}()
 
 	// Add user message to session
-	e.session.AddUserMessage(userMessage)
+	if len(e.initialContentBlocks) > 0 {
+		e.session.AddUserContentBlocks(userMessage, e.initialContentBlocks)
+		// Consumed per-run; reset so it never leaks into later turns on a
+		// long-lived Engine.
+		e.initialContentBlocks = nil
+	} else {
+		e.session.AddUserMessage(userMessage)
+	}
 	// R3：记录本轮用户消息入口。
 	e.recordRollout(session.RolloutItem{Type: session.RolloutUserMessage, Content: userMessage})
 

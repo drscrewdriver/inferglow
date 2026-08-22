@@ -86,6 +86,20 @@ func (e *SessionExtension) AddUserMessage(content string) {
 	e.persist()
 }
 
+// AddUserContentBlocks adds a multimodal user message to the session history.
+// The message content is a []model.ContentBlock (text block for the string
+// plus the supplied media blocks); PreparePrompt maps it back to
+// model.ChatMessage.ContentBlocks so providers can encode the media.
+func (e *SessionExtension) AddUserContentBlocks(content string, blocks []model.ContentBlock) {
+	all := make([]model.ContentBlock, 0, len(blocks)+1)
+	if content != "" {
+		all = append(all, model.TextBlock(content))
+	}
+	all = append(all, blocks...)
+	e.s.AddMessage("user", all, "")
+	e.persist()
+}
+
 // AddSystemMessage adds a system message to the session history.
 // Used for agent-level nudges (e.g. stale-loop warnings, halfway warnings).
 func (e *SessionExtension) AddSystemMessage(content string) {
@@ -212,6 +226,12 @@ func (e *SessionExtension) PreparePrompt() []model.ChatMessage {
 			Role:    msg.Role,
 			Content: fmt.Sprintf("%v", msg.Content),
 			Name:    msg.Name,
+		}
+		// Multimodal user messages are stored as []model.ContentBlock; map
+		// them onto model.ChatMessage.ContentBlocks (Content is left as its
+		// block-dump only as a fallback; providers serialize ContentBlocks).
+		if blocks, ok := msg.Content.([]model.ContentBlock); ok {
+			prompt[i].ContentBlocks = blocks
 		}
 		// Extract tool_calls from Meta (assistant messages with tool calls).
 		if tc, ok := msg.Meta["tool_calls"]; ok {
