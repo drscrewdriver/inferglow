@@ -124,7 +124,16 @@
     "task_panel": true,
     "message_actions": true,
     "workspace_switch": true,
-    "skill_loader": true
+    "skill_loader": true,
+    "model_switch": true,
+    "effort": true,
+    "theme_switch": true,
+    "input_history": true,
+    "turn_stats": true,
+    "tps": true,
+    "cache_hit": true,
+    "welcome": true,
+    "health_check": true
   },
   "audit": {
     "enabled": false,
@@ -134,7 +143,22 @@
   "tui": {
     "theme": "dark",
     "show_reasoning": false,
-    "max_scrollback": 0
+    "max_scrollback": 0,
+    "reasoning_effort": "",
+    "health_check_interval": 60,
+    "health_probe_mode": "tcp",
+    "effort_scales": {
+      "deepseek": {
+        "off":  { "label": "关闭思考" },
+        "low":  { "params": { "reasoning_effort": "low" } },
+        "high": { "params": { "reasoning_effort": "high" } },
+        "max":  { "params": { "reasoning_effort": "max" } }
+      },
+      "mybox/thinking-model": {
+        "eco": { "params": { "thinking": { "type": "enabled", "budget_tokens": 1024 } } },
+        "pro": { "params": { "thinking": { "type": "enabled", "budget_tokens": 4096 } } }
+      }
+    }
   },
   "compress_model": {
     "endpoint": "",

@@ -125,7 +125,7 @@ cd E:\test\rewrite-agently\inferglow-github\cli\bin
 
 ### 4.2 完整配置示例
 
-完整字段示例见仓库文件：`cli/examples/config.example.json`
+完整字段示例见仓库文件：`cli/examples/config.example.json`（含 15 个 provider 的多路配置）
 
 ```json
 {
@@ -136,17 +136,32 @@ cd E:\test\rewrite-agently\inferglow-github\cli\bin
     "provider": "openai"
   },
   "providers": {
-    "active": "",
+    "active": "deepseek",
     "list": {
       "openai": {
         "endpoint": "https://api.openai.com/v1",
-        "model": "gpt-4o",
+        "model": "gpt-5.4",
         "provider": "openai"
       },
       "deepseek": {
         "endpoint": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-pro",
         "provider": "deepseek"
+      },
+      "google": {
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+        "model": "gemini-3.1-pro-preview",
+        "provider": "google"
+      },
+      "mistral": {
+        "endpoint": "https://api.mistral.ai/v1",
+        "model": "mistral-medium-latest",
+        "provider": "mistral"
+      },
+      "openrouter": {
+        "endpoint": "https://openrouter.ai/api/v1",
+        "model": "anthropic/claude-opus-4-7",
+        "provider": "openrouter"
       }
     }
   },
@@ -250,12 +265,59 @@ cd E:\test\rewrite-agently\inferglow-github\cli\bin
 
 | 字段 | 说明 |
 |---|---|
-| `active` | 当前激活的 provider 键（省略 = 回退 `~/.inferglow/model.json` 或单路 `llm`） |
+| `active` | 当前激活的 provider 键（`list` 中的某个键）。省略 = 回退 `~/.inferglow/model.json`（运行时 `/model` 选择）或单路 `llm` |
 | `list` | `map<provider键, LLMConfig>`：每个键是一路完整配置（endpoint/model/api_key/provider） |
 
-> 兼容规则：`providers.list` 为空且 `llm` 有值 → 单路模式（原行为）；`providers.list` 非空时
-> `/model` 选择器以 `list` 键为候选。运行时 `/model` 切换会写入 `~/.inferglow/model.json`
-> 并成为重启后的生效路由（优先级高于配置中的 `active`）。
+> **多路配置语义**
+> - `providers.list` 为空且 `llm` 有值 → 单路模式（原行为）。
+> - `providers.list` 非空时，`/model` 选择器以 `list` 键为候选；运行时 `/model` 切换写入
+>   `~/.inferglow/model.json`，重启后生效（优先级：`model.json` > `providers.active` > 单路 `llm`）。
+> - `list` 中每个键的 `provider` 字段决定协议路由：`google` 走原生 streamGenerateContent；
+>   `anthropic` 走 Anthropic Messages；其余（openai/deepseek/mistral/groq/xai/zai/openrouter/...）
+>   走 OpenAI 兼容协议（各 provider 的 effort wire 格式自动按 profile 翻译，见下方 effort 说明）。
+> - **api_key 建议留空并用环境变量**（如 `DEEPSEEK_API_KEY`），勿写死在配置文件。
+
+**支持的 `provider` 值**（`list` 键与 `llm.provider` 同源）：
+
+| 值 | 协议 | 默认模型 | 说明 |
+|---|---|---|---|
+| `openai` | OpenAI 兼容 | gpt-4 | |
+| `openai_responses` | OpenAI Responses | gpt-4o | o 系列推荐 |
+| `anthropic` | Anthropic Messages | claude-3-5-sonnet | |
+| `deepseek` | OpenAI 兼容 + thinking | deepseek-chat | effort 档位 off/low/high/max |
+| `qwen` | OpenAI 兼容 | qwen-max | 阿里 DashScope |
+| `glm` | OpenAI 兼容 | glm-4 | 智谱 bigmodel |
+| `kimi` | OpenAI 兼容 | moonshot-v1-8k | 月之暗面国内版 |
+| `google` | **原生 streamGenerateContent** | gemini-3.1-pro-preview | Gemini 3 / Gemma 4；effort wire 大写 LOW/HIGH |
+| `mistral` | OpenAI 兼容 | mistral-medium-latest | |
+| `groq` | OpenAI 兼容 | openai/gpt-oss-120b | |
+| `xai` | OpenAI 兼容 | grok-4.5 | |
+| `zai` | OpenAI 兼容 + thinking | glm-5.2 | Z.AI 新版 GLM；档位折叠 low/medium/high→high |
+| `moonshotai` | OpenAI 兼容 | kimi-k3 | 国际版 |
+| `together` | OpenAI 兼容 | openai/gpt-oss-120b | |
+| `nvidia` | OpenAI 兼容 | nemotron-3-super-120b | |
+| `cerebras` | OpenAI 兼容 | gpt-oss-120b | |
+| `huggingface` | OpenAI 兼容 | openai/gpt-oss-120b | Router 聚合 |
+| `fireworks` | OpenAI 兼容 | gpt-oss-120b | |
+| `qwen-token-plan-cn` | OpenAI 兼容 | qwen3.7-plus | 通义 Token 套餐 |
+| `openrouter` | OpenAI 兼容 + reasoning | openai/gpt-4o | 聚合；effort wire `reasoning:{effort}` |
+| `ollama` | OpenAI 兼容 | llama3 | 本地 |
+| `stepfun`/`baidu`/`spark`/`sensenova`/`mimo`/`tencent`/`volcengine`/`zeroone`/`minimax`/`siliconflow` | OpenAI 兼容 | 各默认 | 国内厂商 |
+
+> 完整 provider 目录与 effort thinkingLevelMap 参考：`docs/guides/effort-and-providers-pi-ai-reference.md`。
+
+**effort 的 wire 自动翻译**：`/effort` 选定的语义档位（如 `high`）由 model 层按 provider 的
+wire 格式翻译成实际请求参数，无需在配置里手动拼：
+
+| provider | wire 参数 |
+|---|---|
+| openai / 大多数 | `reasoning_effort: "high"` |
+| deepseek | `thinking:{type:"enabled"}` + `reasoning_effort:"high"` |
+| openrouter | `reasoning:{effort:"high"}` |
+| zai / glm | `thinking:{type:"enabled"}` + `reasoning_effort` |
+| qwen | `enable_thinking: true` |
+| google | `generationConfig.thinkingConfig.thinkingLevel: "HIGH"` |
+| anthropic | `thinking:{type:"enabled", effort:"..."}` |
 
 #### `tui`（TUI 专属）
 
