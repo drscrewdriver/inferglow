@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/inferglow/model"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -103,7 +104,7 @@ func (ct *CallbacksTracer) Callbacks() *AgentCallbacks {
 			)
 			ct.llmSpan = span
 		},
-		OnLLMCallEnd: func(ctx context.Context, round int, tokens int) {
+		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
 			ct.mu.Lock()
 			defer ct.mu.Unlock()
 			if ct.llmSpan != nil {

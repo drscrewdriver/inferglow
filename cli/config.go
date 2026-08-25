@@ -27,10 +27,23 @@ import (
 	"path/filepath"
 )
 
+// ProvidersConfig holds multiple provider endpoint configurations (RF-1).
+// When List is non-empty, multi-provider routing takes precedence over the
+// legacy single-route `llm` field.
+type ProvidersConfig struct {
+	// Active is the currently active provider key (omitted = fall back to
+	// ~/.inferglow/model.json or the single-route llm).
+	Active string `json:"active,omitempty"`
+	// List maps a provider key to its full LLM configuration. The key is
+	// also used as the route's provider name.
+	List map[string]LLMConfig `json:"list,omitempty"`
+}
+
 // CLIConfig holds the full configuration for the CLI agent.
 type CLIConfig struct {
-	LLM          LLMConfig    `json:"llm"`
-	DataDir      string       `json:"data_dir"`
+	LLM          LLMConfig      `json:"llm"`
+	Providers    ProvidersConfig `json:"providers,omitempty"` // RF-1: multi-provider routes
+	DataDir      string         `json:"data_dir"`
 	WorkspaceDir string       `json:"workspace_dir"`
 	Constitutional string     `json:"constitutional,omitempty"`
 	WindowTokens int          `json:"window_tokens"`
@@ -58,6 +71,27 @@ type TUIConfig struct {
 	Theme         string `json:"theme,omitempty"`          // "dark", "light", "auto"
 	ShowReasoning bool   `json:"show_reasoning"`           // display LLM reasoning steps
 	MaxScrollback int    `json:"max_scrollback,omitempty"` // max transcript lines (0=unlimited)
+	// ReasoningEffort is the /effort level: "low"|"medium"|"high"|"" (RF-2).
+	// "" = provider default (also used as the fallback when effort.json is absent).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// HealthCheckInterval is the API health-check period in seconds (RF-10).
+	// Defaults to 60 when zero; clamped to [10,600].
+	HealthCheckInterval int `json:"health_check_interval,omitempty"`
+	// HealthProbeMode selects the health-check probe strategy (RF-10):
+	// "tcp" (default, TCP dial) | "http" (GET {endpoint}/models) | "off".
+	HealthProbeMode string `json:"health_probe_mode,omitempty"`
+	// EffortScales overrides the per-model reasoning-effort scales (RF-2
+	// extension). Keys are "provider" or "provider/model"; each value maps a
+	// level name ("off"|"low"|"medium"|"high"|"max"|...) to its injection
+	// params (empty = no injection). Exact provider/model wins over provider,
+	// which wins over the built-in defaults.
+	EffortScales map[string]map[string]EffortScaleLevelCfg `json:"effort_scales,omitempty"`
+}
+
+// EffortScaleLevelCfg configures one effort level in tui.effort_scales.
+type EffortScaleLevelCfg struct {
+	Label  string         `json:"label,omitempty"`
+	Params map[string]any `json:"params,omitempty"` // injected into Options; empty = none
 }
 
 // LLMConfig holds LLM endpoint configuration.
@@ -78,7 +112,23 @@ type FeatureFlags struct {
 	ProactiveRecall  bool   `json:"proactive_recall"`  // Auto recall on session start
 	RuntimeModeSwitch bool  `json:"runtime_mode_switch"` // MC-3: enable /mode TUI command
 	TUIMode          bool   `json:"tui_mode"`          // Enable full-screen TUI mode
+	AutoBackground   bool   `json:"auto_background"`   // CM-2: auto-trigger /rebackground when Zone 1 (head buffer) is empty; false disables the auto project-analysis tool loop
 	OutputMode       string `json:"output_mode"`       // "tui", "cli", or "oneshot"; mirrors CLI flag dispatch
+	SlashCompat      bool   `json:"slash_compat"`      // SC-1: accept claude/pi/opencode/codex slash commands via alias catalog (default true)
+	SlashPopup       bool   `json:"slash_popup"`       // SC-2: IME-style "/" prefix autocomplete popup (default true)
+	TaskPanel        bool   `json:"task_panel"`        // SC-3: right-side task list panel (default true)
+	MessageActions   bool   `json:"message_actions"`   // SC-4: history message action menu (default true)
+	WorkspaceSwitch  bool   `json:"workspace_switch"`  // SC-5: workspace directory switching (default true)
+	SkillLoader      bool   `json:"skill_loader"`      // SC-6: load ~/.agents/skills as slash commands (default true)
+	ModelSwitch      bool   `json:"model_switch"`      // RF-1: runtime multi-provider/model switching (default true)
+	EffortControl    bool   `json:"effort"`            // RF-2: /effort reasoning-level control (default true)
+	ThemeSwitch      bool   `json:"theme_switch"`      // RF-3: /theme real switching (default true)
+	InputHistory     bool   `json:"input_history"`     // RF-5: persisted input history (default true)
+	TurnStats        bool   `json:"turn_stats"`        // RF-6: per-turn stats (thinking/tool durations) (default true)
+	TPS              bool   `json:"tps"`               // RF-7: TPS output efficiency (default true)
+	CacheHit         bool   `json:"cache_hit"`         // RF-8: cache hit rate (default true)
+	Welcome          bool   `json:"welcome"`           // RF-9: startup welcome page (default true)
+	HealthCheck      bool   `json:"health_check"`      // RF-10: API health check (default true)
 }
 
 // DefaultCLIConfig returns a CLIConfig with sensible defaults.
@@ -103,11 +153,29 @@ func DefaultCLIConfig() CLIConfig {
 			MetaInstructions:  true,
 			RuntimeModeSwitch: true,
 			TUIMode:           true,
+			AutoBackground:    true,
+			SlashCompat:       true,
+			SlashPopup:        true,
+			TaskPanel:         true,
+			MessageActions:    true,
+			WorkspaceSwitch:   true,
+			SkillLoader:       true,
+			ModelSwitch:       true,
+			EffortControl:     true,
+			ThemeSwitch:       true,
+			InputHistory:      true,
+			TurnStats:         true,
+			TPS:               true,
+			CacheHit:          true,
+			Welcome:           true,
+			HealthCheck:       true,
 		},
 		ContextMode:  "hybrid",
 		TUI: TUIConfig{
-			Theme:         "dark",
-			ShowReasoning: false,
+			Theme:              "dark",
+			ShowReasoning:      false,
+			HealthCheckInterval: 60,
+			HealthProbeMode:     "tcp",
 		},
 	}
 }

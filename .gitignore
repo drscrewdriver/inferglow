@@ -5,7 +5,20 @@ graphify-out/
 
 # Build artifacts
 bin/inferglow-cli
+bin/inferglow-cli.exe
+cli/bin/
 cli/inferglow-cli
 server/inferglow-server.exe
 sandbox/seatbelt_loader.exe
 bin/seatbelt-loader
+
+# Go build cache / local toolchain (used for reproducible builds)
+.gobuild/
+
+# Session planning working files (not part of the repo)
+task_plan.md
+task_plan_llm_port.md
+findings.md
+findings_llm_port.md
+progress.md
+progress_llm_port.md

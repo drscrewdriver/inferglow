@@ -57,24 +57,61 @@ func buildModelRequester(cfg CLIConfig) (model.ModelRequester, error) {
 		provider: providerValues,
 	}}
 
+	var req model.ModelRequester
+	var err error
 	switch provider {
 	case "deepseek":
-		return model.NewDeepSeekProviderFromConfig(cp)
+		req, err = model.NewDeepSeekProviderFromConfig(cp)
 	case "anthropic":
-		return model.NewAnthropicProviderFromConfig(cp)
+		req, err = model.NewAnthropicProviderFromConfig(cp)
 	case "qwen":
-		return model.NewQwenProviderFromConfig(cp)
+		req, err = model.NewQwenProviderFromConfig(cp)
 	case "glm":
-		return model.NewGLMProviderFromConfig(cp)
+		req, err = model.NewGLMProviderFromConfig(cp)
 	case "kimi":
-		return model.NewKimiProviderFromConfig(cp)
+		req, err = model.NewKimiProviderFromConfig(cp)
 	case "mimo":
-		return model.NewMiMoProviderFromConfig(cp)
+		req, err = model.NewMiMoProviderFromConfig(cp)
+	// LLM-provider-port P5: 新增 OpenAI 兼容 provider。
+	case "mistral":
+		req, err = model.NewMistralProviderFromConfig(cp)
+	case "groq":
+		req, err = model.NewGroqProviderFromConfig(cp)
+	case "xai":
+		req, err = model.NewXAIProviderFromConfig(cp)
+	case "together":
+		req, err = model.NewTogetherProviderFromConfig(cp)
+	case "zai":
+		req, err = model.NewZAIProviderFromConfig(cp)
+	case "moonshotai":
+		req, err = model.NewMoonshotAIProviderFromConfig(cp)
+	case "nvidia":
+		req, err = model.NewNVIDIAProviderFromConfig(cp)
+	// Google 原生协议（非 OpenAI 兼容）。
+	case "google":
+		req, err = model.NewGoogleProviderFromConfig(cp)
+	// LLM-provider-port P5 长尾：同为 OpenAI 兼容。
+	case "cerebras":
+		req, err = model.NewCerebrasProviderFromConfig(cp)
+	case "huggingface":
+		req, err = model.NewHuggingFaceProviderFromConfig(cp)
+	case "fireworks":
+		req, err = model.NewFireworksProviderFromConfig(cp)
+	case "qwen-token-plan-cn":
+		req, err = model.NewQwenTokenPlanCNProviderFromConfig(cp)
 	default:
 		// Default to OpenAI-compatible (covers local servers, vLLM, Ollama with
 		// OpenAI compat, etc.)
-		return model.NewOpenAIProviderFromConfig(cp)
+		req, err = model.NewOpenAIProviderFromConfig(cp)
 	}
+	if err != nil {
+		return nil, err
+	}
+	// LLM-provider-port (P1): wire the provider profile's effort protocol
+	// facts (wire format + per-model level map) into the requester. No-op for
+	// unknown providers/models (legacy raw passthrough preserved).
+	model.ApplyEffortProfile(req, provider, cfg.LLM.Model)
+	return req, nil
 }
 
 // buildCompressModelClient constructs a compress.CompressModelClient from an

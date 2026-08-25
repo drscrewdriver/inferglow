@@ -440,3 +440,100 @@ func NewOpenAIResponsesProviderFromConfig(cp ConfigProvider, prefix string) (*Op
 		FullURL:    cfg.FullURL,
 	}, nil
 }
+
+// === LLM-provider-port P5: 新增 OpenAI 兼容 provider（Mistral/Groq/xAI/Together/ZAI/Moonshot 国际/NVIDIA）===
+// 这些 provider 均复用 OpenAI 兼容协议，仅 prefix 与 ProviderName 不同。
+// 统一构造器避免逐个复制；NewOpenAICompatProviderFromConfig(cp, prefix, providerName)。
+
+// NewOpenAICompatProviderFromConfig 按 prefix 加载配置并构造
+// OpenAICompatibleProvider（ProviderName=providerName，空则用 prefix）。
+func NewOpenAICompatProviderFromConfig(cp ConfigProvider, prefix, providerName string) (*OpenAICompatibleProvider, error) {
+	cfg, err := LoadProviderConfig(cp, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("load %s provider config: %w", prefix, err)
+	}
+	if providerName == "" {
+		providerName = prefix
+	}
+	return &OpenAICompatibleProvider{
+		BaseURL:      cfg.BaseURL,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		HTTPClient:   cfg.HTTPClient,
+		FullURL:      cfg.FullURL,
+		ContentMapping: cfg.ContentMap,
+		ProviderName: providerName,
+	}, nil
+}
+
+// NewMistralProviderFromConfig 构造 Mistral AI Provider（OpenAI 兼容端点）。
+func NewMistralProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "mistral", "mistral")
+}
+
+// NewGroqProviderFromConfig 构造 Groq Provider。
+func NewGroqProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "groq", "groq")
+}
+
+// NewXAIProviderFromConfig 构造 xAI Grok Provider。
+func NewXAIProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "xai", "xai")
+}
+
+// NewTogetherProviderFromConfig 构造 Together AI Provider。
+func NewTogetherProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "together", "together")
+}
+
+// NewZAIProviderFromConfig 构造 Z.AI（智谱 GLM 新版）Provider。
+func NewZAIProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "zai", "zai")
+}
+
+// NewMoonshotAIProviderFromConfig 构造 Moonshot 国际版 Provider。
+func NewMoonshotAIProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "moonshotai", "moonshotai")
+}
+
+// NewNVIDIAProviderFromConfig 构造 NVIDIA NIM Provider。
+func NewNVIDIAProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "nvidia", "nvidia")
+}
+
+// NewCerebrasProviderFromConfig 构造 Cerebras Provider（长尾）。
+func NewCerebrasProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "cerebras", "cerebras")
+}
+
+// NewHuggingFaceProviderFromConfig 构造 Hugging Face Router Provider（长尾）。
+func NewHuggingFaceProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "huggingface", "huggingface")
+}
+
+// NewFireworksProviderFromConfig 构造 Fireworks AI Provider（长尾，OpenAI 兼容端点）。
+func NewFireworksProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "fireworks", "fireworks")
+}
+
+// NewQwenTokenPlanCNProviderFromConfig 构造通义 Token 套餐 Provider（长尾）。
+func NewQwenTokenPlanCNProviderFromConfig(cp ConfigProvider) (*OpenAICompatibleProvider, error) {
+	return NewOpenAICompatProviderFromConfig(cp, "qwen-token-plan-cn", "qwen-token-plan-cn")
+}
+
+// NewGoogleProviderFromConfig 构造 Google Generative Language 原生 Provider。
+// 默认 base_url: https://generativelanguage.googleapis.com/v1beta
+// 走原生 streamGenerateContent 协议（非 OpenAI 兼容），支持 Gemini 3 thinkingLevel。
+func NewGoogleProviderFromConfig(cp ConfigProvider) (*GoogleGenerativeProvider, error) {
+	cfg, err := LoadProviderConfig(cp, "google")
+	if err != nil {
+		return nil, fmt.Errorf("load google provider config: %w", err)
+	}
+	return &GoogleGenerativeProvider{
+		BaseURL:      cfg.BaseURL,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		HTTPClient:   cfg.HTTPClient,
+		ProviderName: "google",
+	}, nil
+}

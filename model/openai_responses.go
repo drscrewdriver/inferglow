@@ -76,6 +76,12 @@ type OpenAIResponsesProvider struct {
 	// to "system", its content is appended to `instructions` instead of
 	// being emitted in the `input` array.
 	RoleMapping map[string]string
+	// EffortFormat / EffortLevels: same semantic-effort translation contract
+	// as OpenAICompatibleProvider (LLM-provider-port P0). The Responses API
+	// takes reasoning as `reasoning: {effort: "..."}`; when no level map is
+	// declared, Options["reasoning_effort"] passes through raw (legacy).
+	EffortFormat EffortWireFormat
+	EffortLevels EffortLevelMap
 }
 
 // Name returns the provider identifier. Defaults to "openai-responses".
@@ -97,6 +103,42 @@ func (p *OpenAIResponsesProvider) effectiveHTTPClient() *http.Client {
 // Responses-API callers get consistent role handling.
 func (p *OpenAIResponsesProvider) mapRole(role string) string {
 	return ssestream.MapRole(role, p.RoleMapping)
+}
+
+// effortWireParams mirrors OpenAICompatibleProvider.effortWireParams: it
+// translates a semantic effort level into the Responses-API wire shape using
+// the configured EffortFormat/EffortLevels. With no level map the raw value
+// passes through as reasoning_effort (legacy behavior).
+func (p *OpenAIResponsesProvider) effortWireParams(level any) map[string]any {
+	if level == nil {
+		return nil
+	}
+	format := p.EffortFormat
+	if format == "" {
+		format = EffortOpenAI
+	}
+	if p.EffortLevels == nil {
+		if s, ok := level.(string); ok {
+			return map[string]any{"reasoning_effort": s}
+		}
+		return nil
+	}
+	s, ok := level.(string)
+	if !ok {
+		return nil
+	}
+	return TranslateEffort(format, s, p.EffortLevels)
+}
+
+// applyEffortProfile wires registry protocol facts into the provider
+// (implements model.EffortProfileApplier).
+func (p *OpenAIResponsesProvider) applyEffortProfile(mp ModelProfile) {
+	if mp.EffortFormat != "" {
+		p.EffortFormat = mp.EffortFormat
+	}
+	if mp.EffortLevels != nil {
+		p.EffortLevels = mp.EffortLevels
+	}
 }
 
 // GenerateRequestData converts a ModelRequest into the Responses API shape.
@@ -247,6 +289,17 @@ func (p *OpenAIResponsesProvider) RequestModel(ctx context.Context, data *Reques
 	// which we already promoted to a top-level field).
 	for k, v := range data.Options {
 		if k == "instructions" {
+			continue
+		}
+		// LLM-provider-port (P0): translate the semantic effort level into
+		// the Responses-API wire shape (reasoning:{effort}). Raw value
+		// passes through when no level map is declared (legacy).
+		if k == "reasoning_effort" {
+			if wire := p.effortWireParams(v); wire != nil {
+				for wk, wv := range wire {
+					reqBody[wk] = wv
+				}
+			}
 			continue
 		}
 		reqBody[k] = v

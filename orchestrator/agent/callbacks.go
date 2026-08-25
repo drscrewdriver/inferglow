@@ -24,6 +24,7 @@ import (
 	"context"
 
 	"github.com/inferglow/action"
+	"github.com/inferglow/model"
 )
 
 // ToolCallDecision 是 PreToolCall 钩子返回的干预决策。
@@ -64,8 +65,9 @@ type AgentCallbacks struct {
 	// round is the current iteration number (0-based).
 	OnLLMCallStart func(ctx context.Context, round int)
 	// OnLLMCallEnd is called after each LLM invocation completes.
-	// tokens is the approximate token count of the response.
-	OnLLMCallEnd func(ctx context.Context, round int, tokens int)
+	// tokens is the approximate token count of the response; usage is the
+	// provider-reported token usage (nil when the provider returns none).
+	OnLLMCallEnd func(ctx context.Context, round int, tokens int, usage *model.UsageInfo)
 	// OnToolCallStart is called before a tool/action is executed.
 	OnToolCallStart func(ctx context.Context, toolName string)
 	// OnToolCallEnd is called after a tool/action completes.
@@ -121,9 +123,9 @@ func fireOnLLMCallStart(cb *AgentCallbacks, ctx context.Context, round int) {
 }
 
 // fireOnLLMCallEnd invokes OnLLMCallEnd if non-nil.
-func fireOnLLMCallEnd(cb *AgentCallbacks, ctx context.Context, round int, tokens int) {
+func fireOnLLMCallEnd(cb *AgentCallbacks, ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
 	if cb != nil && cb.OnLLMCallEnd != nil {
-		cb.OnLLMCallEnd(ctx, round, tokens)
+		cb.OnLLMCallEnd(ctx, round, tokens, usage)
 	}
 }
 

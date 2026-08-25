@@ -68,6 +68,14 @@ type Engine struct {
 	session   *SessionExtension
 	actionExt *ActionExtension
 	modelReq  model.StreamRequester
+	// modelReqOverride, when non-nil, replaces modelReq for the current run
+	// (RF-1: per-run /model switching). Propagated from Agent.Run via
+	// WithModelRequester; reset per run. nil keeps modelReq.
+	modelReqOverride model.StreamRequester
+	// modelOptions, when non-nil, are merged into every ModelRequest.Options
+	// of the current run (RF-2: /effort injection). Caller keys win over
+	// engine-built keys. Propagated from Agent.Run via WithModelOptions.
+	modelOptions map[string]any
 	auditHook audit.AuditHook
 	loopGuard *LoopGuard
 
@@ -195,6 +203,16 @@ func NewEngine(sess *SessionExtension, actExt *ActionExtension, mr model.StreamR
 	}
 }
 
+// activeRequester returns the per-run override when set, otherwise the
+// engine's construction-time requester (RF-1). Never returns nil when the
+// engine was built through a constructor.
+func (e *Engine) activeRequester() model.StreamRequester {
+	if e.modelReqOverride != nil {
+		return e.modelReqOverride
+	}
+	return e.modelReq
+}
+
 // RunLoop executes a complete PLAN→EXECUTE agent loop and returns the final
 // response text. It is the public entry point for external callers (e.g.
 // inferflow's FlowContext) that need multi-turn agent capabilities without
@@ -243,13 +261,13 @@ func (e *Engine) synthesiseResponse(ctx context.Context, systemPrompt string) (s
 		ChatHistory: e.session.PreparePrompt(),
 		Options:     map[string]any{"force_json": false},
 	}
-	data, err := e.modelReq.GenerateRequestData(ctx, synthReq)
+	data, err := e.activeRequester().GenerateRequestData(ctx, synthReq)
 	if err != nil {
 		return "", err
 	}
 	synthCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	stream, err := e.modelReq.RequestModel(synthCtx, data)
+	stream, err := e.activeRequester().RequestModel(synthCtx, data)
 	if err != nil {
 		return "", err
 	}
@@ -500,14 +518,22 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				return nil
 			}(),
 			Options: func() map[string]any {
+				var opts map[string]any
 				if hasTools {
 					// With tools, skip force_json to allow native function calling.
 					// response_format conflicts with tool_calls in OpenAI-compatible APIs.
 					// Increase max_tokens for agent loops to handle large tool arguments
 					// (e.g., code_executor with multi-KB source code).
-					return map[string]any{"max_tokens": 16384}
+					opts = map[string]any{"max_tokens": 16384}
+				} else {
+					opts = map[string]any{"force_json": true}
 				}
-				return map[string]any{"force_json": true}
+				// RF-2: merge per-run options (e.g. /effort reasoning_effort).
+				// Caller keys win over engine-built keys. nil map is a no-op.
+				for k, v := range e.modelOptions {
+					opts[k] = v
+				}
+				return opts
 			}(),
 		}
 		// Only set Output schema when there are NO tools. When tools are
@@ -560,7 +586,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		}
 
 		// Call LLM
-		data, err := e.modelReq.GenerateRequestData(ctx, req)
+		data, err := e.activeRequester().GenerateRequestData(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -576,7 +602,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			streamTimeout = 5 * time.Minute
 		}
 		timeoutCtx, cancelTimeout := context.WithTimeout(ctx, streamTimeout)
-		stream, err := e.modelReq.RequestModel(timeoutCtx, data)
+		stream, err := e.activeRequester().RequestModel(timeoutCtx, data)
 		if err != nil {
 			cancelTimeout()
 			return nil, err
@@ -656,13 +682,13 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 					isFirst = false
 					return &model.ModelResponse{Content: firstContent}, nil
 				}
-				retryData, rErr := e.modelReq.GenerateRequestData(ctx, req)
+				retryData, rErr := e.activeRequester().GenerateRequestData(ctx, req)
 				if rErr != nil {
 					return nil, rErr
 				}
 				retryTimeoutCtx, cancelRetry := context.WithTimeout(ctx, streamTimeout)
 				defer cancelRetry()
-				retryStream, rErr := e.modelReq.RequestModel(retryTimeoutCtx, retryData)
+				retryStream, rErr := e.activeRequester().RequestModel(retryTimeoutCtx, retryData)
 				if rErr != nil {
 					return nil, rErr
 				}
@@ -707,7 +733,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 		if lastUsage != nil && lastUsage.CompletionTokens > 0 {
 			endTokens = lastUsage.CompletionTokens
 		}
-		fireOnLLMCallEnd(e.callbacks, ctx, round, endTokens)
+		fireOnLLMCallEnd(e.callbacks, ctx, round, endTokens, lastUsage)
 
 		// Build decision: prefer native tool calls over custom JSON schema.
 		var decision *actionruntime.Decision
@@ -762,7 +788,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				if modelName == "" {
 					modelName = data.Model
 				}
-				providerName := e.modelReq.Name()
+				providerName := e.activeRequester().Name()
 				if providerName == "" {
 					providerName = "unknown"
 				}

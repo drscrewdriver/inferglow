@@ -49,15 +49,42 @@ func (m *chatTUI) primaryStatusLine() string {
 	default:
 		status += " · " + footerValue("Idle")
 	}
+	// RF-10: API health indicator (● online / ○ offline).
+	if h := m.renderHealth(); h != "" {
+		status += " · " + h
+	}
+	// SC-5: workspace indicator in the status bar.
+	if m.cfg.Features.WorkspaceSwitch {
+		if ws := m.workspace.RenderStatus(); ws != "" {
+			status += " · " + footerHint(ws)
+		}
+	}
 	status += " · " + footerHint("Ctrl+C quit")
 	return status
 }
 
-// statusModelGroup renders the right side: model + context info.
+// statusModelGroup renders the right side: model route + effort + tps +
+// cache + context info.
 func (m *chatTUI) statusModelGroup() string {
 	var parts []string
 	if m.modelLabel != "" {
 		parts = append(parts, footerMetric("model:", footerInfo(m.modelLabel)))
+	}
+	// RF-2: effort level in the status bar.
+	if m.cfg.Features.EffortControl {
+		parts = append(parts, footerMetric("effort:", footerInfo(m.effortStatus())))
+	}
+	// RF-7: live TPS gauge while streaming, history sparkline when idle.
+	if m.state == tuiRunning {
+		if tps := m.renderLiveTPS(); tps != "" {
+			parts = append(parts, tps)
+		}
+	} else if tps := m.renderHistoryTPS(); tps != "" {
+		parts = append(parts, tps)
+	}
+	// RF-8: cache hit rate.
+	if cache := m.renderCacheHit(); cache != "" {
+		parts = append(parts, cache)
 	}
 	// Context usage.
 	stats := m.bridge.Stats()
@@ -70,6 +97,10 @@ func (m *chatTUI) statusModelGroup() string {
 		ctxValue := fmt.Sprintf("%s / %s (%d%%)",
 			shortTokens(stats.TotalTokens), shortTokens(window), pct)
 		parts = append(parts, footerMetric("ctx:", ctxValue))
+	}
+	// RF-4: narrow terminals (<100 cols) degrade to model · effort only.
+	if m.width > 0 && m.width < 100 {
+		parts = parts[:min(len(parts), 2)]
 	}
 	return strings.Join(parts, "  ")
 }

@@ -41,6 +41,46 @@ type AnthropicCompatibleProvider struct {
 	// FullURL overrides BaseURL + defaultPath ("/v1/messages") when
 	// non-empty. Spec: model-parity Phase 1 — full_url 覆盖.
 	FullURL string
+	// EffortFormat / EffortLevels: same semantic-effort translation contract
+	// as OpenAICompatibleProvider (LLM-provider-port P0). Anthropic takes
+	// thinking:{type:"enabled", effort:"..."}; with no level map the raw
+	// Options["reasoning_effort"] passes through (legacy).
+	EffortFormat EffortWireFormat
+	EffortLevels EffortLevelMap
+}
+
+// effortWireParams mirrors OpenAICompatibleProvider.effortWireParams. With no
+// level map the raw value passes through as reasoning_effort (legacy).
+func (p *AnthropicCompatibleProvider) effortWireParams(level any) map[string]any {
+	if level == nil {
+		return nil
+	}
+	format := p.EffortFormat
+	if format == "" {
+		format = EffortAnthropic
+	}
+	if p.EffortLevels == nil {
+		if s, ok := level.(string); ok {
+			return map[string]any{"reasoning_effort": s}
+		}
+		return nil
+	}
+	s, ok := level.(string)
+	if !ok {
+		return nil
+	}
+	return TranslateEffort(format, s, p.EffortLevels)
+}
+
+// applyEffortProfile wires registry protocol facts into the provider
+// (implements model.EffortProfileApplier).
+func (p *AnthropicCompatibleProvider) applyEffortProfile(mp ModelProfile) {
+	if mp.EffortFormat != "" {
+		p.EffortFormat = mp.EffortFormat
+	}
+	if mp.EffortLevels != nil {
+		p.EffortLevels = mp.EffortLevels
+	}
 }
 
 // Name 返回 Provider 名称
@@ -337,6 +377,17 @@ func (p *AnthropicCompatibleProvider) RequestModel(ctx context.Context, data *Re
 		for k, v := range data.Options {
 			if k == "_anthropic_system" {
 				reqBody["system"] = v
+				continue
+			}
+			// LLM-provider-port (P0): translate the semantic effort level
+			// into the Anthropic wire shape (thinking:{type,effort}). Raw
+			// value passes through when no level map is declared (legacy).
+			if k == "reasoning_effort" {
+				if wire := p.effortWireParams(v); wire != nil {
+					for wk, wv := range wire {
+						reqBody[wk] = wv
+					}
+				}
 				continue
 			}
 			reqBody[k] = v

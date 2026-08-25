@@ -70,6 +70,22 @@ type chatTUI struct {
 	sessionID  string
 	modelLabel string
 
+	// RF-1: effective model route + per-run requester (/model switching).
+	route     ModelRoute
+	requester model.ModelRequester // nil → agent's construction-time requester
+	// RF-2: reasoning effort level ("", "auto", or a scale level name).
+	effort string
+	// RF-2: per-model effort scales (config overrides + built-in defaults).
+	effortScales []EffortScale
+	// RF-1: interactive model picker state.
+	picker modelPicker
+
+	// RF-9: startup welcome page state.
+	welcome tuiWelcome
+
+	// RF-10: API health checker.
+	health healthChecker
+
 	// Terminal dimensions.
 	width  int
 	height int
@@ -124,6 +140,11 @@ type chatTUI struct {
 	receipt       turnReceipt
 	sessionTokensIn  int
 	sessionTokensOut int
+	// RF-6: reasoning/tool timing windows.
+	thinkingStart time.Time
+	toolStart     map[string]time.Time
+	// RF-7: TPS tracker.
+	tps tpsTracker
 	
 	// Scrollback mode.
 	scrollbackMode   bool
@@ -136,6 +157,19 @@ type chatTUI struct {
 
 	// OT-14: slash command registry.
 	cmdRegistry *SlashRegistry
+
+	// SC-2: IME-style "/" prefix autocomplete popup.
+	completion completionPopup
+
+	// SC-3: right-side task list panel.
+	taskPanel       TaskPanel
+	taskPanelUserSet bool // user toggled the panel via /tasks; disables auto-show
+
+	// SC-4: history message action menu (selection mode + actions).
+	messageActions MessageActionsMenu
+
+	// SC-5: workspace directory switching.
+	workspace WorkspaceSwitch
 
 	// Quit control.
 	lastCtrlCAt time.Time
@@ -259,17 +293,41 @@ func newChatTUI(ag *agent.Agent, bridge *MemoryBridge, cfg CLIConfig, sessionID 
 
 	vp := viewport.New()
 
-	modelLabel := cfg.LLM.Model
-	if modelLabel == "" {
-		modelLabel = "default"
+	// RF-1: resolve the effective model route (config / persisted pref) and
+	// build the initial per-run requester. Requester build failures are
+	// non-fatal: m.requester stays nil and the agent's construction-time
+	// requester is used.
+	route := resolveModelRoute(cfg, readModelPref())
+	modelLabel := route.Provider + "/" + route.Model
+	var requester model.ModelRequester
+	if route.Endpoint != "" {
+		if req, err := buildModelRequester(route.routeConfig()); err == nil {
+			requester = req
+		}
 	}
 
-	return chatTUI{
+	// RF-2: effort level from persisted pref, falling back to config. The
+	// scales (config overrides + built-ins) are built once; the level is
+	// re-validated against the route's scale on /model switches.
+	effort := readEffortPref()
+	if effort == "" {
+		effort = cfg.TUI.ReasoningEffort
+	}
+	effortScales := buildEffortScales(cfg.TUI.EffortScales)
+	if scale, ok := resolveEffortScale(route.Provider, route.Model, effortScales); !ok || !effortLevelValid(scale, effort) {
+		effort = ""
+	}
+
+	m := chatTUI{
 		agent:       ag,
 		bridge:      bridge,
 		cfg:         cfg,
 		sessionID:   sessionID,
 		modelLabel:  modelLabel,
+		route:       route,
+		requester:   requester,
+		effort:      effort,
+		effortScales: effortScales,
 		state:       tuiIdle,
 		composer:    composer.New(composer.DefaultConfig()),
 		input:       ti,
@@ -280,7 +338,32 @@ func newChatTUI(ag *agent.Agent, bridge *MemoryBridge, cfg CLIConfig, sessionID 
 		answerIdx:   -1,
 		nextPasteID: 1,
 		cmdRegistry: buildSlashRegistry(cfg),
+		workspace:   *newWorkspaceSwitch(),
+		health:      newHealthChecker(cfg),
 	}
+	// RF-5: load persisted input history for ↑ recall after restart.
+	if cfg.Features.InputHistory {
+		m.submittedInputs = loadInputHistory()
+	}
+
+	// RF-3: restore the persisted theme (best-effort).
+	if cfg.Features.ThemeSwitch {
+		if theme := readThemePref(); theme != "" {
+			_ = applyTheme(theme)
+			applyTextareaTheme(&ti)
+		}
+	}
+
+	// RF-9: show the welcome page on first run (features.welcome gate).
+	if cfg.Features.Welcome && !welcomeSeenFrom(welcomeSeenPath()) {
+		m.welcome.visible = true
+		markWelcomeSeen()
+	}
+	// SC-6: load ~/.agents/skills into the registry so every installed skill
+	// is summonable as /<skill>. Runs after buildSlashRegistry so native
+	// commands keep priority over same-named skills.
+	registerSkillCommands(m.cmdRegistry, cfg)
+	return m
 }
 
 // applyTextareaTheme configures the textarea with the active theme.
@@ -294,11 +377,16 @@ func applyTextareaTheme(ti *textarea.Model) {
 // Init implements tea.Model.
 func (m *chatTUI) Init() tea.Cmd {
 	focusCmd := m.input.Focus()
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		focusCmd,
 		textarea.Blink,
 		m.waitForAgentEvent(),
-	)
+	}
+	// RF-10: arm the periodic API health check.
+	if hc := m.healthTickCmd(); hc != nil {
+		cmds = append(cmds, hc)
+	}
+	return tea.Batch(cmds...)
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +405,9 @@ func (m *chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Post-update: sync viewport dimensions to match current layout.
 	contentW := max(cm.width-1, 1)
+	if cm.taskPanel.Active() && cm.taskPanel.HasTasks() {
+		contentW = max(contentW-cm.taskPanel.Width(), taskPanelMinTranscriptWidth)
+	}
 	cm.viewport.SetWidth(contentW)
 	cm.viewport.SetHeight(cm.transcriptHeight())
 
@@ -354,6 +445,12 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(max(msg.Width-4, 1))
+		// SC-3: auto-show the task panel on wide terminals unless the user
+		// explicitly toggled it via /tasks.
+		if m.cfg.Features.TaskPanel && !m.taskPanelUserSet && msg.Width >= taskPanelAutoShowMinWidth && !m.taskPanel.Active() {
+			m.taskPanel.active = true
+			m.taskPanel.Sync(m.bridge.TaskStore())
+		}
 		return m, tea.Batch(cmds...)
 
 	case tuiShutdownMsg:
@@ -426,6 +523,14 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner = sp
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
+
+	case healthTickMsg:
+		// RF-10: probe only while idle (never steal bandwidth mid-turn).
+		if m.state == tuiIdle {
+			m.checkAll()
+		}
+		// Always re-arm the periodic tick.
+		return m, tea.Batch(append(cmds, m.healthTickCmd())...)
 	}
 
 	// ---- Key handling: intercept special keys BEFORE textarea ----
@@ -459,6 +564,87 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// RF-9: welcome page intercepts esc/q (close) and tab (page).
+		if m.welcome.visible && m.state == tuiIdle && !m.picker.active {
+			switch keyMsg.String() {
+			case "esc", "q":
+				m.welcome.visible = false
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			case "tab":
+				tips := tipsForGroup(m.welcome.group)
+				pages := (len(tips) + welcomePageSize - 1) / welcomePageSize
+				if pages < 1 {
+					pages = 1
+				}
+				m.welcome.page = (m.welcome.page + 1) % pages
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		// RF-1: model picker intercepts navigation keys while active.
+		if m.picker.active && m.state == tuiIdle {
+			if m.handlePickerKey(keyMsg.String()) {
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		// SC-4: message selection mode + action menu intercept keys first.
+		if m.messageActions.active {
+			switch keyMsg.String() {
+			case "esc":
+				if m.messageActions.MenuVisible() {
+					m.messageActions.CloseMenu()
+				} else {
+					m.messageActions.Exit()
+					m.commitSystemNote(dim("Message actions cancelled."))
+				}
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			case "up":
+				if m.messageActions.MenuVisible() {
+					m.messageActions.MoveMenu(-1)
+				} else {
+					m.messageActions.Move(-1)
+				}
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			case "down":
+				if m.messageActions.MenuVisible() {
+					m.messageActions.MoveMenu(+1)
+				} else {
+					m.messageActions.Move(+1)
+				}
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			case "o", "enter":
+				if !m.messageActions.MenuVisible() {
+					m.messageActions.OpenMenu()
+					m.transcriptDirty = true
+					return m, tea.Batch(cmds...)
+				}
+				m.executeMessageAction()
+				return m, tea.Batch(cmds...)
+			default:
+				// Swallow other keys while in selection mode.
+				return m, tea.Batch(cmds...)
+			}
+		}
+		// SC-4: enter message selection mode on m/a when idle, no popup, no
+		// pending approval and an empty input box (typing m/a stays normal).
+		if (keyMsg.String() == "m" || keyMsg.String() == "a") &&
+			m.cfg.Features.MessageActions && m.state == tuiIdle &&
+			!m.completion.active && m.pendingApproval == nil &&
+			strings.TrimSpace(m.input.Value()) == "" {
+			m.messageActions.EnterSelectionMode(m.collectUserMessages())
+			if m.messageActions.Active() {
+				m.commitSystemNote(dim("Message selection mode: [↑↓] select, [o] menu, [Esc] exit"))
+				m.transcriptDirty = true
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Composer: printable characters route through the input state
 		// machine; special keys (except Enter) flush pending state first.
 		// "v" is reserved for visual selection and must reach the switch.
@@ -472,11 +658,30 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			acts := m.composer.Feed(composer.Event{Kind: kind, Text: keyMsg.Text, Now: time.Now()})
 			m.applyComposerActions(acts)
+			// SC-2: refresh the completion popup after the character lands
+			// in the input.
+			if m.cfg.Features.SlashPopup {
+				if m.completion.wantsOpen(m.input.Value(), m.state) {
+					m.completion.Refresh(strings.TrimPrefix(m.input.Value(), "/"), m.cmdRegistry)
+				} else if !m.completion.isCycling(m.input.Value()) && m.completion.active {
+					m.completion.Close()
+				}
+			}
 			return m, tea.Batch(append(cmds, m.composerTickCmd())...)
 		}
 		if keyMsg.String() != "enter" {
 			acts := m.composer.Feed(composer.Event{Kind: composer.EventModifiedInput, Now: time.Now()})
 			m.applyComposerActions(acts)
+		}
+
+		// SC-2: keep the popup in sync with the input context for all other
+		// keys (tab/enter/esc/up/down handled inside the switch below).
+		if m.cfg.Features.SlashPopup {
+			if m.completion.wantsOpen(m.input.Value(), m.state) {
+				m.completion.Refresh(strings.TrimPrefix(m.input.Value(), "/"), m.cmdRegistry)
+			} else if !m.completion.isCycling(m.input.Value()) && m.completion.active {
+				m.completion.Close()
+			}
 		}
 
 		switch keyMsg.String() {
@@ -593,6 +798,10 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "esc":
+			if m.completion.active {
+				m.completion.Close()
+				return m, tea.Batch(cmds...)
+			}
 			if m.selectionMode {
 				m.exitSelectionMode()
 				m.commitSystemNote(dim("Selection cancelled."))
@@ -608,6 +817,26 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "tab":
+			// SC-2: popup Tab — single candidate completes; multiple align
+			// to the longest common prefix first, then cycle through the
+			// candidates committing each name into the input (placeholder
+			// semantics: nothing executes until Enter).
+			if m.completion.active {
+				switch len(m.completion.items) {
+				case 1:
+					m.input.SetValue("/" + m.completion.items[0].Name + " ")
+					m.completion.Close()
+					return m, tea.Batch(cmds...)
+				case 0:
+					m.completion.Close()
+					return m, tea.Batch(cmds...)
+				default:
+					if newInput := m.completion.Cycle(m.input.Value()); newInput != "" {
+						m.input.SetValue(newInput)
+					}
+					return m, tea.Batch(cmds...)
+				}
+			}
 			// OT-14: slash command auto-completion.
 			if m.cmdRegistry != nil && m.state == tuiIdle {
 				val := m.input.Value()
@@ -628,6 +857,23 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
+			// SC-2: popup Enter — commit the selected candidate. Skill
+			// candidates are placeholders (SC-6): the command name lands in
+			// the input box and is only activated when the user confirms
+			// with a second Enter. All other candidates dispatch directly.
+			if m.completion.active {
+				if sel := m.completion.Selected(); sel != nil {
+					cmd, quit := m.commitPopupSelection(sel)
+					if quit {
+						return m, tea.Quit
+					}
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+					return m, tea.Batch(cmds...)
+				}
+				// No selection: fall through to the normal submit path.
+			}
 			if m.state != tuiIdle {
 				return m, tea.Batch(cmds...)
 			}
@@ -653,7 +899,7 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// vision models keep the attachment (model-layer gateMultimodal
 			// still guards the wire path).
 			if m.pendingImage != nil {
-				cap, found := model.LookupModelCapability(m.modelLabel)
+				cap, found := model.LookupModelCapability(m.route.Model)
 				if found && !cap.Vision {
 					m.commitSystemNote(warnText(fmt.Sprintf(
 						"Non-vision model %s: dropped image attachment (switch to a vision model to send images).",
@@ -669,6 +915,11 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSubmit(val, cmds)
 
 		case "up":
+			// SC-2: popup selection — intercept before input history.
+			if m.completion.active {
+				m.completion.Move(-1)
+				return m, tea.Batch(cmds...)
+			}
 			if m.state == tuiIdle && strings.TrimSpace(m.input.Value()) == "" && len(m.submittedInputs) > 0 {
 				if m.submittedCursor < len(m.submittedInputs) {
 					m.submittedCursor++
@@ -681,6 +932,11 @@ func (m *chatTUI) innerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down":
+			// SC-2: popup selection — intercept before input history.
+			if m.completion.active {
+				m.completion.Move(+1)
+				return m, tea.Batch(cmds...)
+			}
 			if m.state == tuiIdle && m.submittedCursor > 0 {
 				m.submittedCursor--
 				if m.submittedCursor == 0 {
@@ -772,12 +1028,12 @@ func mergeCallbacks(original, override *agent.AgentCallbacks) *agent.AgentCallba
 				override.OnLLMCallStart(ctx, round)
 			}
 		},
-		OnLLMCallEnd: func(ctx context.Context, round int, tokens int) {
+		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
 			if original.OnLLMCallEnd != nil {
-				original.OnLLMCallEnd(ctx, round, tokens)
+				original.OnLLMCallEnd(ctx, round, tokens, usage)
 			}
 			if override.OnLLMCallEnd != nil {
-				override.OnLLMCallEnd(ctx, round, tokens)
+				override.OnLLMCallEnd(ctx, round, tokens, usage)
 			}
 		},
 		OnToolCallStart: func(ctx context.Context, toolName string) {
@@ -836,6 +1092,11 @@ func (m *chatTUI) submitTurn(message string) {
 	m.submittedInputs = append(m.submittedInputs, message)
 	m.submittedCursor = 0
 
+	// RF-5: persist the input for ↑ recall after restart (best-effort).
+	if m.cfg.Features.InputHistory {
+		go appendInputHistory(message)
+	}
+
 	m.commitUserBubble(message)
 	m.bridge.IngestUser(message)
 
@@ -856,6 +1117,15 @@ func (m *chatTUI) submitTurn(message string) {
 	runOpts := []agent.RunOption{
 		agent.WithSystemPrompt(sysPrompt),
 		agent.WithCallbacks(mergedCB),
+	}
+	// RF-1: per-run model route (/model runtime switching). When the route
+	// requester failed to build at startup, keep the agent's default.
+	if m.requester != nil {
+		runOpts = append(runOpts, agent.WithModelRequester(m.requester))
+	}
+	// RF-2: per-run effort injection (reasoning_effort). nil = no injection.
+	if opts := m.effortOptions(); opts != nil {
+		runOpts = append(runOpts, agent.WithModelOptions(opts))
 	}
 	if m.pendingImage != nil {
 		if data, err := os.ReadFile(m.pendingImage.Path); err == nil && len(data) > 0 {
@@ -901,16 +1171,24 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 		m.reasoning.Reset()
 		m.answerIdx = -1
 		m.answerFlushed = 0
+		// RF-6/7: reset per-turn metrics.
+		m.resetTurnStats(time.Now())
 
 	case agent.EventToken:
 		m.pending.WriteString(e.Text)
 		m.streamAnswer()
+		// RF-6/7: close the thinking window; accumulate output chars.
+		m.endThinking(time.Now())
+		m.receipt.totalOutputChars += len(e.Text)
+		m.tps.OnToken(len(e.Text))
 
 	case agent.EventReasoning:
 		m.reasoning.WriteString(e.Text)
 		if m.showReasoning {
 			m.flushStreamingReasoning()
 		}
+		// RF-6: open (or extend) the thinking timing window.
+		m.beginThinking(time.Now())
 
 	case agent.EventToolStart:
 		m.finalizeStreamingAnswer()
@@ -921,6 +1199,9 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 			sideEffect = e.Metadata["sideEffectLevel"]
 		}
 		m.commitToolCardEx(e.ToolName, "running", sandboxMode, sideEffect, "")
+		// RF-6: record the tool start timestamp.
+		m.endThinking(time.Now())
+		m.trackToolStart(e.ToolName, time.Now())
 
 	case agent.EventToolEnd:
 		status := "done"
@@ -937,11 +1218,17 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 			sideEffect = e.Metadata["sideEffectLevel"]
 		}
 		m.commitToolCardEx(e.ToolName, status, sandboxMode, sideEffect, "")
+		// RF-6: close the tool timing window and count the call.
+		m.trackToolEnd(e.ToolName, time.Now())
 		// T5: show task progress on task tool completion.
 		if isTaskTool(e.ToolName) && e.Err == nil {
 			if summary := m.bridge.TaskSummary(); summary != "" {
 				m.commitSystemNote("task progress: " + summary)
 			}
+		}
+		// SC-3: keep the task panel in sync with the tracker.
+		if m.cfg.Features.TaskPanel && isTaskTool(e.ToolName) {
+			m.taskPanel.Sync(m.bridge.TaskStore())
 		}
 
 	case agent.EventApproval:
@@ -966,6 +1253,9 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 		m.state = tuiIdle
 		m.elapsed = int(time.Since(m.runStart).Seconds())
 		m.finalizeStreamingAnswer()
+		// RF-6: close any open timing windows; RF-7: record the TPS sample.
+		m.endThinking(time.Now())
+		m.tps.OnRunEnd()
 		// Emit turn receipt.
 		m.receipt.duration = m.elapsed
 		m.commitReceipt(fmt.Sprintf("Turn · %ds · ↓%s ↑%s · %d tools",
@@ -999,6 +1289,17 @@ func (m *chatTUI) ingestEvent(e agent.AgentEvent) {
 			m.sessionTokensIn += e.Tokens
 		}
 		m.receipt.llmRounds++
+		// RF-6/8: capture provider-reported usage (reasoning tokens, cache).
+		if e.Usage != nil {
+			m.receipt.usage = e.Usage
+			m.receipt.reasoningTokens = e.Usage.ReasoningTokens()
+			if e.Usage.PromptTokens > 0 {
+				m.receipt.promptTokens = e.Usage.PromptTokens
+			}
+			if e.Usage.CompletionTokens > 0 {
+				m.receipt.completionTokens = e.Usage.CompletionTokens
+			}
+		}
 
 	case agent.EventLLMStart:
 		// Optional: could show round indicator.
@@ -1131,6 +1432,24 @@ func (m *chatTUI) View() tea.View {
 	// Status bar.
 	parts = append(parts, m.renderStatusBar())
 
+	// SC-2: completion popup rows between the status bar and the input box.
+	if rows := m.completion.Render(boxW); rows != "" {
+		parts = append(parts, rows)
+		rowsAboveBox += strings.Count(rows, "\n") + 1
+	}
+
+	// SC-4: message action menu rows (above the input box, below status).
+	if rows := m.messageActions.Render(boxW); rows != "" {
+		parts = append(parts, rows)
+		rowsAboveBox += strings.Count(rows, "\n") + 1
+	}
+
+	// RF-1: model picker rows (above the input box, below status).
+	if rows := m.picker.Render(boxW); rows != "" {
+		parts = append(parts, rows)
+		rowsAboveBox += strings.Count(rows, "\n") + 1
+	}
+
 	// Input box.
 	inputStyle := inputBoxStyle.Width(boxW)
 	inputBox := inputStyle.Render(m.input.View())
@@ -1138,6 +1457,18 @@ func (m *chatTUI) View() tea.View {
 
 	// Full frame: transcript viewport on top, bottom region beneath.
 	mainArea := m.viewport.View()
+	// RF-9: welcome page rendered above the transcript (first-run guide).
+	if rows := m.renderWelcome(m.width); rows != "" {
+		mainArea = rows + "\n" + mainArea
+	}
+	// SC-3: task panel rendered as a right-hand column beside the transcript
+	// — only when it has real todo content; an empty panel renders nothing
+	// and reserves no width.
+	if m.taskPanel.Active() && m.taskPanel.HasTasks() {
+		panelW := m.taskPanel.Width()
+		panel := m.taskPanel.Render(panelW, m.viewport.Height())
+		mainArea = sideBySide(mainArea, panel, m.viewport.Height())
+	}
 	v := tea.NewView(mainArea + "\n" + strings.Join(parts, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -1172,12 +1503,35 @@ func (m *chatTUI) bottomRows() int {
 		rows++ // working line
 	}
 	rows++ // status bar
+	if m.completion.active {
+		rows += len(m.completion.items) // SC-2: popup rows
+	}
+	if m.messageActions.Active() && m.messageActions.MenuVisible() {
+		rows += 2 + len(m.messageActions.menuItems) // SC-4: menu header + divider + items
+	}
+	if m.picker.active {
+		rows += 2 // RF-1: header + hint
+		n := len(m.picker.providers)
+		if m.picker.level == 1 {
+			n = len(m.picker.models)
+		}
+		if n > 15 {
+			n = 15 // capped picker rows (mirrors modelPicker.Render)
+		}
+		rows += n
+	}
 	rows += m.input.Height() + 2 // input box + border
 	return rows
 }
 
 func (m *chatTUI) transcriptHeight() int {
 	h := m.height - m.bottomRows()
+	if m.welcome.visible {
+		// RF-9: the welcome panel sits above the transcript; reserve its rows.
+		if rows := strings.Count(m.renderWelcome(m.width), "\n"); rows > 0 {
+			h -= rows + 1
+		}
+	}
 	if h < 3 {
 		h = 3
 	}

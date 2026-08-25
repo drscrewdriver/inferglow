@@ -63,7 +63,7 @@ func TestCallbacks_LifecycleHooks(t *testing.T) {
 			events = append(events, "LLMStart")
 			mu.Unlock()
 		},
-		OnLLMCallEnd: func(ctx context.Context, round int, tokens int) {
+		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
 			mu.Lock()
 			events = append(events, "LLMEnd")
 			mu.Unlock()
@@ -181,7 +181,7 @@ func TestCallbacks_FireFunctionsNilSafety(t *testing.T) {
 	fireOnRunStart(nil, ctx, "msg")
 	fireOnRunEnd(nil, ctx, "resp", nil)
 	fireOnLLMCallStart(nil, ctx, 0)
-	fireOnLLMCallEnd(nil, ctx, 0, 0)
+	fireOnLLMCallEnd(nil, ctx, 0, 0, nil)
 	fireOnToolCallStart(nil, ctx, "tool")
 	fireOnToolCallEnd(nil, ctx, "tool", nil)
 
@@ -190,7 +190,7 @@ func TestCallbacks_FireFunctionsNilSafety(t *testing.T) {
 	fireOnRunStart(cb, ctx, "msg")
 	fireOnRunEnd(cb, ctx, "resp", nil)
 	fireOnLLMCallStart(cb, ctx, 0)
-	fireOnLLMCallEnd(cb, ctx, 0, 0)
+	fireOnLLMCallEnd(cb, ctx, 0, 0, nil)
 	fireOnToolCallStart(cb, ctx, "tool")
 	fireOnToolCallEnd(cb, ctx, "tool", nil)
 }

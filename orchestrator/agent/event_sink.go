@@ -24,6 +24,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/inferglow/model"
 )
 
 // EventKind identifies the type of agent event.
@@ -91,6 +93,10 @@ type AgentEvent struct {
 	ToolName string            // for EventToolStart/EventToolEnd
 	Round    int               // for EventLLMStart/EventLLMEnd
 	Tokens   int               // for EventLLMEnd: approximate completion token count
+	// Usage carries the provider-reported token usage for the LLM round
+	// (EventLLMEnd). May be nil when the provider returns no usage. RF-6/8:
+	// reasoning tokens + cache-hit rate.
+	Usage    *model.UsageInfo  // for EventLLMEnd: provider-reported usage
 	Err      error             // for EventError/EventRunEnd
 	Status   string            // ActionResult status: "blocked"/"success"/"error"
 	Metadata map[string]string // generic extension fields (recordID, sandboxMode, etc.)
@@ -167,8 +173,8 @@ func CallbacksFromSink(sink EventSink) *AgentCallbacks {
 		OnLLMCallStart: func(ctx context.Context, round int) {
 			sink.Emit(AgentEvent{Kind: EventLLMStart, Round: round})
 		},
-		OnLLMCallEnd: func(ctx context.Context, round int, tokens int) {
-			sink.Emit(AgentEvent{Kind: EventLLMEnd, Round: round, Tokens: tokens})
+		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
+			sink.Emit(AgentEvent{Kind: EventLLMEnd, Round: round, Tokens: tokens, Usage: usage})
 		},
 		OnToolCallStart: func(ctx context.Context, toolName string) {
 			sink.Emit(AgentEvent{Kind: EventToolStart, ToolName: toolName})

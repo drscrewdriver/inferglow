@@ -345,6 +345,100 @@ var DEFAULT_SETTINGS = map[string]map[string]any{
 		"temperature": 0.7,
 		"max_tokens":  4096,
 	},
+	// === Google Gemini（LLM-provider-port P5）===
+	// 原生 streamGenerateContent 协议；effort 走 thinkingConfig
+	// （thinkingLevel 大写 LOW/HIGH/MINIMAL，见 google.go）。
+	"google": {
+		"model":       "gemini-3.1-pro-preview",
+		"base_url":    "https://generativelanguage.googleapis.com/v1beta",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Mistral AI（LLM-provider-port P5）===
+	// 走 OpenAI 兼容端点（/v1/chat/completions），reasoning_effort wire。
+	"mistral": {
+		"model":       "mistral-medium-latest",
+		"base_url":    "https://api.mistral.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Groq（LLM-provider-port P5）===
+	// OpenAI 兼容，reasoning_effort wire。
+	"groq": {
+		"model":       "openai/gpt-oss-120b",
+		"base_url":    "https://api.groq.com/openai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === xAI Grok（LLM-provider-port P5）===
+	"xai": {
+		"model":       "grok-4.5",
+		"base_url":    "https://api.x.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Together AI（LLM-provider-port P5）===
+	// reasoning:{enabled} + reasoning_effort wire。
+	"together": {
+		"model":       "openai/gpt-oss-120b",
+		"base_url":    "https://api.together.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Z.AI（智谱 GLM 新版，LLM-provider-port P5）===
+	// thinking:{type} + reasoning_effort wire；glm-5.2 档位折叠见 profile。
+	"zai": {
+		"model":       "glm-5.2",
+		"base_url":    "https://api.z.ai/api/coding/paas/v4",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Moonshot 国际版（LLM-provider-port P5）===
+	// 与国内 kimi（moonshot.cn）不同入口；kimi-k3 档位 low/high/max。
+	"moonshotai": {
+		"model":       "kimi-k3",
+		"base_url":    "https://api.moonshot.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === NVIDIA NIM（LLM-provider-port P5）===
+	"nvidia": {
+		"model":       "nvidia/nemotron-3-super-120b-a12b",
+		"base_url":    "https://integrate.api.nvidia.com/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Cerebras（LLM-provider-port P5 长尾）===
+	"cerebras": {
+		"model":       "gpt-oss-120b",
+		"base_url":    "https://api.cerebras.ai/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Hugging Face Router（LLM-provider-port P5 长尾）===
+	// 聚合平台：OpenAI 兼容，一个 Key 调用多个开源模型。
+	"huggingface": {
+		"model":       "openai/gpt-oss-120b",
+		"base_url":    "https://router.huggingface.co/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === Fireworks AI（LLM-provider-port P5 长尾）===
+	// OpenAI 兼容端点（pi-ai 同时有 anthropic-messages 变体）。
+	"fireworks": {
+		"model":       "accounts/fireworks/models/gpt-oss-120b",
+		"base_url":    "https://api.fireworks.ai/inference",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
+	// === 通义 Token 套餐（LLM-provider-port P5 长尾）===
+	// 阿里云百炼 Token 套餐，OpenAI 兼容；模型含 deepseek/glm/kimi/qwen 等。
+	"qwen-token-plan-cn": {
+		"model":       "qwen3.7-plus",
+		"base_url":    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		"temperature": 0.7,
+		"max_tokens":  8192,
+	},
 }
 
 // LoadProviderConfig 从 ConfigProvider 加载 Provider 配置

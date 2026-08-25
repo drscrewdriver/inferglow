@@ -162,6 +162,11 @@ func (m *chatTUI) commitSystemNote(text string) {
 func (m *chatTUI) renderTranscript() string {
 	parts := make([]string, len(m.transcript))
 	for i, b := range m.transcript {
+		raw := b.Raw
+		// SC-4: highlight the user message selected in message-action mode.
+		if m.messageActions.Active() && b.Kind == blockUser && m.messageActions.isSelected(i) {
+			raw = selectionRow(stripAnsi(raw))
+		}
 		if m.renderRaw {
 			src := b.Source
 			if src == "" {
@@ -169,7 +174,7 @@ func (m *chatTUI) renderTranscript() string {
 			}
 			parts[i] = src
 		} else {
-			parts[i] = b.Raw
+			parts[i] = raw
 		}
 	}
 	return strings.Join(parts, "\n")

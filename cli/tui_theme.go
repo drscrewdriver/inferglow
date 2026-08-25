@@ -21,10 +21,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -69,7 +72,24 @@ var (
 		reasoning: cliColor{"#858b96", 245},
 	}
 
-	// activeTheme is the runtime theme (mutable for future light-mode support).
+	// lightTheme is the light-mode palette.
+	lightTheme = cliPalette{
+		accent:    cliColor{"#b3552f", 131},
+		muted:     cliColor{"#3d4149", 240},
+		subtle:    cliColor{"#5c6069", 242},
+		subtle2:   cliColor{"#7a7f88", 244},
+		success:   cliColor{"#2f7d38", 64},
+		warn:      cliColor{"#a6781f", 136},
+		err:       cliColor{"#c0392b", 124},
+		info:      cliColor{"#1d7f9c", 31},
+		border:    cliColor{"#c9ccd2", 251},
+		selection: cliColor{"#b3552f", 131},
+		userBG:    cliColor{"#e6e7ea", 254},
+		userFG:    cliColor{"#1f2329", 235},
+		reasoning: cliColor{"#7a7f88", 244},
+	}
+
+	// activeTheme is the runtime theme (mutable via /theme).
 	activeTheme = &darkTheme
 
 	// Pre-built lipgloss styles for common elements.
@@ -203,4 +223,126 @@ func hexToRGB(hex string) (int, int, int) {
 	var r, g, b uint8
 	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
 	return int(r), int(g), int(b)
+}
+
+// ---------------------------------------------------------------------------
+// RF-3: /theme real switching + persistence (~/.inferglow/theme.json).
+// ---------------------------------------------------------------------------
+
+const themePrefFile = "theme.json"
+
+// themePref is the persisted theme preference.
+type themePref struct {
+	Theme string `json:"theme"`
+}
+
+// themeNames lists the supported themes ("" = auto).
+var themeNames = []string{"dark", "light", "auto"}
+
+// applyTheme switches activeTheme to the named theme (dark/light/auto).
+// auto resolves to dark when the terminal background cannot be detected.
+// Returns an error for unknown names. NOTE: does not persist — callers
+// (tuiHandleTheme) persist via writeThemePref.
+func applyTheme(name string) error {
+	switch name {
+	case "dark", "":
+		activeTheme = &darkTheme
+	case "light":
+		activeTheme = &lightTheme
+	case "auto":
+		if termIsLight() {
+			activeTheme = &lightTheme
+		} else {
+			activeTheme = &darkTheme
+		}
+	default:
+		return fmt.Errorf("unknown theme: %s (available: dark, light, auto)", name)
+	}
+	return nil
+}
+
+// termIsLight heuristically detects a light terminal background.
+// COLORFGBG (used by many terminals) reports "fg;bg" where bg=15 means light.
+func termIsLight() bool {
+	if v := os.Getenv("COLORFGBG"); v != "" {
+		parts := strings.Split(v, ";")
+		if len(parts) >= 2 && strings.TrimSpace(parts[1]) == "15" {
+			return true
+		}
+	}
+	return false
+}
+
+// readThemePref loads the persisted theme preference ("" when unset/corrupt).
+func readThemePref() string {
+	return readThemePrefFrom(filepath.Join(prefsDir(), themePrefFile))
+}
+
+func readThemePrefFrom(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var p themePref
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	return p.Theme
+}
+
+// writeThemePref persists the theme preference. Failures are silent.
+func writeThemePref(name string) {
+	writeThemePrefTo(filepath.Join(prefsDir(), themePrefFile), name)
+}
+
+func writeThemePrefTo(path, name string) {
+	data, err := json.Marshal(themePref{Theme: name})
+	if err != nil {
+		return
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return
+		}
+	}
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+// tuiHandleTheme handles /theme (RF-3):
+//
+//	/theme        → list themes + current
+//	/theme <name> → switch (dark|light|auto) + persist + redraw
+func tuiHandleTheme(m *chatTUI, args string) (tea.Cmd, bool) {
+	args = strings.TrimSpace(args)
+	m.commitLine("")
+	if args == "" {
+		cur := activeThemeName()
+		m.commitLine(accent("Theme: " + cur))
+		for _, name := range themeNames {
+			marker := "  "
+			if name == cur {
+				marker = "→ "
+			}
+			m.commitLine(dim(marker + name))
+		}
+		m.commitLine(dim("  Usage: /theme <dark|light|auto>"))
+		return nil, false
+	}
+	if err := applyTheme(args); err != nil {
+		m.commitLine(errorText("  ✗ " + err.Error()))
+		return nil, false
+	}
+	writeThemePref(args) // persist only on explicit /theme (not on startup restore)
+	applyTextareaTheme(&m.input)
+	m.transcriptDirty = true
+	m.commitLine(successText("  ✓ 主题已切换为 " + args))
+	return nil, false
+}
+
+// activeThemeName returns the name of the currently active theme.
+func activeThemeName() string {
+	if activeTheme == &lightTheme {
+		return "light"
+	}
+	return "dark"
 }

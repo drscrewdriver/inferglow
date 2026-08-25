@@ -20,6 +20,8 @@
 
 package cli
 
+import "github.com/inferglow/model"
+
 // turnReceipt tracks per-turn metrics for receipt display.
 type turnReceipt struct {
 	turnNum     int
@@ -28,4 +30,11 @@ type turnReceipt struct {
 	toolCalls   int
 	promptTokens     int
 	completionTokens int
+	// RF-6: reasoning / tool timing.
+	thinkingMs       int64            // total wall-clock thinking time (ms)
+	reasoningTokens  int              // from UsageInfo.ReasoningTokens()
+	toolDurationsMs  map[string]int64 // tool name → cumulative duration (ms)
+	totalOutputChars int              // total streamed output characters (RF-7 TPS)
+	// RF-8: last provider-reported usage (for cache-hit rate).
+	usage *model.UsageInfo
 }

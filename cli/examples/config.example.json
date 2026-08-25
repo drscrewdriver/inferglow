@@ -1,0 +1,49 @@
+{
+  "llm": {
+    "endpoint": "https://api.openai.com/v1",
+    "model": "gpt-4o",
+    "api_key": "",
+    "provider": "openai"
+  },
+  "data_dir": "C:\\Users\\<you>\\.inferglow",
+  "workspace_dir": ".",
+  "constitutional": "C:\\Users\\<you>\\.inferglow\\constitutional\\rules.md",
+  "window_tokens": 32000,
+  "top_k": 5,
+  "unsafe_mode": false,
+  "sandbox_mode": "trusted_local",
+  "context_mode": "hybrid",
+  "features": {
+    "memory_injection": true,
+    "memory_storage": true,
+    "constitutional": true,
+    "meta_instructions": true,
+    "compression": true,
+    "proactive_recall": false,
+    "runtime_mode_switch": true,
+    "tui_mode": true,
+    "auto_background": false,
+    "output_mode": "tui",
+    "slash_compat": true,
+    "slash_popup": true,
+    "task_panel": true,
+    "message_actions": true,
+    "workspace_switch": true,
+    "skill_loader": true
+  },
+  "audit": {
+    "enabled": false,
+    "storage_path": "",
+    "signature_key": ""
+  },
+  "tui": {
+    "theme": "dark",
+    "show_reasoning": false,
+    "max_scrollback": 0
+  },
+  "compress_model": {
+    "endpoint": "",
+    "model": "",
+    "provider": ""
+  }
+}

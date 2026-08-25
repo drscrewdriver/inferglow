@@ -199,6 +199,14 @@ type runConfig struct {
 	// user message of this run. Empty disables (pure-text, zero behavior
 	// change). Populated via WithContentBlocks.
 	contentBlocks []model.ContentBlock
+	// modelRequester, when non-nil, overrides the Agent's construction-time
+	// requester for this run (RF-1: /model runtime switching). nil keeps the
+	// Agent's requester (zero behavior change).
+	modelRequester model.ModelRequester
+	// modelOptions, when non-nil, are merged into every ModelRequest.Options
+	// of this run (RF-2: /effort reasoning_effort injection). Caller keys
+	// win over engine-built keys. nil keeps engine-built options only.
+	modelOptions map[string]any
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -222,6 +230,26 @@ func WithSystemPrompt(prompt string) RunOption {
 func WithContentBlocks(blocks []model.ContentBlock) RunOption {
 	return func(c *runConfig) {
 		c.contentBlocks = blocks
+	}
+}
+
+// WithModelRequester overrides the model requester for this run (RF-1).
+// Used by the TUI for runtime /model switching: each submitTurn passes the
+// requester built from the currently selected route. nil keeps the Agent's
+// construction-time requester (zero behavior change).
+func WithModelRequester(mr model.ModelRequester) RunOption {
+	return func(c *runConfig) {
+		c.modelRequester = mr
+	}
+}
+
+// WithModelOptions merges extra keys into every ModelRequest.Options of this
+// run (RF-2). Used by the TUI to inject reasoning_effort/thinking from
+// /effort. Keys supplied here override engine-built keys (max_tokens /
+// force_json); nil leaves engine-built options unchanged.
+func WithModelOptions(opts map[string]any) RunOption {
+	return func(c *runConfig) {
+		c.modelOptions = opts
 	}
 }
 
@@ -451,6 +479,14 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	// Propagate multimodal content blocks for the initial user message this
 	// run (see executeLoop AddUserContentBlocks). Reset after each run.
 	a.engine.initialContentBlocks = c.contentBlocks
+
+	// RF-1: per-run model requester override (/model runtime switching).
+	// nil keeps the engine's construction-time requester.
+	a.engine.modelReqOverride = c.modelRequester
+
+	// RF-2: per-run ModelRequest.Options merge (/effort injection). nil
+	// leaves engine-built options (max_tokens/force_json) unchanged.
+	a.engine.modelOptions = c.modelOptions
 
 	// Propagate the PII masker to the session so that AddUserMessage
 	// (called inside executeLoop) redacts input via MaskInput. Only set

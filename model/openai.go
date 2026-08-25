@@ -92,6 +92,16 @@ type OpenAICompatibleProvider struct {
 	// the provider falls back to its struct-based parsing (legacy behavior).
 	// Spec: model-parity Phase 3 — content_mapping 字段路径自定义.
 	ContentMapping ContentMapping
+	// EffortFormat selects how a semantic effort level (Options["reasoning_effort"])
+	// is translated into wire parameters. Defaults to EffortOpenAI when empty.
+	// LLM-provider-port (P0): port of pi-ai thinkingFormat dispatch.
+	EffortFormat EffortWireFormat
+	// EffortLevels maps a semantic effort level to its wire value for this
+	// provider/model (nil entry = not offered). When nil, the raw
+	// Options["reasoning_effort"] value is passed through unchanged (legacy
+	// behavior, matching the OpenAI-compatible reasoning_effort contract).
+	// LLM-provider-port (P0): port of pi-ai thinkingLevelMap.
+	EffortLevels EffortLevelMap
 }
 
 // Name 返回 Provider 名称
@@ -115,6 +125,48 @@ func (p *OpenAICompatibleProvider) CacheCapability() CacheCapability {
 // role is returned unchanged.
 func (p *OpenAICompatibleProvider) mapRole(role string) string {
 	return ssestream.MapRole(role, p.RoleMapping)
+}
+
+// effortWireParams translates a semantic effort level (the value carried by
+// Options["reasoning_effort"]) into the provider's wire parameters using the
+// configured EffortFormat and EffortLevels. Returns nil when no translation
+// applies (fall back to legacy raw pass-through).
+//
+// The level is treated as semantic when EffortLevels is non-nil (a level map
+// was declared): "" / "auto" → nil; undeclared-or-not-offered → nil (or
+// passthrough for formats that allow it). When EffortLevels is nil (no level
+// map), the raw value is passed through as reasoning_effort (legacy behavior).
+func (p *OpenAICompatibleProvider) effortWireParams(level any) map[string]any {
+	if level == nil {
+		return nil
+	}
+	format := p.EffortFormat
+	if format == "" {
+		format = EffortOpenAI
+	}
+	if p.EffortLevels == nil {
+		// Legacy: no level map → raw reasoning_effort pass-through.
+		if s, ok := level.(string); ok {
+			return map[string]any{"reasoning_effort": s}
+		}
+		return nil
+	}
+	s, ok := level.(string)
+	if !ok {
+		return nil
+	}
+	return TranslateEffort(format, s, p.EffortLevels)
+}
+
+// applyEffortProfile wires registry protocol facts into the provider
+// (implements model.EffortProfileApplier).
+func (p *OpenAICompatibleProvider) applyEffortProfile(mp ModelProfile) {
+	if mp.EffortFormat != "" {
+		p.EffortFormat = mp.EffortFormat
+	}
+	if mp.EffortLevels != nil {
+		p.EffortLevels = mp.EffortLevels
+	}
 }
 
 // effectiveHTTPClient returns the configured HTTPClient or a sane fallback
@@ -390,6 +442,19 @@ func (p *OpenAICompatibleProvider) RequestModel(ctx context.Context, data *Reque
 			// M-HIGH-2: skip reserved fields so Options cannot override
 			// model/messages/stream/tools/etc. managed by the provider.
 			if reservedFields[k] {
+				continue
+			}
+			// LLM-provider-port (P0): translate the semantic effort level
+			// into the provider's wire parameters (thinking.type /
+			// reasoning.effort / uppercase values / ...). When the provider
+			// declares no EffortLevels, the raw value passes through as
+			// reasoning_effort (legacy behavior).
+			if k == "reasoning_effort" {
+				if wire := p.effortWireParams(v); wire != nil {
+					for wk, wv := range wire {
+						reqBody[wk] = wv
+					}
+				}
 				continue
 			}
 			reqBody[k] = v

@@ -157,9 +157,9 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 		memStore:   memStore,
 		skillStore: skillStore,
 		projectRoot: ".",
-		topK:       cfg.TopK,
-		sessionID:  sessionID,
-		autoBgThreshold: 3, // auto-trigger after 3 steps if Zone 1 is empty
+		topK:            cfg.TopK,
+		sessionID:       sessionID,
+		autoBgThreshold: autoBgStepThreshold(cfg.Features.AutoBackground),
 		compressChain:   compressChain,
 		taskStore:       taskStore,
 		bm25File:        bm25File,
@@ -417,6 +417,18 @@ func (b *MemoryBridge) NeedsAutoBackground(threshold int) bool {
 	// Use CurrentStepAtomic from introspect.go for the step counter.
 	step := contextmgr.CurrentStepAtomic(b.hybrid)
 	return int(step) >= threshold && b.hybrid.IsHeadBufferEmpty()
+}
+
+// autoBgStepThreshold returns the auto-rebackground step threshold for a
+// session. 0 disables the feature (features.auto_background=false), so
+// CheckAutoBackground never fires and the project-analysis tool loop
+// (list_dir / bash_executor) is not run automatically. When enabled, the
+// historical default of 3 steps applies.
+func autoBgStepThreshold(enabled bool) int {
+	if !enabled {
+		return 0
+	}
+	return 3
 }
 
 // CheckAutoBackground is a once-only check that returns true when the session
