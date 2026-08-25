@@ -5,6 +5,101 @@
     "api_key": "",
     "provider": "openai"
   },
+  "providers": {
+    "active": "deepseek",
+    "list": {
+      "openai": {
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-5.4",
+        "api_key": "",
+        "provider": "openai"
+      },
+      "deepseek": {
+        "endpoint": "https://api.deepseek.com/v1",
+        "model": "deepseek-v4-pro",
+        "api_key": "",
+        "provider": "deepseek"
+      },
+      "google": {
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+        "model": "gemini-3.1-pro-preview",
+        "api_key": "",
+        "provider": "google"
+      },
+      "mistral": {
+        "endpoint": "https://api.mistral.ai/v1",
+        "model": "mistral-medium-latest",
+        "api_key": "",
+        "provider": "mistral"
+      },
+      "openrouter": {
+        "endpoint": "https://openrouter.ai/api/v1",
+        "model": "anthropic/claude-opus-4-7",
+        "api_key": "",
+        "provider": "openrouter"
+      },
+      "zai": {
+        "endpoint": "https://api.z.ai/api/coding/paas/v4",
+        "model": "glm-5.2",
+        "api_key": "",
+        "provider": "zai"
+      },
+      "groq": {
+        "endpoint": "https://api.groq.com/openai/v1",
+        "model": "openai/gpt-oss-120b",
+        "api_key": "",
+        "provider": "groq"
+      },
+      "xai": {
+        "endpoint": "https://api.x.ai/v1",
+        "model": "grok-4.5",
+        "api_key": "",
+        "provider": "xai"
+      },
+      "moonshotai": {
+        "endpoint": "https://api.moonshot.ai/v1",
+        "model": "kimi-k3",
+        "api_key": "",
+        "provider": "moonshotai"
+      },
+      "together": {
+        "endpoint": "https://api.together.ai/v1",
+        "model": "openai/gpt-oss-120b",
+        "api_key": "",
+        "provider": "together"
+      },
+      "nvidia": {
+        "endpoint": "https://integrate.api.nvidia.com/v1",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "api_key": "",
+        "provider": "nvidia"
+      },
+      "cerebras": {
+        "endpoint": "https://api.cerebras.ai/v1",
+        "model": "gpt-oss-120b",
+        "api_key": "",
+        "provider": "cerebras"
+      },
+      "huggingface": {
+        "endpoint": "https://router.huggingface.co/v1",
+        "model": "openai/gpt-oss-120b",
+        "api_key": "",
+        "provider": "huggingface"
+      },
+      "fireworks": {
+        "endpoint": "https://api.fireworks.ai/inference",
+        "model": "accounts/fireworks/models/gpt-oss-120b",
+        "api_key": "",
+        "provider": "fireworks"
+      },
+      "qwen-token-plan-cn": {
+        "endpoint": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.7-plus",
+        "api_key": "",
+        "provider": "qwen-token-plan-cn"
+      }
+    }
+  },
   "data_dir": "C:\\Users\\<you>\\.inferglow",
   "workspace_dir": ".",
   "constitutional": "C:\\Users\\<you>\\.inferglow\\constitutional\\rules.md",

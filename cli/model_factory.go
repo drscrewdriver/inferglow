@@ -101,8 +101,11 @@ func buildModelRequester(cfg CLIConfig) (model.ModelRequester, error) {
 		req, err = model.NewQwenTokenPlanCNProviderFromConfig(cp)
 	default:
 		// Default to OpenAI-compatible (covers local servers, vLLM, Ollama with
-		// OpenAI compat, etc.)
-		req, err = model.NewOpenAIProviderFromConfig(cp)
+		// OpenAI compat, openrouter, siliconflow, and any custom provider key).
+		// Loads the config under the actual provider name, not a hardcoded
+		// "openai" prefix, so multi-provider configs (providers.list) work for
+		// every OpenAI-compatible key.
+		req, err = model.NewOpenAICompatProviderFromConfig(cp, provider, provider)
 	}
 	if err != nil {
 		return nil, err

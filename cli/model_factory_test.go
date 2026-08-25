@@ -91,3 +91,64 @@ func TestBuildModelRequesterGoogleEffortProfile(t *testing.T) {
 		t.Fatalf("high wire = %v, want HIGH", v)
 	}
 }
+
+// TestMultiProviderConfigResolvesRoute verifies the multi-provider config
+// shape: providers.list with several entries, resolveModelRoute picks the
+// active key, and every listed provider constructs a requester with the
+// correct effort profile (LLM-provider-port P5 multi-provider support).
+func TestMultiProviderConfigResolvesRoute(t *testing.T) {
+	cfg := CLIConfig{
+		Providers: ProvidersConfig{
+			Active: "deepseek",
+			List: map[string]LLMConfig{
+				"deepseek": {
+					Endpoint: "https://api.deepseek.com/v1",
+					Model:    "deepseek-v4-pro",
+					APIKey:   "key-ds",
+					Provider: "deepseek",
+				},
+				"google": {
+					Endpoint: "https://generativelanguage.googleapis.com/v1beta",
+					Model:    "gemini-3.1-pro-preview",
+					APIKey:   "key-g",
+					Provider: "google",
+				},
+				"openrouter": {
+					Endpoint: "https://openrouter.ai/api/v1",
+					Model:    "anthropic/claude-opus-4-7",
+					APIKey:   "key-or",
+					Provider: "openrouter",
+				},
+			},
+		},
+	}
+
+	// Active key wins.
+	route := resolveModelRoute(cfg, nil)
+	if route.Provider != "deepseek" || route.Model != "deepseek-v4-pro" {
+		t.Fatalf("active route = %s/%s, want deepseek/deepseek-v4-pro", route.Provider, route.Model)
+	}
+	if route.Endpoint != "https://api.deepseek.com/v1" {
+		t.Fatalf("active endpoint = %q", route.Endpoint)
+	}
+
+	// Every listed provider constructs a requester with correct effort facts.
+	for key, lc := range cfg.Providers.List {
+		req, err := buildModelRequester(CLIConfig{LLM: lc})
+		if err != nil {
+			t.Fatalf("%s buildModelRequester: %v", key, err)
+		}
+		if req.Name() != lc.Provider {
+			t.Errorf("%s requester name = %q, want %q", key, req.Name(), lc.Provider)
+		}
+	}
+	// google route carries EffortGoogle; deepseek carries EffortDeepSeek.
+	gp, _ := buildModelRequester(CLIConfig{LLM: cfg.Providers.List["google"]})
+	if gg, ok := gp.(*model.GoogleGenerativeProvider); !ok || gg.EffortFormat != model.EffortGoogle {
+		t.Fatalf("google requester = %T, want *GoogleGenerativeProvider with EffortGoogle", gp)
+	}
+	dp, _ := buildModelRequester(CLIConfig{LLM: cfg.Providers.List["deepseek"]})
+	if od, ok := dp.(*model.OpenAICompatibleProvider); !ok || od.EffortFormat != model.EffortDeepSeek {
+		t.Fatalf("deepseek requester = %T, want *OpenAICompatibleProvider with EffortDeepSeek", dp)
+	}
+}
