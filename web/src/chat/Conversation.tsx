@@ -14,6 +14,8 @@ import { AutoLoad } from '../tidychat/AutoLoad'
 import { ContextView } from '../context/ContextView'
 import { MentionInput, type MentionInputHandle } from '../filetag/MentionInput'
 import { ProducedFiles } from '../filetag/ProducedFiles'
+import { useThinkingStore } from '../thinking/thinkingStore'
+import type { ThinkingLevel } from '../thinking/decide'
 
 /** Flow-node types for the message stream (spec Task 9). */
 export type FlowNode =
@@ -301,6 +303,7 @@ function Composer({
   const [cmdOpen, setCmdOpen] = useState(false)
   const [model, setModel] = useState('deepseek-chat')
   const [mentionOpen, setMentionOpen] = useState(false)
+  const [ctxExpanded, setCtxExpanded] = useState(false)
   const mentionRef = useRef<MentionInputHandle>(null)
   const sendMessage = useChatStore((s) => s.sendMessage)
   const streaming = useChatStore((s) => s.streaming)
@@ -308,12 +311,13 @@ function Composer({
   const stop = useChatStore((s) => s.stop)
   const active = useSession()
   const agentId = active?.agent_id ?? 'a1'
+  const thinkLevel = useThinkingStore((s) => s.config.level)
+  const setThinkLevel = useThinkingStore((s) => s.setLevel)
 
   const COMMANDS = ['/plan', '/think', '/tool', '/memory', '/agent']
 
   const send = useCallback(() => {
     if (!active || streaming || mentionOpen) return
-    // Serialize chips (@file refs) into the message before sending.
     const raw = mentionRef.current?.serializeValue() ?? text
     const msg = raw.trim()
     if (!msg) return
@@ -328,9 +332,15 @@ function Composer({
   }
 
   const openFile = useCallback((path: string) => {
-    // Demo stub: surface the produced file. Real impl would open in a viewer.
     window.alert(`打开文件：${path}`)
   }, [])
+
+  // Thinking level buttons: 轻(low) / 高(high) / 极高(max)
+  const thinkButtons: { label: string; level: ThinkingLevel }[] = [
+    { label: '轻', level: 'low' },
+    { label: '高', level: 'high' },
+    { label: '极高', level: 'max' },
+  ]
 
   return (
     <div className={styles.composerWrap}>
@@ -345,6 +355,25 @@ function Composer({
             <option value="deepseek-reasoner">deepseek-reasoner</option>
             <option value="gpt-5">gpt-5</option>
           </select>
+          <span className={styles.toolbarSep} />
+          <div className={styles.thinkToggle}>
+            {thinkButtons.map((b) => (
+              <button
+                key={b.level}
+                className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
+                onClick={() => setThinkLevel(b.level)}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+          <span className={styles.toolbarSep} />
+          <label className={styles.ctxToggle} title="开启后上下文窗口扩展至 1M，适用于复杂长任务">
+            <span className={styles.ctxLabel}>更大上下文</span>
+            <span className={`${styles.ctxSwitch}${ctxExpanded ? ` ${styles.ctxSwitchOn}` : ''}`} onClick={() => setCtxExpanded((v) => !v)}>
+              <span className={styles.ctxKnob} />
+            </span>
+          </label>
           {running && <span className={styles.runningTag}>运行中…</span>}
         </div>
         {cmdOpen && (

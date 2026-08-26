@@ -1,6 +1,6 @@
 import { registerSlot } from '../framework'
-import { SteerQueueDock } from './SteerQueueDock'
-import type { SteerQueueDockProps } from './SteerQueueDock'
+import { QueueBar } from './QueueBar'
+import type { QueueBarProps } from './QueueBar'
 import { FreezeButton } from './FreezeButton'
 import { JobList } from './JobList'
 
@@ -10,10 +10,10 @@ export interface ConversationRightProps {
 
 /** Registered by importing this module (side-effect, mirrors sidebarSlots). */
 function registerTrafficSlots(): void {
-  // conversation.input.dock — three-level steer queue above the composer.
-  registerSlot<SteerQueueDockProps>(
+  // conversation.input.dock — compact floating queue above the composer.
+  registerSlot<QueueBarProps>(
     'conversation.input.dock',
-    (props) => <SteerQueueDock onPullBack={props?.onPullBack} />,
+    (props) => <QueueBar onPullBack={props?.onPullBack} />,
     { order: 0 },
   )
 

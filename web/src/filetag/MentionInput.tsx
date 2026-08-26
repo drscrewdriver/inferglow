@@ -113,12 +113,12 @@ export const MentionInput = forwardRef<
 
   return (
     <div className={styles.inputWrap}>
-      <div className={styles.backdrop + ' ' + styles.backdropPainted} aria-hidden="true">
+      <div className={styles.backdrop + (chips.length > 0 ? ' ' + styles.backdropPainted : '')} aria-hidden="true">
         {segments.map((s, i) =>
           s.chip ? (
             <span key={i} className={styles.mention}>{s.chip.label}</span>
           ) : (
-            <span key={i}>{s.text}</span>
+            <span key={i}>&nbsp;</span>
           ),
         )}
       </div>
