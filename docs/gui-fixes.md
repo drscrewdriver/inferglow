@@ -40,11 +40,13 @@
 - **修复**：新建 `QueueBar` 组件替代 `SteerQueueDock` —— 浮动在输入框上方（`border-radius: 10px 10px 0 0` + `border-bottom: none`），仅有排队项时显示，每行彩色圆点（🟢稍后/🟡下一步/🔴立即）+ 文本 + 操作按钮
 - **文件**：`web/src/traffic/QueueBar.tsx`、`web/src/traffic/slots.tsx`、`web/src/traffic/traffic.module.css`
 
-### 7. Composer 工具栏重排
-- **症状**：工具栏过于拥挤，思考级别和上下文开关在错误位置
+### 7. Composer 底部控制栏重排
+- **症状**：工具栏过于拥挤，思考级别和上下文开关位置不对
 - **修复**：
-  - 工具栏精简为仅 `/` 按钮 + 模型选择器
-  - 思考级别 toggle（轻/高/极高）移到 composerBar（textarea 下方）
+  - 移除顶部工具栏，所有控制统一放 composerBar（textarea 下方）一行
+  - 从左到右：`/` 命令按钮 → 模型选择器 → 思考级别（按模型自适应）→ 上下文档位 → spacer → 运行状态/冻结/停止/发送
+  - 思考级别自适应：deepseek-chat 无思考选项，deepseek-reasoner 支持 轻/中/高，gpt-5 支持 轻/中/高/极高
+  - 切换模型时自动重置思考级别到该模型支持的值
   - 替换 "更大上下文" toggle 为分档选择器（128k / 256k / 400k / 1M）
 - **文件**：`web/src/chat/Conversation.tsx`、`web/src/chat/conversation.module.css`
 
