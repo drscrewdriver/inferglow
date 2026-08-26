@@ -110,3 +110,37 @@ export interface AuditEntriesResult {
   entries: AuditEntry[]
   count: number
 }
+
+// ─── approvals (Phase 6, Task 22) — mirror approval.Record / Request ───
+
+export type ApprovalStatus = 'approved' | 'denied' | 'pending' | 'allowed'
+
+export type RiskLevel = 'none' | 'low' | 'medium' | 'high'
+
+export interface ApprovalRequest {
+  request_id?: string
+  source?: string
+  capability: string
+  subject: string
+  risk?: RiskLevel
+  payload?: Record<string, unknown>
+  timeout?: string
+  escalation?: string
+}
+
+export interface ApprovalRecord {
+  id: string
+  request?: ApprovalRequest
+  status: ApprovalStatus
+  approver?: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface ApprovalListResult {
+  approvals: ApprovalRecord[]
+  count: number
+}
+
+/** POST /v1/approvals response returns the (possibly pending) record. */
+export type ApprovalSubmitResult = ApprovalRecord

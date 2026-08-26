@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/inferglow/approval"
 	"github.com/inferglow/flow/stage"
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
@@ -83,6 +84,13 @@ type Server struct {
 	mcpHubStore    *MCPHubStore
 	msgStore       *MessageStore
 	reportGen      *session.ReportGenerator
+	approvalMgr    *approval.PolicyApprovalManager
+}
+
+// SetApprovalManager wires an approval authority into the server. It is used
+// by the /v1/approvals endpoints and the run-input approval decision bridge.
+func (s *Server) SetApprovalManager(mgr *approval.PolicyApprovalManager) {
+	s.approvalMgr = mgr
 }
 
 // MemoryRecord represents a persistent memory entry.

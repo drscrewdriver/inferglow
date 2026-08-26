@@ -22,6 +22,8 @@ package server
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +101,45 @@ func (ss *SessionStore) Get(id string) *SessionRecord {
 // List returns all session records.
 func (ss *SessionStore) List() []*SessionRecord {
 	return ss.Map.Values()
+}
+
+// SessionListFilter specifies optional search / grouping / pin filters for
+// ListFiltered. A nil Pinned means "don't filter by pin state".
+type SessionListFilter struct {
+	Q     string
+	Group string
+	Pinned *bool
+}
+
+// ListFiltered returns sessions matching the given filter, ordered by
+// pinned-first then UpdatedAt descending. Q does a case-insensitive substring
+// match across title/group/agent_id/owner. Group filters by exact group name
+// (empty matches ungrouped sessions only when Group is exactly "").
+func (ss *SessionStore) ListFiltered(f SessionListFilter) []*SessionRecord {
+	q := strings.ToLower(strings.TrimSpace(f.Q))
+	out := make([]*SessionRecord, 0, ss.Map.Len())
+	for _, rec := range ss.Map.Values() {
+		if f.Pinned != nil && rec.Pinned != *f.Pinned {
+			continue
+		}
+		if f.Group != "" && rec.Group != f.Group {
+			continue
+		}
+		if q != "" {
+			hay := strings.ToLower(rec.Title + "|" + rec.Group + "|" + rec.AgentID + "|" + rec.Owner)
+			if !strings.Contains(hay, q) {
+				continue
+			}
+		}
+		out = append(out, rec)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out
 }
 
 // Delete removes a session by ID.

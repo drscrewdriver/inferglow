@@ -12,10 +12,15 @@ function mockTransport(overrides: Partial<Transport> = {}): Transport & { calls:
     async request<T>(method: string, path: string): Promise<T> {
       calls.push(`${method} ${path}`)
       if (path === '/sessions' && method === 'GET') {
-        return [
-          { id: 's1', agent_id: 'a1', status: 'active', title: '会话一', group: '项目', pinned: true, created_at: '2026-08-13T00:00:00Z', updated_at: '2026-08-13T00:00:00Z' },
-          { id: 's2', agent_id: 'a1', status: 'active', title: '会话二', created_at: '2026-08-13T00:00:00Z', updated_at: '2026-08-13T00:00:00Z' },
-        ] as T
+        return {
+          sessions: [
+            { id: 's1', agent_id: 'a1', status: 'active', title: '会话一', group: '项目', pinned: true, created_at: '2026-08-13T00:00:00Z', updated_at: '2026-08-13T00:00:00Z' },
+            { id: 's2', agent_id: 'a1', status: 'active', title: '会话二', created_at: '2026-08-13T00:00:00Z', updated_at: '2026-08-13T00:00:00Z' },
+          ],
+          count: 2,
+          groups: { 项目: 1 },
+          query: {},
+        } as T
       }
       if (path.startsWith('/sessions/s1/messages')) {
         return {

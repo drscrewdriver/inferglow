@@ -177,10 +177,22 @@ export function resolveThemeVars(key: string): { vars: Record<string, string>; d
   const aB = t.aB ?? '#5f7f6a'
   const aA2 = t.aA2 ?? '#5aa2e0'
   const aB2 = t.aB2 ?? '#4a7fa8'
+  // Text aliases are written directly as concrete values (NOT `var(--text)`
+  // indirections) so they survive the CSS "guaranteed-invalid" caching trap:
+  // a custom property whose value is `var(<undefined>)` at first compute is
+  // frozen invalid for the document lifetime and never repairs itself, even
+  // after the referred variable is later defined in the cascade. Writing the
+  // literal hex keeps --fg/--igw-text alive in both dev (Vite injects many
+  // <style> tags in uncertain order) and prod.
+  const textAliases: Record<string, string> = {
+    '--fg': t.text, '--fg-dim': t.textDim, '--fg-faint': t.textFaint,
+    '--igw-text': t.text, '--igw-text-dim': t.textDim, '--igw-text-faint': t.textFaint,
+  }
   const vars: Record<string, string> = {
     '--bg': t.bg, '--bg2': t.bg2, '--panel': t.panel, '--panel2': t.panel2,
     '--border': t.border, '--border-soft': t.borderSoft,
     '--text': t.text, '--text-dim': t.textDim, '--text-faint': t.textFaint,
+    ...textAliases,
     '--accent': t.accent, '--accent-fg': accentFg, '--accent-strong': accentStrong, '--accent-soft': t.accentSoft,
     '--coral': t.coral ?? '', '--gold': t.gold ?? '', '--warn': t.gold ?? '', '--ok': t.accent,
     '--goal': goal, '--goal-strong': goalStrong, '--goal-soft': t.accentSoft,

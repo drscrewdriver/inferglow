@@ -7,6 +7,10 @@ export interface ChatMessage {
   content: string
   toolName?: string
   toolStatus?: string
+  /** Optional assistant "thinking" prelude rendered above the body (backward
+   * compatible — absent for existing API messages). Consumed by tidychat
+   * divider/fold rendering. */
+  think?: string
   createdAt: number
 }
 
@@ -69,6 +73,7 @@ export const createChatStore = (t: Transport) =>
         content: m.content ?? '',
         toolName: m.tool_name,
         toolStatus: m.tool_status,
+        think: (m as { think?: string }).think,
         createdAt: Date.parse(m.created_at),
       }))
       set({ messages: [...incoming, ...get().messages].slice(0, MAX_MESSAGES) })

@@ -16,6 +16,12 @@ export type {
   AuditVerifyResult,
   AuditEntry,
   AuditEntriesResult,
+  ApprovalRecord,
+  ApprovalRequest,
+  ApprovalStatus,
+  ApprovalListResult,
+  ApprovalSubmitResult,
+  RiskLevel,
 } from './types'
 
 /** Shared transport instance; stores and hooks depend only on this. */

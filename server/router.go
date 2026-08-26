@@ -89,6 +89,9 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
 	api.HandleFunc("GET /v1/runs/{id}/state", s.handleGetRunState)
 	api.HandleFunc("GET /v1/runs/{id}/steps", s.handleGetRunSteps)
+	api.HandleFunc("PATCH /v1/runs/{id}/queue", s.handleRunQueue)
+	api.HandleFunc("GET /v1/runs/{id}/jobs", s.handleRunJobs)
+	api.HandleFunc("POST /v1/runs/{id}/input", s.handleRunInput)
 
 	// Stages
 	api.HandleFunc("GET /v1/stages", s.handleListStages)
@@ -115,6 +118,11 @@ func (s *Server) registerRoutes() {
 	// Context / semantic search (enabled by SetContextProvider)
 	api.HandleFunc("GET /v1/context/search", s.handleContextSearch)
 	api.HandleFunc("GET /v1/context/stats", s.handleContextStats)
+
+	// Approval records (enabled by SetApprovalManager)
+	api.HandleFunc("GET /v1/approvals", s.handleListApprovals)
+	api.HandleFunc("POST /v1/approvals", s.handleSubmitApproval)
+	api.HandleFunc("POST /v1/approvals/{id}/decision", s.handleApprovalDecision)
 
 	// Usage aggregation report
 	api.HandleFunc("GET /v1/usage/report", s.handleUsageReport)

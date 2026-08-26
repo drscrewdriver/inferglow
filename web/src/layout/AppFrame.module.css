@@ -1,0 +1,61 @@
+.frame {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 0;
+  transition: grid-template-columns 0.22s cubic-bezier(0.22, 0.68, 0.31, 1);
+}
+
+.pane {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar {
+  background: var(--igw-sidebar-bg);
+}
+
+.sidebarRail {
+  /* rail mode handled by SidebarRoot; column width driven by AppFrame */
+}
+
+.details {
+  background: var(--igw-sidebar-bg);
+  border-left: 1px solid var(--igw-border-soft);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.detailsOpen {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--igw-bg);
+}
+
+/* Resize grab handles between columns */
+.divider {
+  width: 5px;
+  margin: 0 -1px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  flex: none;
+  touch-action: none;
+}
+
+.divider:hover,
+.divider:active {
+  background: var(--igw-accent-soft);
+}

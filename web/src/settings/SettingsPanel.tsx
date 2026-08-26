@@ -1,10 +1,14 @@
 import { useState } from 'react'
+import { SlotOutlet } from '../framework'
 import { SETTINGS_TABS, type AppSettings } from './settingsSchema'
 import { useSettingsStore } from './settingsStore'
 import { THEME_GROUPS, THEMES } from '../theme/themes'
 import { applyTheme } from '../theme/ThemeProvider'
 import { RowList, useServerList, useServerResource } from './serverData'
 import { transport, type AuditEntriesResult, type AuditVerifyResult, type CredentialRecord, type MCPToolRecord, type ScheduleRecord, type SkillRecord } from '../api'
+import '../tidychat/slots' // registers settings.plugin.item (side effect)
+import '../thinking/slots' // registers settings.plugin.item (side effect)
+import '../sandbox/slots' // registers settings.plugin.item (side effect)
 
 // ─── generic setting control primitives (mirror prototype helpers) ───
 
@@ -275,6 +279,7 @@ function InterfaceTab({ s, set }: { s: AppSettings; set: (p: Partial<AppSettings
         <SwitchRow label="终端抽屉吸附" checked={s.termDrawer} onChange={(v) => set({ termDrawer: v })} />
         <SelectRow label="终端字体" options={['Cascadia Code', 'JetBrains Mono', 'SF Mono']} value={s.termFont === 'mono' ? 'Cascadia Code' : s.termFont} onChange={(v) => set({ termFont: v })} />
       </Card>
+      <SlotOutlet name="settings.plugin.item" />
     </>
   )
 }

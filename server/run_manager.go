@@ -56,14 +56,17 @@ type RunHandle struct {
 	FinishedAt *time.Time           `json:"finished_at,omitempty"`
 	Events     chan RunEvent        `json:"-"`
 	ExecState  *flow.ExecutionState `json:"-"` // read-only execution state snapshot
+	Jobs       []*RunJob            `json:"jobs,omitempty"` // background sub-tasks
 	cancel     context.CancelFunc
 	mu         sync.Mutex
+	eventsClosed bool
 }
 
 // RunManager manages the lifecycle of flow runs.
 type RunManager struct {
 	mu             sync.RWMutex
 	runs           map[string]*RunHandle
+	queues         map[string]*RunQueue
 	store          *FlowStore
 	seq            int
 	fctxFactory    ContextFactory
@@ -73,8 +76,9 @@ type RunManager struct {
 // NewRunManager creates a RunManager backed by the given FlowStore.
 func NewRunManager(store *FlowStore) *RunManager {
 	return &RunManager{
-		runs:  make(map[string]*RunHandle),
-		store: store,
+		runs:   make(map[string]*RunHandle),
+		queues: make(map[string]*RunQueue),
+		store:  store,
 	}
 }
 
@@ -201,7 +205,7 @@ func (rm *RunManager) execute(ctx context.Context, handle *RunHandle, def *flowd
 
 	handle.emit(RunEvent{Type: "run_done", Timestamp: time.Now(), Data: output})
 	handle.mu.Unlock()
-	close(handle.Events)
+	handle.closeEvents()
 
 	// Call session-end hook (e.g. LongMemPromoter) asynchronously.
 	// Errors are logged but do not affect the run's success status.
@@ -224,7 +228,7 @@ func (rm *RunManager) failRun(handle *RunHandle, err error) {
 	handle.FinishedAt = &now
 	handle.emit(RunEvent{Type: "error", Timestamp: time.Now(), Data: map[string]string{"error": err.Error()}})
 	handle.mu.Unlock()
-	close(handle.Events)
+	handle.closeEvents()
 }
 
 // GetID returns the run's unique identifier.
@@ -235,11 +239,28 @@ func (h *RunHandle) GetStatus() string { return string(h.Status) }
 
 // emit sends an event to the run's event channel. Must be called with handle.mu held.
 func (h *RunHandle) emit(ev RunEvent) {
+	if h.eventsClosed {
+		return
+	}
 	select {
 	case h.Events <- ev:
 	default:
 		// Drop event if channel is full (non-blocking).
 	}
+}
+
+// closeEvents idempotently closes the run's event channel. Unlike a raw
+// close(handle.Events) it is guarded by the eventsClosed flag under the same
+// mutex that emit uses, so late emits (e.g. a queue/job event arriving after
+// the run finished) are dropped safely instead of panicking on a closed channel.
+func (h *RunHandle) closeEvents() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.eventsClosed {
+		return
+	}
+	h.eventsClosed = true
+	close(h.Events)
 }
 
 // Status returns the current status of a run.

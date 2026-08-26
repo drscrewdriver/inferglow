@@ -62,13 +62,40 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.sessionStore.Get(id))
 }
 
-// handleListSessions handles GET /v1/sessions — list all sessions.
+// handleListSessions handles GET /v1/sessions — list sessions with optional
+// search / group / pinned filters, returning a sorted list plus a grouped map.
+//
+// Query params:
+//   - q:      case-insensitive substring match across title/group/agent/owner
+//   - group:  exact group name filter
+//   - pinned: "true" -> pinned only, "false" -> unpinned only, absent -> all
+//
+// Response: {"sessions": [...], "groups": {"<group>": [...]}, "query": {...}, "count": n}
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if s.sessionStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "session store not configured")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.sessionStore.List())
+	q := r.URL.Query().Get("q")
+	group := r.URL.Query().Get("group")
+	var pinned *bool
+	if raw := r.URL.Query().Get("pinned"); raw != "" {
+		b := raw == "true" || raw == "1"
+		pinned = &b
+	}
+	sessions := s.sessionStore.ListFiltered(SessionListFilter{Q: q, Group: group, Pinned: pinned})
+
+	groups := map[string][]*SessionRecord{}
+	for _, rec := range sessions {
+		groups[rec.Group] = append(groups[rec.Group], rec)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions": sessions,
+		"groups":   groups,
+		"query":    map[string]any{"q": q, "group": group, "pinned": pinned},
+		"count":    len(sessions),
+	})
 }
 
 // handleGetSession handles GET /v1/sessions/{id} — return a single session.

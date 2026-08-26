@@ -1,0 +1,40 @@
+/* thinking — 思考级别 Auto 设置卡片 */
+
+.levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.levelChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--igw-border);
+  background: transparent;
+  color: var(--igw-text-dim);
+  cursor: pointer;
+}
+.levelChip:hover {
+  background: var(--igw-panel-2);
+  color: var(--igw-text);
+}
+.levelChipOn {
+  border-color: var(--igw-accent);
+  color: var(--igw-accent);
+  background: var(--igw-accent-soft);
+}
+.levelDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.autoRules {
+  border-top: 1px dashed var(--igw-border-soft);
+  margin-top: 4px;
+  padding-top: 6px;
+}
