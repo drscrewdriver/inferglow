@@ -423,6 +423,29 @@
   font-size: 11px;
   color: var(--igw-text-dim);
 }
+.ctxSelector {
+  display: inline-flex;
+  gap: 1px;
+  background: var(--igw-panel);
+  border: 1px solid var(--igw-border);
+  border-radius: 6px;
+  padding: 1px;
+}
+.ctxBtn {
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-family: var(--igw-font-mono);
+  color: var(--igw-text-faint);
+}
+.ctxBtn:hover {
+  color: var(--igw-text);
+}
+.ctxBtnOn {
+  background: var(--igw-accent-soft);
+  color: var(--igw-accent);
+  font-weight: 600;
+}
 .ctxSwitch {
   width: 28px;
   height: 16px;

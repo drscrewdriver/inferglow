@@ -303,7 +303,7 @@ function Composer({
   const [cmdOpen, setCmdOpen] = useState(false)
   const [model, setModel] = useState('deepseek-chat')
   const [mentionOpen, setMentionOpen] = useState(false)
-  const [ctxExpanded, setCtxExpanded] = useState(false)
+  const [ctxSize, setCtxSize] = useState<string>('128k')
   const mentionRef = useRef<MentionInputHandle>(null)
   const sendMessage = useChatStore((s) => s.sendMessage)
   const streaming = useChatStore((s) => s.streaming)
@@ -355,25 +355,6 @@ function Composer({
             <option value="deepseek-reasoner">deepseek-reasoner</option>
             <option value="gpt-5">gpt-5</option>
           </select>
-          <span className={styles.toolbarSep} />
-          <div className={styles.thinkToggle}>
-            {thinkButtons.map((b) => (
-              <button
-                key={b.level}
-                className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
-                onClick={() => setThinkLevel(b.level)}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-          <span className={styles.toolbarSep} />
-          <label className={styles.ctxToggle} title="开启后上下文窗口扩展至 1M，适用于复杂长任务">
-            <span className={styles.ctxLabel}>更大上下文</span>
-            <span className={`${styles.ctxSwitch}${ctxExpanded ? ` ${styles.ctxSwitchOn}` : ''}`} onClick={() => setCtxExpanded((v) => !v)}>
-              <span className={styles.ctxKnob} />
-            </span>
-          </label>
           {running && <span className={styles.runningTag}>运行中…</span>}
         </div>
         {cmdOpen && (
@@ -391,7 +372,8 @@ function Composer({
           value={text}
           onChange={(v) => {
             setText(v)
-            if (v.startsWith('/')) setCmdOpen(true)
+            // Show command menu while typing a /command (no space yet).
+            setCmdOpen(v.startsWith('/') && !v.includes(' '))
           }}
           onMenuChange={setMentionOpen}
           onSubmit={send}
@@ -399,7 +381,28 @@ function Composer({
         />
         <ProducedFiles onOpen={openFile} />
         <div className={styles.composerBar}>
-          <span className={styles.ctxChip}>上下文 128k</span>
+          <div className={styles.thinkToggle}>
+            {thinkButtons.map((b) => (
+              <button
+                key={b.level}
+                className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
+                onClick={() => setThinkLevel(b.level)}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.ctxSelector}>
+            {['128k', '256k', '400k', '1M'].map((s) => (
+              <button
+                key={s}
+                className={`${styles.ctxBtn}${ctxSize === s ? ` ${styles.ctxBtnOn}` : ''}`}
+                onClick={() => setCtxSize(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
           <span className={styles.composerSpacer} />
           <SlotOutlet name="conversation.input.right" props={{ disabled }} />
           {streaming && (
