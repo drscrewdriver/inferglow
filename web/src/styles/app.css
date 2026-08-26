@@ -1,4 +1,4 @@
-﻿   閲囩敤 openhanako 鐨?--bg/--bg2/--panel/--panel2/--gold/--coral 浣撶郴锛?   骞朵繚鐣?InferGlow 鍘熸湁鍙橀噺鍚嶄綔涓哄吋瀹瑰埆鍚嶏紙JS/CSS 鏃犳劅鍒囨崲锛夈€?   鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 */
+   閲囩敤 openhanako 鐨?--bg/--bg2/--panel/--panel2/--gold/--coral 浣撶郴锛?   骞朵繚鐣?InferGlow 鍘熸湁鍙橀噺鍚嶄綔涓哄吋瀹瑰埆鍚嶏紙JS/CSS 鏃犳劅鍒囨崲锛夈€?   鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 */
 :root{
   --bg:#141412; --bg2:#1a1a17; --panel:#1d1d19; --panel2:#23231f;
   --border:#30302a; --border-soft:#282824;
@@ -70,7 +70,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .cmdk-btn{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev);font-size:12px;color:var(--fg-faint);min-width:220px}
 .cmdk-btn:hover{color:var(--fg);border-color:var(--border)}
 .cmdk-btn .k{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint);border:1px solid var(--border);border-radius:4px;padding:1px 6px;background:var(--bg)}
-.icon-btn{width:30px;height:30px;display:grid;place-items:center;border-radius:7px;color:var(--fg-faint);font-size:14px}
+.icon-btn{height:30px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 8px;border-radius:7px;color:var(--fg-faint);font-size:12px;white-space:nowrap}
 .icon-btn:hover{background:var(--bg-elev-2);color:var(--fg)}
 .spacer-x{flex:1}
 
