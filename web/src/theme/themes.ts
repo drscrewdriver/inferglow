@@ -189,15 +189,29 @@ export function resolveThemeVars(key: string): { vars: Record<string, string>; d
     '--igw-text': t.text, '--igw-text-dim': t.textDim, '--igw-text-faint': t.textFaint,
   }
   const vars: Record<string, string> = {
-    '--bg': t.bg, '--bg2': t.bg2, '--panel': t.panel, '--panel2': t.panel2,
+    // surfaces
+    '--bg': t.bg, '--bg2': t.bg2, '--bg-soft': t.bg2,
+    '--bg-elev': t.panel, '--bg-elev-2': t.panel2,
+    '--panel': t.panel, '--panel2': t.panel2,
     '--border': t.border, '--border-soft': t.borderSoft,
+    // text (aliases written as concrete values — see textAliases comment)
     '--text': t.text, '--text-dim': t.textDim, '--text-faint': t.textFaint,
     ...textAliases,
+    // accent + status
     '--accent': t.accent, '--accent-fg': accentFg, '--accent-strong': accentStrong, '--accent-soft': t.accentSoft,
     '--coral': t.coral ?? '', '--gold': t.gold ?? '', '--warn': t.gold ?? '', '--ok': t.accent,
+    '--err': '#e5534b',
+    // goal
     '--goal': goal, '--goal-strong': goalStrong, '--goal-soft': t.accentSoft,
+    // avatars
     '--avatar-a': aA, '--avatar-b': aB, '--avatar-a2': aA2, '--avatar-b2': aB2,
-    '--sidebar-active': t.accentSoft,
+    '--avatar-fg': t.text,
+    // sidebar
+    '--sidebar-bg': t.panel, '--sidebar-hover': t.panel2, '--sidebar-active': t.accentSoft,
+    // shape + fonts
+    '--radius': '10px',
+    '--font-ui': '"PingFang SC","Microsoft YaHei","Segoe UI",-apple-system,sans-serif',
+    '--font-mono': 'Consolas,"Cascadia Code","SF Mono",ui-monospace,monospace',
   }
   return { vars, dark: t.dark }
 }

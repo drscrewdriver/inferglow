@@ -63,7 +63,11 @@ export function AppFrame({
   const railCollapsed = sidebarCollapsed ?? autoCollapsed
 
   const gridTemplateColumns = `${railCollapsed ? 44 : Math.round(sidebarW)}px minmax(0, 1fr) ${detailsOpen ? Math.round(detailsW) : 0}px`
-  const style = { gridTemplateColumns } as CSSProperties
+  const style = {
+    gridTemplateColumns,
+    '--sidebar-w': `${railCollapsed ? 44 : Math.round(sidebarW)}px`,
+    '--details-w': `${detailsOpen ? Math.round(detailsW) : 0}px`,
+  } as CSSProperties
 
   /** Drag a divider to resize its adjacent pane (pointer capture + rAF). */
   const startResize =
