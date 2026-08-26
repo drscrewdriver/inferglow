@@ -5,6 +5,9 @@ import { useSession, UNGROUPED_LABEL, SlotOutlet } from '../framework'
 import { useTrafficStore, selectFrozen } from '../traffic/trafficStore'
 import '../traffic/slots' // registers conversation.* / details.panel.items slots (side effect)
 import '../approval/slots' // registers details.panel.items (approval cards)
+import '../memory/memorySlots' // registers details.panel.items (memory panel)
+import '../subagents/subagentsSlots' // registers details.panel.items (sub-agent panel)
+import '../todo/todoSlots' // registers details.panel.items (todo panel)
 import styles from './conversation.module.css'
 import { useTidychatStore, selectTurnFolded } from '../tidychat/tidychatStore'
 import { turnGrouping, decideFold, type TzTurn } from '../tidychat/logic'

@@ -144,3 +144,48 @@ export interface ApprovalListResult {
 
 /** POST /v1/approvals response returns the (possibly pending) record. */
 export type ApprovalSubmitResult = ApprovalRecord
+
+// ─── memories (details panel, aligned to server.MemoryRecord) ───
+export interface MemoryRecord {
+  id: string
+  content: string
+  category?: string
+  facts?: string[]
+}
+export interface MemoryListResult {
+  memories: MemoryRecord[]
+  count: number
+}
+
+// ─── agents (sub-agent panel; concrete JSON varies by backend impl) ───
+export interface AgentRecord {
+  id?: string
+  name?: string
+  model?: string
+  [key: string]: unknown
+}
+export interface AgentListResult {
+  agents: AgentRecord[]
+  count: number
+}
+
+// ─── runs + steps (todo panel, aligned to runResponse / handleGetRunSteps) ───
+export interface RunRecord {
+  run_id: string
+  flow?: string
+  status?: string
+  started_at?: string
+  finished_at?: string
+  owner?: string
+  error?: string
+  [key: string]: unknown
+}
+export interface RunStep {
+  step: string
+  duration?: string
+  error?: string
+}
+export interface RunStepsResult {
+  run_id: string
+  steps: RunStep[]
+}

@@ -22,6 +22,13 @@ export type {
   ApprovalListResult,
   ApprovalSubmitResult,
   RiskLevel,
+  MemoryRecord,
+  MemoryListResult,
+  AgentRecord,
+  AgentListResult,
+  RunRecord,
+  RunStep,
+  RunStepsResult,
 } from './types'
 
 /** Shared transport instance; stores and hooks depend only on this. */
