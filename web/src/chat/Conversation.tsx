@@ -291,6 +291,25 @@ function FlowList({
 }
 
 // ─── Composer: command menu + model select + context usage + send ─────────
+
+/** Model → supported thinking levels (aligned with backend reasoning tiers). */
+const MODEL_THINK_LEVELS: Record<string, { label: string; level: ThinkingLevel }[]> = {
+  'deepseek-chat': [],
+  'deepseek-reasoner': [
+    { label: '轻', level: 'low' },
+    { label: '中', level: 'medium' },
+    { label: '高', level: 'high' },
+  ],
+  'gpt-5': [
+    { label: '轻', level: 'low' },
+    { label: '中', level: 'medium' },
+    { label: '高', level: 'high' },
+    { label: '极高', level: 'max' },
+  ],
+}
+
+const CTX_SIZES = ['128k', '256k', '400k', '1M']
+
 function Composer({
   disabled,
   text,
@@ -315,6 +334,18 @@ function Composer({
   const setThinkLevel = useThinkingStore((s) => s.setLevel)
 
   const COMMANDS = ['/plan', '/think', '/tool', '/memory', '/agent']
+  const thinkOptions = MODEL_THINK_LEVELS[model] ?? []
+
+  // When model changes, ensure the current thinking level is valid for the new model.
+  const handleModelChange = (newModel: string) => {
+    setModel(newModel)
+    const options = MODEL_THINK_LEVELS[newModel] ?? []
+    if (options.length > 0 && !options.some((o) => o.level === thinkLevel)) {
+      setThinkLevel(options[0].level)
+    } else if (options.length === 0 && thinkLevel !== 'auto') {
+      setThinkLevel('auto')
+    }
+  }
 
   const send = useCallback(() => {
     if (!active || streaming || mentionOpen) return
@@ -335,28 +366,10 @@ function Composer({
     window.alert(`打开文件：${path}`)
   }, [])
 
-  // Thinking level buttons: 轻(low) / 高(high) / 极高(max)
-  const thinkButtons: { label: string; level: ThinkingLevel }[] = [
-    { label: '轻', level: 'low' },
-    { label: '高', level: 'high' },
-    { label: '极高', level: 'max' },
-  ]
-
   return (
     <div className={styles.composerWrap}>
       <SlotOutlet name="conversation.input.dock" props={{ onPullBack: setText }} />
       <div className={styles.composer}>
-        <div className={styles.composerToolbar}>
-          <button className={styles.cmdBtn} onClick={() => setCmdOpen((v) => !v)} title="命令菜单">
-            /
-          </button>
-          <select className={styles.modelSelect} value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="deepseek-chat">deepseek-chat</option>
-            <option value="deepseek-reasoner">deepseek-reasoner</option>
-            <option value="gpt-5">gpt-5</option>
-          </select>
-          {running && <span className={styles.runningTag}>运行中…</span>}
-        </div>
         {cmdOpen && (
           <div className={styles.cmdMenu}>
             {COMMANDS.map((c) => (
@@ -372,7 +385,6 @@ function Composer({
           value={text}
           onChange={(v) => {
             setText(v)
-            // Show command menu while typing a /command (no space yet).
             setCmdOpen(v.startsWith('/') && !v.includes(' '))
           }}
           onMenuChange={setMentionOpen}
@@ -381,19 +393,33 @@ function Composer({
         />
         <ProducedFiles onOpen={openFile} />
         <div className={styles.composerBar}>
-          <div className={styles.thinkToggle}>
-            {thinkButtons.map((b) => (
-              <button
-                key={b.level}
-                className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
-                onClick={() => setThinkLevel(b.level)}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
+          {/* / command menu */}
+          <button className={styles.cmdBtn} onClick={() => setCmdOpen((v) => !v)} title="命令菜单">
+            /
+          </button>
+          {/* Model selector */}
+          <select className={styles.modelSelect} value={model} onChange={(e) => handleModelChange(e.target.value)}>
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-reasoner">deepseek-reasoner</option>
+            <option value="gpt-5">gpt-5</option>
+          </select>
+          {/* Thinking level — only shown when model supports it */}
+          {thinkOptions.length > 0 && (
+            <div className={styles.thinkToggle}>
+              {thinkOptions.map((b) => (
+                <button
+                  key={b.level}
+                  className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
+                  onClick={() => setThinkLevel(b.level)}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Context window size */}
           <div className={styles.ctxSelector}>
-            {['128k', '256k', '400k', '1M'].map((s) => (
+            {CTX_SIZES.map((s) => (
               <button
                 key={s}
                 className={`${styles.ctxBtn}${ctxSize === s ? ` ${styles.ctxBtnOn}` : ''}`}
@@ -404,6 +430,7 @@ function Composer({
             ))}
           </div>
           <span className={styles.composerSpacer} />
+          {running && <span className={styles.runningTag}>运行中…</span>}
           <SlotOutlet name="conversation.input.right" props={{ disabled }} />
           {streaming && (
             <button className={styles.stopBtn} onClick={stop}>
