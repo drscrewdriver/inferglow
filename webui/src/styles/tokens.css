@@ -1,0 +1,65 @@
+/* InferGlow Web UI — CSS Token 体系（参考 DeepSeek Harness 深色主题） */
+:root {
+  /* 表面色 */
+  --bg: #0f1117;
+  --bg2: #161822;
+  --surface: #1c1f2e;
+  --surface-hover: #242738;
+  --border: #2a2d3e;
+  --border-soft: #1e2030;
+
+  /* 文本色 */
+  --text: #e4e4e7;
+  --text-dim: #9ca3af;
+  --text-faint: #6b7280;
+
+  /* 强调色 */
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --accent-soft: rgba(99, 102, 241, 0.15);
+
+  /* 状态色 */
+  --ok: #22c55e;
+  --warn: #eab308;
+  --err: #ef4444;
+
+  /* 侧栏 */
+  --sidebar-bg: #13151f;
+  --sidebar-hover: #1c1f2e;
+  --sidebar-active: #252840;
+
+  /* 间距 */
+  --sp-4: 4px;
+  --sp-8: 8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-20: 20px;
+  --sp-24: 24px;
+
+  /* 圆角 */
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-lg: 12px;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+}
+
+/* 重置 */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }

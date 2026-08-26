@@ -96,19 +96,128 @@ graph TD
 > 下面是一个完整的端到端示例，演示如何用 inferglow 组装一个带工具调用的 Agent。
 > 无需真实 LLM API Key，使用 MockLLM 即可运行。
 
-### 0. 桌面 GUI（React 19 + Vite + Zustand）
+### 0. 前端入口总览
 
-GUI 前端构建产物内嵌进 server（`//go:embed webui`），浏览器打开 `/gui` 即用：
+InferGlow 有三个独立的前端方向，定位和使用场景各不相同：
+
+| 入口 | 路径 | 定位 | 运行方式 | 状态 |
+|------|------|------|---------|------|
+| **Web GUI** | `/web` | 浏览器中运行的 Agent 管理界面（参考 DeepSeek Harness） | Server 无头启动 → 浏览器访问 | ⏳ **新方向，待实现** |
+| Desktop GUI | `/gui` | 桌面壳内嵌的 Agent 界面（openhanako 风格） | Wails 桌面窗口内嵌 React GUI | ✅ 已实现（25 任务完成 23） |
+| Dashboard | `/dashboard` | 独立可观测性仪表盘（Span 统计） | 浏览器直接访问 | ✅ 已实现（开发调试用） |
+
+---
+
+#### 方向一：Web GUI（浏览器网页版）— 待实现
+
+**目标**：Server 以无头模式启动（监听端口），用户在任意浏览器中打开即用。不依赖桌面环境，不限操作系统。
+
+**参考**：[DeepSeek Harness](https://github.com/deepseek-ai/harness) Web UI
+
+**参考布局特征**（基于 DeepSeek Harness 截图）：
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  顶栏：Logo + 导航标签（对话/轨迹/上下文） + Session log     │
+├──────────┬────────────────────────────┬──────────────────────┤
+│ 侧栏     │  对话区（主区域）           │  右侧详情面板        │
+│          │                            │  - 任务管理          │
+│ 工作区   │  消息流（Markdown 渲染）    │  - 文件列表          │
+│ 会话树   │  产物展示（package.json）   │  - task_plan.md      │
+│ 分组折叠 │  工具调用卡片              │                      │
+│ 搜索     │                            │                      │
+│          ├────────────────────────────┤                      │
+│          │  输入区：模型选择 + 冻结    │                      │
+│          │  + 发送按钮                │                      │
+│          ├────────────────────────────┤                      │
+│          │  终端抽屉（PowerShell）     │                      │
+├──────────┴────────────────────────────┴──────────────────────┤
+│  状态栏：轮次 · 步数 · LLM 耗时 · 工具调用 · Token 统计     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**核心设计原则**：
+
+1. **Server 无头**：`inferglow-server` 只监听 HTTP 端口，不启动任何 GUI 进程。前端是独立的 SPA，通过 REST + SSE 与后端通信。
+2. **浏览器原生**：不依赖 Electron/Wails/Tauri，任何现代浏览器（Chrome/Edge/Firefox）均可访问。
+3. **局域网共享**：Server 监听 `0.0.0.0` 时，同网络内其他设备也可访问。
+4. **样式参考 DeepSeek Harness**：深色主题、三栏布局、侧栏工作区/会话树、底部终端抽屉、状态栏统计。
+
+**与 Desktop GUI 的区别**：
+
+| 维度 | Web GUI（网页版） | Desktop GUI（桌面版） |
+|------|-------------------|----------------------|
+| 运行环境 | 浏览器（任意 OS） | Wails 桌面窗口 |
+| 通信方式 | REST + SSE（HTTP） | Wails Go↔JS 绑定（直调） |
+| 样式风格 | DeepSeek Harness 风格 | openhanako 风格 |
+| 部署方式 | Server 远程部署，浏览器远程访问 | 本地安装桌面应用 |
+| 代码位置 | `webui/`（源码）→ `server/webbrowser/`（embed） | `web/`（源码）→ `server/webui/`（embed） |
+
+**目录结构**：
+
+```
+inferglow-github/
+├── webui/                    # Web GUI 源码（浏览器网页版，DeepSeek Harness 风格）
+│   ├── src/
+│   │   ├── App.tsx           # 主应用（三栏布局）
+│   │   ├── components/       # Sidebar / ChatArea / DetailsPanel / StatusBar
+│   │   ├── api/              # REST transport + SSE 解析
+│   │   └── styles/           # CSS tokens（深色主题）
+│   ├── vite.config.ts        # base: '/web/', outDir: '../server/webbrowser'
+│   └── package.json          # inferglow-webui
+├── web/                      # Desktop GUI 源码（桌面壳内嵌，openhanako 风格）
+│   ├── src/                  # 完整功能（25 任务完成 23）
+│   ├── vite.config.ts        # base: '/gui/', outDir: '../server/webui'
+│   └── package.json          # inferglow-web
+├── server/
+│   ├── webbrowser/           # Web GUI embed 产物（webui/build 输出）
+│   ├── webui/                # Desktop GUI embed 产物（web/build 输出）
+│   ├── handlers_webui.go     # /web/ 路由 handler
+│   └── handlers_gui.go       # /gui/ 路由 handler
+```
+
+**待完善**：
+
+- Server 端新增 `/v1/settings`、`/v1/themes` API（设置/主题持久化）
+- 对齐 DeepSeek Harness 的布局和交互模式（SSE 流式聊天、工具调用卡片等）
+- 会话管理、上下文可视化等完整功能
+
+---
+
+#### 方向二：Desktop GUI（桌面壳内嵌）— 已实现
+
+当前 `web/` 目录下的 React 19 + Vite + Zustand 前端，设计初衷是嵌入 Wails 桌面壳（`desktop/`）。
 
 ```bash
+# 启动方式：Server + 浏览器访问（当前也可用，但定位是桌面 GUI）
 cd server
-go run ./cmd/inferglow-server -demo-agent   # 内置 echo agent，无需真实模型
+go run ./cmd/inferglow-server -demo-agent
 # 浏览器访问 http://localhost:8080/gui/
 ```
 
-- 聊天 SSE 流式、会话管理（置顶/归档/重命名）、15 tab 设置面板完整对接 REST。
-- 前端工程见 `web/`（`npm run dev` 开发、`npm run build` 产物入库）；
-  架构与契约见 [docs/guides/gui.md](docs/guides/gui.md)。
+**已实现能力**（25 任务完成 23）：
+
+- 三栏布局（侧栏 | 对话区 | 详情面板）
+- 会话管理（置顶/归档/重命名/分组/搜索/拖拽排序）
+- 输入流量管理（三级规划队列 + 冻结/恢复 + 后台任务）
+- 会话折叠与导航（自动折叠、Canvas Minimap、智能加载历史）
+- 上下文可视化（六色堆叠条、趋势图、上下文浏览器）
+- @file 功能、沙箱与权限、设置面板（15 tab）、主题系统（20 套）
+
+**待完成**：Task 24（设置面板服务端持久化）、Task 25（主题系统服务端持久化）
+
+开发详见 [docs/guides/gui.md](docs/guides/gui.md)。
+
+---
+
+#### 方向三：Dashboard（可观测性仪表盘）— 已实现
+
+独立的 Span 统计页面，纯 HTML，无认证，5 秒自动刷新。
+
+```bash
+# 随 Server 启动即可访问
+http://localhost:8080/dashboard
+```
 
 ### 1. 创建一个最简单的 Agent
 

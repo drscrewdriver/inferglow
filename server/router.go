@@ -35,11 +35,17 @@ func (s *Server) registerRoutes() {
 	// Dashboard (OT-13, no auth for dev convenience)
 	s.mux.HandleFunc("GET /dashboard", s.handleDashboard)
 
-	// GUI (React build embedded in webui/, no auth, mirrors /dashboard tier)
+	// GUI — Desktop GUI (openhanako style, embedded in webui/, no auth)
 	s.mux.HandleFunc("GET /gui", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/gui/", http.StatusMovedPermanently)
 	})
 	s.mux.HandleFunc("GET /gui/{path...}", s.handleGUI)
+
+	// Web UI — Browser Web UI (DeepSeek Harness style, embedded in webbrowser/, no auth)
+	s.mux.HandleFunc("GET /web", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/web/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /web/{path...}", s.handleWebUI)
 
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
