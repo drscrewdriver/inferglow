@@ -292,18 +292,19 @@ function FlowList({
 
 // ─── Composer: command menu + model select + context usage + send ─────────
 
+/** Default thinking levels when model has no specific mapping. */
+const DEFAULT_THINK_LEVELS: { label: string; level: ThinkingLevel }[] = [
+  { label: '轻', level: 'low' },
+  { label: '中', level: 'medium' },
+  { label: '高', level: 'high' },
+]
+
 /** Model → supported thinking levels (aligned with backend reasoning tiers). */
 const MODEL_THINK_LEVELS: Record<string, { label: string; level: ThinkingLevel }[]> = {
-  'deepseek-chat': [],
-  'deepseek-reasoner': [
-    { label: '轻', level: 'low' },
-    { label: '中', level: 'medium' },
-    { label: '高', level: 'high' },
-  ],
+  'deepseek-chat': DEFAULT_THINK_LEVELS,
+  'deepseek-reasoner': DEFAULT_THINK_LEVELS,
   'gpt-5': [
-    { label: '轻', level: 'low' },
-    { label: '中', level: 'medium' },
-    { label: '高', level: 'high' },
+    ...DEFAULT_THINK_LEVELS,
     { label: '极高', level: 'max' },
   ],
 }
@@ -403,20 +404,18 @@ function Composer({
             <option value="deepseek-reasoner">deepseek-reasoner</option>
             <option value="gpt-5">gpt-5</option>
           </select>
-          {/* Thinking level — only shown when model supports it */}
-          {thinkOptions.length > 0 && (
-            <div className={styles.thinkToggle}>
-              {thinkOptions.map((b) => (
-                <button
-                  key={b.level}
-                  className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
-                  onClick={() => setThinkLevel(b.level)}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Thinking level */}
+          <div className={styles.thinkToggle}>
+            {thinkOptions.map((b) => (
+              <button
+                key={b.level}
+                className={`${styles.thinkBtn}${thinkLevel === b.level ? ` ${styles.thinkBtnOn}` : ''}`}
+                onClick={() => setThinkLevel(b.level)}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
           {/* Context window size */}
           <div className={styles.ctxSelector}>
             {CTX_SIZES.map((s) => (

@@ -56,6 +56,10 @@
   color: transparent;
   background: var(--igw-accent-soft);
 }
+.input::placeholder {
+  color: var(--igw-text-faint);
+  opacity: 0.7;
+}
 
 .menu {
   position: absolute;

@@ -137,7 +137,7 @@ export const MentionInput = forwardRef<
           const m = detectMention(el.value, el.selectionStart ?? el.value.length)
           setHit(m && m.active ? m : null)
         }}
-        placeholder="…"
+        placeholder="给智能体发消息…"
       />
       {menuOpen && (
         <div className={styles.menu} data-testid="mention-menu">
