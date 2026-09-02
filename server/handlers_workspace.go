@@ -22,7 +22,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/inferglow/workspace"
 )
 
 // handleCreateWorkspace handles POST /v1/workspaces — open a workspace rooted
@@ -136,5 +146,360 @@ func (s *Server) handleListWorkspaceFiles(w http.ResponseWriter, r *http.Request
 		"name":  name,
 		"path":  rel,
 		"files": files,
+	})
+}
+
+// --- Workspace file management (Spec B) ---
+//
+// The endpoints below back the sidebar file tree / @file feature. All paths
+// are relative to a shared workspace root and confined to it via the
+// workspace.Workspace boundary (SafePath rejects traversal).
+
+// workspaceRoot resolves the workspace root directory this server exposes for
+// file operations. It prefers the first opened workspace (C-7 provider); when
+// none is open it falls back to the process working directory.
+func (s *Server) workspaceRoot() string {
+	if s.wsProvider != nil {
+		if ws := s.wsProvider.List(); len(ws) > 0 {
+			return ws[0].Root
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
+}
+
+// newFileWorkspace returns a workspace.Workspace confined to the server's
+// workspace root. Callers own the returned instance (stateless).
+func (s *Server) newFileWorkspace() (*workspace.Workspace, error) {
+	root := s.workspaceRoot()
+	if root == "" {
+		return nil, errors.New("no workspace root configured")
+	}
+	return workspace.New(workspace.Config{RootDir: root})
+}
+
+// fsEntry is one row of a directory listing.
+type fsEntry struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	IsDir  bool   `json:"is_dir"`
+	Hidden bool   `json:"hidden"`
+}
+
+// handleWorkspaceTree handles GET /v1/workspace/tree (alias /v1/fs/tree) —
+// single-level directory listing inside the workspace root.
+func (s *Server) handleWorkspaceTree(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	names, err := ws.ListDir(rel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entries := make([]fsEntry, 0, len(names))
+	for _, name := range names {
+		info, err := ws.Stat(filepath.Join(rel, name))
+		if err != nil {
+			continue
+		}
+		entries = append(entries, fsEntry{
+			Name:   name,
+			Path:   filepath.ToSlash(filepath.Join(rel, name)),
+			IsDir:  info.IsDir(),
+			Hidden: strings.HasPrefix(name, "."),
+		})
+	}
+	// Directory-first, name (case-insensitive) ordering — VSCode order.
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].IsDir != entries[j].IsDir {
+			return entries[i].IsDir
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"root":      ws.Root(),
+		"path":      rel,
+		"entries":   entries,
+		"truncated": false,
+	})
+}
+
+// handleWorkspaceRead handles GET /v1/workspace/read (alias /v1/fs/read) —
+// read a file's text content within the workspace root.
+func (s *Server) handleWorkspaceRead(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if rel == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	data, err := ws.ReadFile(rel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"root":    ws.Root(),
+		"path":    filepath.ToSlash(rel),
+		"content": string(data),
+		"bytes":   len(data),
+	})
+}
+
+// handleWorkspaceWrite handles POST /v1/workspace/write (alias /v1/fs/write)
+// — create/overwrite a file within the workspace root.
+func (s *Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := ws.WriteFile(req.Path, []byte(req.Content)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"path":   filepath.ToSlash(req.Path),
+		"bytes":  len(req.Content),
+		"status": "written",
+	})
+}
+
+// handleWorkspaceRename handles POST /v1/workspace/rename (alias
+// /v1/fs/rename) — rename or move a file/dir within the workspace root.
+func (s *Server) handleWorkspaceRename(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var req struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.From == "" || req.To == "" {
+		writeError(w, http.StatusBadRequest, "from and to are required")
+		return
+	}
+	fromAbs, err := ws.SafePath(req.From)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	toAbs, err := ws.SafePath(req.To)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(toAbs), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.Rename(fromAbs, toAbs); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"from":   filepath.ToSlash(req.From),
+		"to":     filepath.ToSlash(req.To),
+		"status": "renamed",
+	})
+}
+
+// handleWorkspaceDelete handles POST /v1/workspace/delete (alias /v1/fs/delete)
+// — remove a file or directory tree within the workspace root.
+func (s *Server) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	path := r.URL.Query().Get("path")
+	if r.Body != nil && path == "" {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Path != "" {
+			path = req.Path
+		}
+	}
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := ws.RemoveAll(path); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":   filepath.ToSlash(path),
+		"status": "deleted",
+	})
+}
+
+// fsSearchSkipDirs are directory names never matched nor descended during a
+// filename search (aligned with DSH fs-search.ts).
+var fsSearchSkipDirs = map[string]bool{
+	".git": true, "node_modules": true, ".pnpm-store": true, ".yarn": true,
+	".turbo": true, ".turbopack": true, ".next": true, ".nuxt": true,
+	".output": true, ".cache": true, ".parcel-cache": true, "coverage": true,
+	"dist": true, "build": true, "out": true, ".umi": true, ".umi-production": true, ".dumi": true,
+}
+
+// handleWorkspaceSearch handles GET /v1/workspace/search (alias /v1/fs/search)
+// — recursive case-insensitive filename substring search within the root.
+func (s *Server) handleWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	q := r.URL.Query().Get("q")
+	opt := r.URL.Query().Get("limit")
+	maxMatches := 200
+	if n, err := strconv.Atoi(opt); err == nil && n > 0 {
+		maxMatches = n
+	}
+	maxVisited := 100_000
+	needle := strings.ToLower(strings.TrimSpace(q))
+	matches := []string{}
+	truncated := false
+	visited := 0
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		if truncated {
+			return nil
+		}
+		names, err := ws.ListDir(dir)
+		if err != nil {
+			return nil // unreadable levels are skipped
+		}
+		for _, name := range names {
+			visited++
+			if visited > maxVisited {
+				truncated = true
+				return nil
+			}
+			rel := name
+			if dir != "" {
+				rel = filepath.Join(dir, name)
+			}
+			info, err := ws.Stat(rel)
+			if err != nil {
+				continue
+			}
+			isDir := info.IsDir()
+			if isDir && fsSearchSkipDirs[strings.ToLower(name)] {
+				continue
+			}
+			if strings.Contains(strings.ToLower(name), needle) {
+				matches = append(matches, filepath.ToSlash(rel))
+				if len(matches) >= maxMatches {
+					truncated = true
+					return nil
+				}
+			}
+			if isDir {
+				if err := walk(rel); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if needle == "" {
+		matches = []string{}
+	} else {
+		_ = walk("")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query":     q,
+		"matches":   matches,
+		"truncated": truncated,
+	})
+}
+
+// handleWorkspaceUpload handles POST /v1/workspace/upload (alias /v1/fs/upload)
+// — write an uploaded file into the workspace root. Accepts either a raw body
+// with ?path=, or multipart/form-data with "path" (fallback ?path=) and
+// "file" fields.
+func (s *Server) handleWorkspaceUpload(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.newFileWorkspace()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	target := r.URL.Query().Get("path")
+	data := []byte{}
+
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		// Multipart: filename/path come from fields.
+		if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MiB
+			writeError(w, http.StatusBadRequest, "invalid multipart body: "+err.Error())
+			return
+		}
+		if p := r.FormValue("path"); p != "" {
+			target = p
+		}
+		var file multipart.File
+		if fhs, ok := r.MultipartForm.File["file"]; ok && len(fhs) > 0 {
+			file, err = fhs[0].Open()
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "cannot open upload: "+err.Error())
+				return
+			}
+			defer file.Close()
+			data, err = io.ReadAll(file)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "cannot read upload: "+err.Error())
+				return
+			}
+		}
+	} else {
+		data, err = io.ReadAll(io.LimitReader(r.Body, 10<<20+1)) // 10 MiB cap
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "cannot read body: "+err.Error())
+			return
+		}
+	}
+	if target == "" {
+		writeError(w, http.StatusBadRequest, "path is required (query or form field)")
+		return
+	}
+	if err := ws.WriteFile(target, data); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"path": filepath.ToSlash(target),
+		"size": len(data),
 	})
 }

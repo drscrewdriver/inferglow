@@ -249,6 +249,49 @@ func (rm *RunManager) TrackJob(id, kind, description string) (*RunJob, error) {
 	return job, nil
 }
 
+// AllJobs returns every background job tracked across all runs, newest first.
+// It powers the global GET /v1/jobs listing (Spec B).
+func (rm *RunManager) AllJobs() []*RunJob {
+	rm.mu.RLock()
+	handles := make([]*RunHandle, 0, len(rm.runs))
+	for _, h := range rm.runs {
+		handles = append(handles, h)
+	}
+	rm.mu.RUnlock()
+
+	out := make([]*RunJob, 0)
+	for _, h := range handles {
+		h.mu.Lock()
+		for i := len(h.Jobs) - 1; i >= 0; i-- {
+			out = append(out, h.Jobs[i])
+		}
+		h.mu.Unlock()
+	}
+	return out
+}
+
+// FindJob looks up a single background job by ID across all runs.
+func (rm *RunManager) FindJob(jobID string) (*RunJob, bool) {
+	rm.mu.RLock()
+	handles := make([]*RunHandle, 0, len(rm.runs))
+	for _, h := range rm.runs {
+		handles = append(handles, h)
+	}
+	rm.mu.RUnlock()
+
+	for _, h := range handles {
+		h.mu.Lock()
+		for _, j := range h.Jobs {
+			if j.ID == jobID {
+				h.mu.Unlock()
+				return j, true
+			}
+		}
+		h.mu.Unlock()
+	}
+	return nil, false
+}
+
 // UpdateJob mutates the status/error of a tracked job, sets FinishedAt when
 // terminal, computes duration, and emits a job_done event.
 func (rm *RunManager) UpdateJob(id, jobID, status, errMsg string) (*RunJob, error) {

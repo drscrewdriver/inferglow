@@ -85,6 +85,7 @@ type Server struct {
 	msgStore       *MessageStore
 	reportGen      *session.ReportGenerator
 	approvalMgr    *approval.PolicyApprovalManager
+	sbxRegistry    *sandboxRegistry
 }
 
 // SetApprovalManager wires an approval authority into the server. It is used
@@ -396,6 +397,12 @@ func (s *Server) SetCredentialStore(st *CredentialStore) {
 // /v1/workspaces endpoints manage workspace records.
 func (s *Server) SetWorkspaceProvider(p WorkspaceProvider) {
 	s.wsProvider = p
+}
+
+// SetSandboxRegistry attaches the Spec B sandbox preset/rejection registry.
+// When nil, handlers create a default in-memory registry on first use.
+func (s *Server) SetSandboxRegistry(r *sandboxRegistry) {
+	s.sbxRegistry = r
 }
 
 // SetSkillStore attaches the C-10 Skill Hub store. When set, the /v1/skill-hub

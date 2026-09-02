@@ -47,6 +47,12 @@ func (s *Server) registerRoutes() {
 	})
 	s.mux.HandleFunc("GET /web/{path...}", s.handleWebUI)
 
+	// WebUI2 — 原型重构布局（embedded in webui2/, 独立于 /gui/ 与 /web/, no auth）
+	s.mux.HandleFunc("GET /webui2", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/webui2/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /webui2/{path...}", s.handleWebUI2)
+
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
 
@@ -168,6 +174,43 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /v1/workspaces/{id}", s.handleGetWorkspace)
 	api.HandleFunc("DELETE /v1/workspaces/{id}", s.handleDeleteWorkspace)
 	api.HandleFunc("GET /v1/workspaces/{id}/files", s.handleListWorkspaceFiles)
+
+	// Workspace file management (Spec B) — /v1/workspace/* and /v1/fs/* aliases
+	for _, prefix := range []string{"/v1/workspace", "/v1/fs"} {
+		api.HandleFunc("GET "+prefix+"/tree", s.handleWorkspaceTree)
+		api.HandleFunc("GET "+prefix+"/read", s.handleWorkspaceRead)
+		api.HandleFunc("POST "+prefix+"/write", s.handleWorkspaceWrite)
+		api.HandleFunc("POST "+prefix+"/rename", s.handleWorkspaceRename)
+		api.HandleFunc("POST "+prefix+"/delete", s.handleWorkspaceDelete)
+		api.HandleFunc("GET "+prefix+"/search", s.handleWorkspaceSearch)
+		api.HandleFunc("POST "+prefix+"/upload", s.handleWorkspaceUpload)
+	}
+
+	// Sandbox (Spec B)
+	api.HandleFunc("GET /v1/sandbox/runtimes", s.handleListSandboxRuntimes)
+	api.HandleFunc("GET /v1/sandbox/presets", s.handleSandboxPresets)
+	api.HandleFunc("POST /v1/sandbox/preset", s.handleSandboxSetPreset)
+	api.HandleFunc("GET /v1/sandbox/rejections", s.handleListSandboxRejections)
+	api.HandleFunc("POST /v1/sandbox/rejections", s.handleRecordSandboxRejection)
+
+	// Background jobs (Spec B)
+	api.HandleFunc("GET /v1/jobs", s.handleListJobs)
+	api.HandleFunc("GET /v1/jobs/stream", s.handleJobsStream)
+	api.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
+
+	// Git (Spec B)
+	api.HandleFunc("GET /v1/git/status", s.handleGitStatus)
+	api.HandleFunc("GET /v1/git/diff", s.handleGitDiff)
+	api.HandleFunc("GET /v1/git/log", s.handleGitLog)
+	api.HandleFunc("GET /v1/git/branches", s.handleGitBranches)
+	api.HandleFunc("GET /v1/git/worktrees", s.handleGitWorktrees)
+	api.HandleFunc("POST /v1/git/commit", s.handleGitCommit)
+	api.HandleFunc("POST /v1/git/stage", s.handleGitStage)
+	api.HandleFunc("POST /v1/git/reset", s.handleGitReset)
+	api.HandleFunc("POST /v1/git/checkout", s.handleGitCheckout)
+
+	// Produced files (Spec B)
+	api.HandleFunc("GET /v1/produced-files", s.handleProducedFiles)
 
 	// Skill Hub management (C-10)
 	api.HandleFunc("GET /v1/skill-hub", s.handleListSkills)
