@@ -129,6 +129,12 @@ type FeatureFlags struct {
 	CacheHit         bool   `json:"cache_hit"`         // RF-8: cache hit rate (default true)
 	Welcome          bool   `json:"welcome"`           // RF-9: startup welcome page (default true)
 	HealthCheck      bool   `json:"health_check"`      // RF-10: API health check (default true)
+
+	// ToolDenoise mechanically denoises tool output (ANSI escapes, \r
+	// redraw frames, adjacent duplicate lines) before it enters the L0
+	// context record. Orthogonal to context_mode: every context mode gets
+	// the cleaned text. Default false (off).
+	ToolDenoise bool `json:"tool_denoise"`
 }
 
 // DefaultCLIConfig returns a CLIConfig with sensible defaults.
@@ -279,6 +285,7 @@ func EnsureDataDirs(dataDir string) error {
 //   - LLM_MODEL: Model name
 //   - LLM_API_KEY: API key
 //   - LLM_PROVIDER: Provider type (openai, deepseek, anthropic, etc.)
+//   - INFERGLOW_TOOL_DENOISE: enable mechanical tool-output denoise (only exact "1"/"true"/"on")
 func ApplyEnvOverrides(cfg *CLIConfig) {
 	if v := os.Getenv("LLM_ENDPOINT"); v != "" {
 		cfg.LLM.Endpoint = v
@@ -298,5 +305,11 @@ func ApplyEnvOverrides(cfg *CLIConfig) {
 			cfg.CompressModel = &LLMConfig{}
 		}
 		cfg.CompressModel.Model = v
+	}
+	// Tool output denoise: only exact truthy spellings enable; any other
+	// value (including invalid) keeps the config/flag default (off).
+	switch os.Getenv("INFERGLOW_TOOL_DENOISE") {
+	case "1", "true", "on":
+		cfg.Features.ToolDenoise = true
 	}
 }
