@@ -9,8 +9,12 @@ bin/inferglow-cli.exe
 cli/bin/
 cli/inferglow-cli
 server/inferglow-server.exe
+server/*.local.exe
 sandbox/seatbelt_loader.exe
 bin/seatbelt-loader
+
+# Frontend dependencies (any subproject)
+node_modules/
 
 # Go build cache / local toolchain (used for reproducible builds)
 .gobuild/
