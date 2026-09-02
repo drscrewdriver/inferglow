@@ -1,7 +1,7 @@
 # InferGlow 构建与测试总览
 
 > 全仓库（多 module 仓库）的构建 / 测试 / 静态检查方法。
-> 涉及 GUI 前端（`web/`）的启动与打包见 [gui.md](gui.md)。
+> 涉及 GUI 前端（`gui/`）的启动与打包见 [gui.md](gui.md)。
 
 ## 模块总览
 
@@ -52,7 +52,7 @@ foreach ($m in $mods) {
 }
 ```
 
-## 前端（web/）构建
+## 前端（gui/）构建
 
 ```bash
 cd web
@@ -83,7 +83,7 @@ GUI 启动/打包/发布完整流程见 [gui.md](gui.md)。
 # InferGlow 构建与测试总览
 
 > 全仓库（多 module 仓库）的构建 / 测试 / 静态检查方法。
-> 涉及 GUI 前端（`web/`）的启动与打包见 [gui.md](gui.md)。
+> 涉及 GUI 前端（`gui/`）的启动与打包见 [gui.md](gui.md)。
 
 ## 模块总览
 
@@ -134,7 +134,7 @@ foreach ($m in $mods) {
 }
 ```
 
-## 前端（web/）构建
+## 前端（gui/）构建
 
 ```bash
 cd web

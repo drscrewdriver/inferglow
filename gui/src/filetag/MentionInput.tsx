@@ -28,7 +28,7 @@ const DEMO_CANDIDATES: Candidate[] = [
   { id: 'f1', label: 'src/main.go', kind: 'file', desc: 'Go 入口' },
   { id: 'f2', label: 'config.json', kind: 'file', desc: '配置文件' },
   { id: 'f3', label: 'README.md', kind: 'file' },
-  { id: 'd1', label: 'web/src', kind: 'dir' },
+  { id: 'd1', label: 'gui/src', kind: 'dir' },
   { id: 'd2', label: 'server', kind: 'dir' },
   { id: 's1', label: 'debug', kind: 'skill', desc: '调试技能' },
 ]

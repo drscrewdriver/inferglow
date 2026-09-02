@@ -26,7 +26,7 @@ import (
 	"net/http"
 )
 
-// The React GUI build output (vite build from web/) is embedded here.
+// The React GUI build output (vite build from gui/) is embedded here.
 // The build artifacts are checked into the repo so `go build` works without
 // a Node toolchain, mirroring the existing dashboard.html pattern.
 //
