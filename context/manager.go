@@ -82,7 +82,9 @@ type ContextManager interface {
 	SearchLongMem(ctx context.Context, query string, category string, limit int) ([]LongMemRecord, error)
 
 	// Expand retrieves content for a step.
-	// When full is true, returns L0 (original); when false, returns L1 (denoised) if available.
+	// When full is true, returns L0 (the ingest text — mechanically
+	// denoised for tool steps when the CLI tool_denoise flag is on);
+	// when false, returns L1 (denoised) if available.
 	Expand(stepID int, full bool) (*ExpandResult, error)
 
 	// Surround retrieves context around a step.
