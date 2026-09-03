@@ -94,6 +94,93 @@
   cursor: pointer;
 }
 
+.settings-trigger-btn {
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: all 0.15s;
+}
+
+.settings-trigger-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ── 设置面板（渲染 settings.general.item / settings.plugin.item 槽位）── */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-panel {
+  width: min(560px, calc(100vw - 48px));
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-12) var(--sp-16);
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-close:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-20);
+}
+
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+  margin-bottom: var(--sp-8);
+}
+
 /* ── 主体三栏 ── */
 .main-body {
   display: flex;
@@ -102,19 +189,10 @@
 }
 
 /* ── 侧栏 ── */
-.sidebar {
-  width: 260px;
-  min-width: 200px;
-  max-width: 400px;
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+/* 外层容器由 SidebarEnhance 插件提供（折叠动画 + 滚动条 linger + 品牌行）。 */
 
 .sidebar-header {
-  padding: var(--sp-12) var(--sp-16);
+  padding: var(--sp-8) 0 var(--sp-12);
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -135,7 +213,7 @@
 }
 
 .sidebar-search {
-  padding: var(--sp-8) var(--sp-16);
+  padding: var(--sp-8) 0;
 }
 
 .search-input {
@@ -158,27 +236,59 @@
   border-color: var(--accent);
 }
 
+/* 滚动交给 SidebarEnhance 的 .scrollbar-rail，会话列表不再自建滚动条 */
 .sidebar-list {
-  flex: 1;
-  overflow-y: auto;
   padding: var(--sp-4) 0;
+  overflow: visible;
 }
 
+/* 会话分组表头：小号大写标签（对齐 DSH 会话树） */
+.session-group-head {
+  padding: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+/* 会话行：紧凑 + 圆角 + hover 填充（对齐 DSH 的 34px 行） */
 .session-item {
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 8px 16px;
-  cursor: pointer;
-  transition: background 0.1s;
   gap: var(--sp-8);
+  box-sizing: border-box;
+  width: auto;
+  min-height: 34px;
+  margin: 1px 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .session-item:hover {
-  background: var(--sidebar-hover);
+  background: var(--surface-hover);
 }
 
+/* 激活行：subtle accent-soft 背景 + accent 文字 + 左侧 2px accent 高亮条 */
 .session-item.active {
-  background: var(--sidebar-active);
+  background: var(--accent-soft);
+}
+
+.session-item.active::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .session-item-title {
@@ -188,6 +298,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.12s ease;
+}
+
+.session-item.active .session-item-title {
+  color: var(--accent);
 }
 
 .session-item-time {
@@ -261,12 +376,80 @@
   border-top: 1px solid var(--border-soft);
 }
 
+/* 投放队列（SteerQueueDock）与输入框同宽对齐 */
+.queue-dock-slot {
+  max-width: 768px;
+  margin: 0 auto 8px;
+}
+
 .input-wrapper {
   max-width: 768px;
   margin: 0 auto;
   display: flex;
   gap: var(--sp-8);
   align-items: flex-end;
+}
+
+/* Composer 容器：投放控件 + @file 候选下拉 + MentionInput 纵向堆叠 */
+.composer {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.composer-steer {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  align-self: flex-start;
+}
+
+.steer-select {
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.steer-btn {
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.steer-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.steer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* @file 候选下拉：相对于 Composer 定位，浮在消息区上方 */
+.composer-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 30;
+}
+
+.composer-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .input-box {
