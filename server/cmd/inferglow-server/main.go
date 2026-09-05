@@ -149,6 +149,15 @@ func (demoAgent) Run(_ context.Context, userMessage string) (string, error) {
 	return "demo echo: " + userMessage, nil
 }
 
+// demoAgentRecord carries the agent's identity through /v1/agents JSON
+// (AgentLike has no metadata fields; without it the demo agent marshals
+// as an empty object and clients cannot resolve its id).
+type demoAgentRecord struct {
+	demoAgent
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // demoAgentStore is an in-memory AgentStore holding the demo agent as "a1".
 // It satisfies server.AgentStore so the GUI chat endpoints resolve an agent.
 type demoAgentStore struct {
@@ -156,7 +165,9 @@ type demoAgentStore struct {
 }
 
 func newDemoAgentStore() *demoAgentStore {
-	return &demoAgentStore{agents: map[string]server.AgentLike{"a1": demoAgent{}}}
+	return &demoAgentStore{agents: map[string]server.AgentLike{
+		"a1": demoAgentRecord{demoAgent: demoAgent{}, ID: "a1", Name: "Demo Echo"},
+	}}
 }
 
 // Get returns the agent with the given ID, or nil if not found.

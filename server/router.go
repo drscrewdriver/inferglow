@@ -53,6 +53,13 @@ func (s *Server) registerRoutes() {
 	})
 	s.mux.HandleFunc("GET /webui2/{path...}", s.handleWebUI2)
 
+	// WebUI DSH — vendored dsh-transition-webui 整合版（embedded in webui-dsh/,
+	// 与 /web/ 双挂载渐进替换, no auth）
+	s.mux.HandleFunc("GET /webui-dsh", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/webui-dsh/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /webui-dsh/{path...}", s.handleWebUIDsh)
+
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
 
