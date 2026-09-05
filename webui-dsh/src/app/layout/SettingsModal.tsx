@@ -7,9 +7,10 @@
  * - Auto-scroll toggle
  */
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../../components/Button.tsx'
-import { store, type Settings } from '../../store.ts'
+import { store, subscribe, type Settings } from '../../store.ts'
+import { agentName, getAgents } from '../../bridge/inferglow.ts'
 
 interface SettingsModalProps {
   onClose: () => void
@@ -17,6 +18,11 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose }: SettingsModalProps) {
   const settings = store.settings
+  const [modelId, setModelId] = useState(settings.model)
+
+  useEffect(() => {
+    return subscribe(() => setModelId(store.settings.model))
+  }, [])
 
   useEffect(() => {
     // Keep dark mode attribute in sync with settings
@@ -78,16 +84,27 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             <h3 className="dsh-modal-section-title">模型</h3>
             
             <div className="dsh-modal-field">
-              <label className="dsh-modal-label">模型</label>
+              <label className="dsh-modal-label">Agent</label>
               <select
                 className="dsh-modal-select"
-                value={settings.model}
+                value={modelId}
                 onChange={handleModelChange}
               >
-                <option value="deepseek-chat">deepseek-chat</option>
-                <option value="deepseek-reasoner">deepseek-reasoner</option>
-                <option value="deepseek-coder">deepseek-coder</option>
+                {getAgents().length === 0 && (
+                  <option value="">
+                    {modelId ? agentName(modelId) : '未配置(发送时取首个 Agent)'}
+                  </option>
+                )}
+                {getAgents().map(a => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+                {getAgents().length > 0 && !getAgents().some(a => a.id === modelId) && modelId && (
+                  <option value={modelId}>{agentName(modelId)}</option>
+                )}
               </select>
+              <span className="dsh-modal-label" style={{ opacity: 0.6, fontSize: 12 }}>
+                Agent 列表来自 InferGlow Server(GET /v1/agents)
+              </span>
             </div>
           </section>
 
@@ -102,7 +119,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                 className="dsh-modal-input"
                 value={settings.apiEndpoint}
                 onChange={handleApiEndpointChange}
-                placeholder="http://localhost:3080/api"
+                placeholder="留空 = 同源(开发态经 vite 代理)"
               />
             </div>
           </section>

@@ -175,13 +175,11 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
             <ChatInput sessionId={activeSessionId} placeholder="给智能体发消息" />
           </div>
 
-          {/* Composer dock stats */}
+          {/* Composer dock stats — real per-session counters (no token metrics
+           * in the current backend contract) */}
           <div className="dsh-composer-dock">
-            <span>1 轮 · 3 步</span><span className="dsh-dock-sep">|</span>
-            <span>LLM 4.2s · 工具调用 7m29s</span><span className="dsh-dock-sep">|</span>
-            <span>首 token 平均 0.7s · 169 tok/s</span><span className="dsh-dock-sep">|</span>
-            <span>缓存命中 67%</span><span className="dsh-dock-sep">|</span>
-            <span>输入 49K tok · 输出 337 tok</span>
+            <span>{messages.length} 条消息</span><span className="dsh-dock-sep">|</span>
+            <span>{isStreaming ? '运行中' : '空闲'}</span>
           </div>
         </>
       )}

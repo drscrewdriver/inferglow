@@ -7,57 +7,140 @@
  * - Placeholder "描述你想要构建的内容"
  */
 
-import { useState, useRef, type FormEvent } from 'react'
+import { useState, useRef, useEffect, type FormEvent } from 'react'
 import { IconStop } from '../components/Icons.tsx'
-import { store } from '../store.ts'
+import { store, subscribe } from '../store.ts'
+import { api, ensureSession, getActiveAgentId, agentName } from '../bridge/inferglow.ts'
 
 interface ChatInputProps {
   sessionId: string | null
   placeholder?: string
 }
 
+function genMsgId(): string {
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   const [value, setValue] = useState('')
+  const [modelLabel, setModelLabel] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  /* Model chip reflects the resolved agent (settings.model / first agent). */
+  useEffect(() => {
+    const sync = () => {
+      const id = store.settings.model || getActiveAgentId()
+      setModelLabel(id ? agentName(id) : '未配置 Agent')
+    }
+    sync()
+    return subscribe(sync)
+  }, [])
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     doSend()
   }
 
-  function doSend() {
+  async function doSend() {
     const text = value.trim()
-    if (!text) return
+    if (!text || store.isStreaming) return
 
-    // If there's no active session (hero state), create one so the reply simulates.
+    // Persist a session for the conversation first (backend; local fallback).
     let sid = sessionId
     if (!sid) {
-      store.createSession()
-      sid = store.activeSessionId ?? ''
+      sid = await ensureSession(text)
+      if (!sid) return
     }
 
     const userMsg = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: genMsgId(),
       role: 'user' as const,
       content: text,
       status: 'sent' as const,
       timestamp: Date.now(),
     }
+    const assistantMsg = {
+      id: genMsgId(),
+      role: 'assistant' as const,
+      content: '',
+      status: 'streaming' as const,
+      timestamp: Date.now(),
+    }
 
     store.addMessage(sid, userMsg)
+    store.addMessage(sid, assistantMsg)
+    store.setStreaming(true, assistantMsg.id)
     setValue('')
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
 
-    simulateStreaming(sid)
+    const agentId = getActiveAgentId()
+    if (!agentId) {
+      store.updateMessage(sid, assistantMsg.id, {
+        status: 'error' as const,
+        content: '后端未返回可用 Agent — 请检查 InferGlow Server 是否已启动。',
+      })
+      store.setStreaming(false)
+      return
+    }
+
+    const patchToolEnd = (toolName: string, err?: string) => {
+      const session = store.sessions.find(s => s.id === sid)
+      const msg = session?.messages.find(m => m.id === assistantMsg.id)
+      const calls = [...(msg?.toolCalls ?? [])]
+      const last = calls.length > 0 ? calls[calls.length - 1] : undefined
+      if (last && last.name === toolName && last.output === undefined) {
+        calls[calls.length - 1] = { ...last, output: err ? `error: ${err}` : 'ok' }
+        store.updateMessage(sid, assistantMsg.id, { toolCalls: calls })
+      }
+    }
+
+    try {
+      await api.sendChat({
+        agentId,
+        sessionId: sid,
+        message: text,
+        handlers: {
+          onToolStart: toolName => {
+            store.addToolCall(sid, assistantMsg.id, {
+              id: genMsgId(),
+              name: toolName,
+              args: {},
+            })
+          },
+          onToolEnd: patchToolEnd,
+          onDone: reply => {
+            store.updateMessage(sid, assistantMsg.id, {
+              content: reply || '(空回复)',
+              status: 'sent' as const,
+            })
+            store.setStreaming(false)
+          },
+          onError: message => {
+            store.updateMessage(sid, assistantMsg.id, {
+              status: 'error' as const,
+              content: message,
+            })
+            store.setStreaming(false)
+          },
+        },
+      })
+    } catch (err) {
+      const aborted = (err as Error)?.name === 'AbortError'
+      store.updateMessage(sid, assistantMsg.id, {
+        status: aborted ? 'sent' : 'error',
+        content: aborted ? '(已停止)' : String((err as Error)?.message ?? err),
+      })
+      store.setStreaming(false)
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      doSend()
+      void doSend()
     }
   }
 
@@ -72,6 +155,7 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   }
 
   function handleStop() {
+    api.cancel()
     store.setStreaming(false)
   }
 
@@ -123,8 +207,13 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
               <span className="dsh-composer-freeze-label">冻结会话</span>
             </button>
             <span className="dsh-composer-status" title="周末 · Asia/Shanghai · 周末模式">周末</span>
-            <button className="dsh-composer-model" type="button" title="Qwen3.6-35B-A3B · On" aria-label="选择模型，当前 Qwen3.6-35B-A3B，推理等级 On">
-              <span className="dsh-composer-model-name">Qwen3.6-35B-A3B</span>
+            <button
+              className="dsh-composer-model"
+              type="button"
+              title={modelLabel ? `Agent: ${modelLabel}` : '选择 Agent'}
+              aria-label={modelLabel ? `选择 Agent，当前 ${modelLabel}` : '选择 Agent'}
+            >
+              <span className="dsh-composer-model-name">{modelLabel || '…'}</span>
               <span className="dsh-composer-model-effort">On</span>
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -158,55 +247,4 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
       </form>
     </div>
   )
-}
-
-/* Simulate a streaming response */
-function simulateStreaming(sessionId: string | null) {
-  const assistantMsg = {
-    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    role: 'assistant' as const,
-    content: '',
-    status: 'streaming' as const,
-    timestamp: Date.now(),
-  }
-
-  store.addMessage(sessionId ?? '', assistantMsg)
-  store.setStreaming(true, assistantMsg.id)
-
-  const responses = [
-    `你好！这是一个**演示响应**。我支持以下功能：\n\n- **Markdown** 渲染\n- 代码块高亮\n- 工具调用展示\n- 思考过程折叠\n\n\`\`\`javascript\nfunction hello() {\n  console.log("Hello, DSH!");\n}\n\`\`\`\n\n有什么我可以帮助你的？`,
-    `当然可以！让我来分析一下你的问题。\n\n这是一个**流式响应**的模拟。在完整集成中，这里会对接真实的 LLM 后端，通过 SSE/WS 推送流式内容。\n\n当前状态：\n- ✅ Session 管理\n- ✅ Markdown 渲染  \n- ✅ 主题切换\n- ⏳ API 对接`,
-    `好的，我来处理这个请求。\n\n### 分析\n\n你的问题涉及以下几个方面：\n\n1. **架构设计** — 需要考虑可扩展性\n2. **性能优化** — 关注响应时间\n3. **用户体验** — 界面友好性\n\n\`\`\`python\ndef optimize(data):\n    # TODO: 实现优化逻辑\n    return processed_data\n\`\`\`\n\n需要我详细展开某个部分吗？`,
-  ]
-  
-  const response = responses[Math.floor(Math.random() * responses.length)]
-  let charIndex = 0
-
-  function streamChunk() {
-    if (charIndex >= response.length || !store.isStreaming) return
-    
-    const chunk = response.slice(charIndex, charIndex + 3)
-    charIndex += 3
-    
-    // 追加内容而非覆盖
-    const session = store.sessions.find(s => s.id === sessionId)
-    const msg = session?.messages.find(m => m.id === assistantMsg.id)
-    store.updateMessage(sessionId ?? '', assistantMsg.id, {
-      content: (msg?.content ?? '') + chunk,
-      status: 'streaming' as const,
-    })
-    
-    setTimeout(streamChunk, 30 + Math.random() * 50)
-  }
-
-  // Start streaming
-  streamChunk()
-
-  // Finish after streaming completes
-  setTimeout(() => {
-    store.updateMessage(sessionId ?? '', assistantMsg.id, {
-      status: 'sent' as const,
-    })
-    store.setStreaming(false)
-  }, response.length * 40 + 500)
 }

@@ -6,6 +6,7 @@
 
 import { useLayoutEffect, useEffect, useState, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { store, subscribe } from '../store.ts'
+import { bootstrap } from '../bridge/inferglow.ts'
 import { Sidebar } from './layout/Sidebar.tsx'
 import { DetailsPanel } from './layout/DetailsPanel.tsx'
 import { ChatArea } from '../chat/ChatArea.tsx'
@@ -27,6 +28,7 @@ export function AppShell() {
   }, [])
   const [activeSessionId, setActiveSessionId] = useState(store.activeSessionId)
   const [settingsOpen, setSettingsOpen] = useState(store.settingsOpen)
+  const [backendOnline, setBackendOnline] = useState(store.backendOnline)
   const [detailsOpen, setDetailsOpen] = useState(true)
   const [detailsWidth, setDetailsWidth] = useState(284)
   const [bottomOpen, setBottomOpen] = useState(false)
@@ -37,8 +39,14 @@ export function AppShell() {
     const unsub = subscribe(() => {
       setActiveSessionId(store.activeSessionId)
       setSettingsOpen(store.settingsOpen)
+      setBackendOnline(store.backendOnline)
     })
     return unsub
+  }, [])
+
+  /* Hydrate from the InferGlow backend: health → agents → sessions. */
+  useEffect(() => {
+    void bootstrap()
   }, [])
 
   /* Apply initial theme */
@@ -110,6 +118,18 @@ export function AppShell() {
             )}
             <div className="dsh-topbar-right">
               {conv && <button type="button" className="dsh-conv-log">Session log</button>}
+              <span
+                title={backendOnline === null
+                  ? '正在连接 InferGlow 后端…'
+                  : backendOnline
+                    ? 'InferGlow 后端已连接'
+                    : 'InferGlow 后端不可达 — 无法加载会话,发送消息将失败'}
+                style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0, margin: '0 6px',
+                  background: backendOnline === null ? '#8a8a8a' : backendOnline ? '#3fb96f' : '#d4544a',
+                  boxShadow: '0 0 6px currentColor', opacity: 0.9,
+                }}
+              />
               {togglesVisible && (
                 <div className="dsh-topbar-toggles">
                   <button

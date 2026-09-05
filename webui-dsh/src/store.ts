@@ -32,11 +32,17 @@ export interface Session {
   messages: Message[]
   createdAt: number
   updatedAt: number
+  /** True once history has been fetched from the backend (InferGlow bridge). */
+  messagesLoaded?: boolean
+  /** True for sessions that only exist locally and are not yet persisted. */
+  localOnly?: boolean
 }
 
 export interface Settings {
   darkMode: boolean
+  /** InferGlow agent id backing new sessions (resolved from GET /v1/agents). */
   model: string
+  /** Backend base URL; empty = same origin (vite proxy / go:embed host). */
   apiEndpoint: string
   autoScroll: boolean
   fontSize: 'small' | 'medium' | 'large'
@@ -57,6 +63,9 @@ export interface AppState {
   isStreaming: boolean
   streamingMessageId: string | null
   streamingStartTime: number | null
+
+  /* ── Backend connectivity (null = probing) ── */
+  backendOnline: boolean | null
   
   /* ── Composer: whether the user has begun typing (sinks the input to the bottom) ── */
   composerTouched: boolean
@@ -66,6 +75,10 @@ export interface AppState {
   selectSession: (id: string) => void
   deleteSession: (id: string) => void
   updateSessionTitle: (id: string, title: string) => void
+  /** Bridge: swap in the backend session list (maps to DSH sessions). */
+  replaceAllSessions: (sessions: Session[]) => void
+  /** Bridge: backfill one session's history without re-triggering auto-title. */
+  replaceMessages: (sessionId: string, messages: Message[]) => void
   
   /* ── Actions: Messages ── */
   addMessage: (sessionId: string, message: Message) => void
@@ -83,6 +96,9 @@ export interface AppState {
   
   /* ── Actions: Streaming ── */
   setStreaming: (active: boolean, messageId?: string) => void
+
+  /* ── Actions: Connectivity ── */
+  setBackendOnline: (online: boolean | null) => void
   
   /* ── Actions: Composer ── */
   setComposerTouched: (active: boolean) => void
@@ -101,8 +117,8 @@ function genTitle(content: string): string {
 /* ── Default settings ── */
 const defaultSettings: Settings = {
   darkMode: true,
-  model: 'deepseek-chat',
-  apiEndpoint: '/api',
+  model: '',
+  apiEndpoint: '',
   autoScroll: true,
   fontSize: 'medium',
 }
@@ -120,6 +136,7 @@ const state: Omit<Partial<AppState>, 'actions'> = {
   streamingMessageId: null,
   streamingStartTime: null,
   composerTouched: false,
+  backendOnline: null,
 }
 
 /* ── Actions ── */
@@ -137,11 +154,28 @@ const actions: AppState = {
     const session: Session = {
       id, title: '新对话', messages: [],
       createdAt: Date.now(), updatedAt: Date.now(),
+      localOnly: true,
     }
     state.sessions = [session, ...(state.sessions ?? [])]
     state.activeSessionId = id
     state.composerTouched = false
     notify()
+  },
+
+  replaceAllSessions(sessions) {
+    state.sessions = sessions
+    notify()
+  },
+
+  replaceMessages(sessionId, messages) {
+    const sessions = state.sessions ?? []
+    const session = sessions.find(s => s.id === sessionId)
+    if (session) {
+      session.messages = messages
+      session.messagesLoaded = true
+      session.localOnly = false
+      notify()
+    }
   },
   
   selectSession(id) {
@@ -244,6 +278,13 @@ const actions: AppState = {
     state.isStreaming = active
     state.streamingMessageId = active ? messageId ?? null : null
     state.streamingStartTime = active ? Date.now() : null
+    notify()
+  },
+
+  /* Connectivity */
+  get backendOnline() { return state.backendOnline ?? null },
+  setBackendOnline(online) {
+    state.backendOnline = online
     notify()
   },
 

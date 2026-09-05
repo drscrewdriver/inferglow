@@ -19,6 +19,7 @@ import {
   IconPanelLeft, IconPlus, IconSettings, IconTrash, IconChat, IconSearch,
 } from '../../components/Icons.tsx'
 import { store, subscribe } from '../../store.ts'
+import { createSession, deleteSession, selectSession } from '../../bridge/inferglow.ts'
 import styles from './Sidebar.module.css'
 
 /** Wide-content unmount delay; matches the 150ms wide-content fade-out. */
@@ -32,22 +33,17 @@ const COLLAPSE_SETTLE_MS = 150
 const SCROLLBAR_LINGER_MS = 2000
 
 /**
- * Workspace tree groups. `live` groups render the real session list
- * (filtered by the workspace search); example groups show placeholder rows.
+ * Workspace tree groups. Sessions come from the InferGlow backend
+ * (hydrated by the bridge); the single live group renders the real list
+ * filtered by the workspace search.
  */
 const WS_GROUPS: {
   id: string
   label: string
   expanded?: boolean
   live?: boolean
-  examples?: string[]
 }[] = [
-  { id: 'copy', label: 'copy', examples: ['进度同步', 'Notes'] },
-  { id: 'machine-learning', label: 'machine-learning', examples: ['训练配置', '评估报告'] },
-  { id: 'rewrite-agently', label: 'rewrite-agently', expanded: true, live: true },
-  { id: 'use-deepseek-harness', label: 'use-deepseek-harness', examples: ['集成指南', 'HRH-notes'] },
-  { id: 'dsh-default', label: 'dsh-default', examples: ['示例对话'] },
-  { id: 'ungrouped', label: '未分组', examples: [] },
+  { id: 'sessions', label: '会话', expanded: true, live: true },
 ]
 
 interface SidebarProps {
@@ -148,34 +144,12 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
     return sessions.filter(s => s.title.toLowerCase().includes(q))
   }, [sessions, searchQuery])
 
-  function handleNewSession() { store.createSession() }
-  function handleSelectSession(id: string) { store.selectSession(id) }
+  function handleNewSession() { void createSession() }
+  function handleSelectSession(id: string) { void selectSession(id) }
   function handleDeleteSession(id: string) {
-    if (confirm('确定删除此对话？')) { store.deleteSession(id) }
+    if (confirm('确定删除此对话？')) { deleteSession(id) }
   }
   function handleToggleSidebar() { store.toggleSidebar() }
-
-  /* Open an example (mock) session titled like an example row, with a sample
-   * conversation so the conversation view renders. */
-  function handleOpenExample(title: string) {
-    let id = store.sessions.find(s => s.title === title)?.id
-    if (!id) {
-      store.createSession()
-      id = store.activeSessionId ?? ''
-      store.updateSessionTitle(id, title)
-      store.addMessage(id, {
-        id: `m1-${Date.now()}`, role: 'user', content: `开始处理“${title}”`,
-        status: 'sent', timestamp: Date.now(),
-      })
-      store.addMessage(id, {
-        id: `m2-${Date.now()}`, role: 'assistant',
-        content: `好的，我来处理“${title}”。\n\n- 已读取相关文件\n- 正在分析\n\n有什么需要我继续的？`,
-        status: 'sent', timestamp: Date.now(),
-      })
-    } else {
-      store.selectSession(id)
-    }
-  }
 
   function handleToggleGroup(id: string) {
     setCollapsedGroups(prev => {
@@ -344,50 +318,31 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                           <span className="dsh-ws-group-label">{group.label}</span>
                         </button>
 
-                        {!isCollapsed && (
+                        {!isCollapsed && group.live && (
                           <div className="dsh-ws-rows">
-                            {group.live ? (
-                              <>
-                                {filteredSessions.map(session => (
-                                  <div
-                                    key={session.id}
-                                    className={`dsh-ws-row${activeId === session.id ? ' dsh-ws-row-active' : ''}`}
-                                    onClick={() => handleSelectSession(session.id)}
-                                  >
-                                    <span className="dsh-ws-row-icon"><IconChat size={13} /></span>
-                                    <span className="dsh-ws-row-title" title={session.title}>
-                                      {session.title}
-                                    </span>
-                                    <button
-                                      className="dsh-ws-row-delete"
-                                      title="删除"
-                                      onClick={e => { e.stopPropagation(); handleDeleteSession(session.id) }}
-                                    >
-                                      <IconTrash size={11} />
-                                    </button>
-                                  </div>
-                                ))}
-                                {filteredSessions.length === 0 && (
-                                  <div className="dsh-ws-empty">
-                                    {sessions.length === 0 ? '暂无对话' : '无匹配结果'}
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              (group.examples ?? []).map(ex => (
-                                <div
-                                  className="dsh-ws-row dsh-ws-row-example"
-                                  key={ex}
-                                  onClick={() => handleOpenExample(ex)}
+                            {filteredSessions.map(session => (
+                              <div
+                                key={session.id}
+                                className={`dsh-ws-row${activeId === session.id ? ' dsh-ws-row-active' : ''}`}
+                                onClick={() => handleSelectSession(session.id)}
+                              >
+                                <span className="dsh-ws-row-icon"><IconChat size={13} /></span>
+                                <span className="dsh-ws-row-title" title={session.title}>
+                                  {session.title}
+                                </span>
+                                <button
+                                  className="dsh-ws-row-delete"
+                                  title="删除"
+                                  onClick={e => { e.stopPropagation(); handleDeleteSession(session.id) }}
                                 >
-                                  <span className="dsh-ws-row-icon">
-                                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                      <path d="M2 4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
-                                    </svg>
-                                  </span>
-                                  <span className="dsh-ws-row-title" title={ex}>{ex}</span>
-                                </div>
-                              ))
+                                  <IconTrash size={11} />
+                                </button>
+                              </div>
+                            ))}
+                            {filteredSessions.length === 0 && (
+                              <div className="dsh-ws-empty">
+                                {sessions.length === 0 ? '暂无对话' : '无匹配结果'}
+                              </div>
                             )}
                           </div>
                         )}

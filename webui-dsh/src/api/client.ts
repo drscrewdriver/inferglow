@@ -1,0 +1,220 @@
+/**
+ * InferGlow API client for the DSH shell.
+ *
+ * Wires the vendored DSH UI (mock-driven) to the real backend. The api/*
+ * files ported from the host webui are kept verbatim (same-origin BASE '');
+ * this client adds a configurable base (store.settings.apiEndpoint) and the
+ * streaming chat contract.
+ *
+ * Chat path: POST /v1/agents/{id}/stream-run (SSE). Backend quirk: the
+ * run_end event carries the full assistant reply in its `tool_name` field
+ * (server/handlers_stream.go) — onDone receives it as the final reply.
+ * Falls back to non-streaming POST /v1/agents/{id}/chat when SSE is
+ * unavailable. There is no token-delta event in the current contract, so
+ * the reply arrives whole at run_end.
+ */
+import { consumeSSE } from './sse.ts'
+import type { Agent, ChatMessage, Session } from './types.ts'
+
+export interface SendChatHandlers {
+  onRunStart?(): void
+  onLLMStart?(round: number): void
+  onLLMEnd?(round: number, tokens: number): void
+  onToolStart?(toolName: string): void
+  onToolEnd?(toolName: string, err?: string): void
+  /** Full assistant reply (from run_end / chat fallback). */
+  onDone(reply: string): void
+  onError(message: string): void
+}
+
+export interface SendChatOptions {
+  agentId: string
+  sessionId?: string
+  message: string
+  handlers: SendChatHandlers
+}
+
+export interface InferGlowApi {
+  health(): Promise<boolean>
+  listAgents(): Promise<Agent[]>
+  listSessions(): Promise<Session[]>
+  createSession(agentId: string, title?: string): Promise<Session>
+  deleteSession(sessionId: string): Promise<void>
+  listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
+  sendChat(opts: SendChatOptions): Promise<void>
+  /** Abort the in-flight stream-run request, if any. */
+  cancel(): void
+}
+
+function trimBase(raw: string | undefined): string {
+  const base = (raw ?? '').trim()
+  return base.endsWith('/') ? base.slice(0, -1) : base
+}
+
+async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${base}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    ...init,
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`${res.status} ${text}`)
+  }
+  return res.json() as Promise<T>
+}
+
+export function createInferGlowApi(getBase: () => string = () => ''): InferGlowApi {
+  let controller: AbortController | null = null
+
+  async function listAgents(): Promise<Agent[]> {
+    const data = await request<{ agents: Agent[] }>(trimBase(getBase()), '/v1/agents')
+    return data.agents ?? []
+  }
+
+  async function listSessions(): Promise<Session[]> {
+    const data = await request<{ sessions: Session[] }>(trimBase(getBase()), '/v1/sessions')
+    return data.sessions ?? []
+  }
+
+  async function listMessages(sessionId: string, limit = 50): Promise<ChatMessage[]> {
+    const data = await request<{ messages: ChatMessage[] }>(
+      trimBase(getBase()),
+      `/v1/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+    )
+    // Backend returns newest-first; the chat view is chronological.
+    return (data.messages ?? []).slice().reverse()
+  }
+
+  async function sendChatSSE(opts: SendChatOptions): Promise<boolean> {
+    controller = new AbortController()
+    let res: Response
+    try {
+      res = await fetch(
+        `${trimBase(getBase())}/v1/agents/${encodeURIComponent(opts.agentId)}/stream-run`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: opts.message,
+            session_id: opts.sessionId || undefined,
+          }),
+          signal: controller.signal,
+        },
+      )
+    } catch (err) {
+      controller = null
+      throw err
+    }
+    if (!res.ok || !res.body || !(res.headers.get('Content-Type') ?? '').includes('text/event-stream')) {
+      controller = null
+      return false
+    }
+
+    let reply = ''
+    let failure = ''
+    try {
+      for await (const ev of consumeSSE(res)) {
+        let payload: Record<string, unknown> = {}
+        try {
+          payload = JSON.parse(ev.data) as Record<string, unknown>
+        } catch {
+          /* keep-empty payload for events without data */
+        }
+        const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : ''
+        const round = typeof payload.round === 'number' ? payload.round : 0
+        const tokens = typeof payload.tokens === 'number' ? payload.tokens : 0
+        const errText = typeof payload.error === 'string' ? payload.error : ''
+        switch (ev.event) {
+          case 'run_start':
+            opts.handlers.onRunStart?.()
+            break
+          case 'llm_start':
+            opts.handlers.onLLMStart?.(round)
+            break
+          case 'llm_end':
+            opts.handlers.onLLMEnd?.(round, tokens)
+            break
+          case 'tool_start':
+            opts.handlers.onToolStart?.(toolName)
+            break
+          case 'tool_end':
+            opts.handlers.onToolEnd?.(toolName, errText || undefined)
+            break
+          case 'run_end':
+            // Contract quirk: full assistant reply rides in tool_name.
+            reply = toolName
+            if (errText) failure = errText
+            break
+          case 'error':
+            failure = errText || 'agent run failed'
+            break
+          case 'done':
+            break
+          default:
+            break
+        }
+        if (failure) break
+      }
+    } catch (err) {
+      if ((err as Error)?.name !== 'AbortError') {
+        controller = null
+        throw err
+      }
+      controller = null
+      return true // aborted: caller marks the message stopped
+    }
+    controller = null
+    if (failure && !reply) {
+      opts.handlers.onError(failure)
+      return true
+    }
+    opts.handlers.onDone(reply)
+    return true
+  }
+
+  return {
+    async health() {
+      try {
+        const res = await fetch(`${trimBase(getBase())}/health`)
+        return res.ok
+      } catch {
+        return false
+      }
+    },
+    listAgents,
+    listSessions,
+    async createSession(agentId, title) {
+      return request<Session>(trimBase(getBase()), '/v1/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ agent_id: agentId, title }),
+      })
+    },
+    async deleteSession(sessionId) {
+      await fetch(`${trimBase(getBase())}/v1/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+      })
+    },
+    listMessages,
+    async sendChat(opts) {
+      const streamed = await sendChatSSE(opts)
+      if (streamed) return
+      // Fallback: non-streaming chat.
+      const data = await request<{ response: string }>(
+        trimBase(getBase()),
+        `/v1/agents/${encodeURIComponent(opts.agentId)}/chat`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message: opts.message,
+            session_id: opts.sessionId || undefined,
+          }),
+        },
+      )
+      opts.handlers.onDone(data.response ?? '')
+    },
+    cancel() {
+      controller?.abort()
+      controller = null
+    },
+  }
+}
