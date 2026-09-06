@@ -9,6 +9,7 @@ import type { TabKind } from './PaneEmptyCards.tsx'
 import { FilesPanel } from '../../panels/FilesPanel.tsx'
 import { BrowserPanel } from '../../panels/BrowserPanel.tsx'
 import { TerminalPanel } from '../../panels/TerminalPanel.tsx'
+import { TodoPanel } from '../../panels/TodoPanel.tsx'
 
 /* ── 1) 文件树 (Files) — real workspace tree (panels/FilesPanel) ── */
 function FilesTree() {
@@ -121,6 +122,8 @@ export function PaneContent({ kind }: { kind: TabKind }) {
     case 'scm':
       return <ScmPanel />
     case 'tasks':
+      return <TodoPanel />
+    case 'subagent':
       return <SubagentTree />
     case 'terminal':
       return <TerminalPanel />

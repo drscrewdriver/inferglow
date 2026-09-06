@@ -187,6 +187,22 @@ func registerWorkspaceTools(ext *agentpkg.ActionExtension, dirs []string) error 
 	if len(abs) == 0 {
 		return nil
 	}
+	// Task tracker: model-side todo tools sharing the SAME store file the
+	// webui 待办 panel reads (server.SetTaskStore wired in main.go).
+	if taskStore != nil {
+		taskCfg := actions.TaskTrackerConfig{Store: taskStore}
+		for _, ta := range []*action.Action{
+			actions.NewTaskAddAction(taskCfg),
+			actions.NewTaskUpdateAction(taskCfg),
+			actions.NewTaskListAction(taskCfg),
+			actions.NewTaskDeleteAction(taskCfg),
+		} {
+			if err := ext.Register(ta); err != nil {
+				return fmt.Errorf("register %s: %w", ta.Name, err)
+			}
+		}
+	}
+
 	listDir := actions.NewListDirAction(actions.ListDirConfig{AllowedDirs: abs})
 	fileRead := actions.NewFileReadAction(actions.FileReadConfig{AllowedDirs: abs})
 	fileWrite := actions.NewFileWriteAction(actions.FileWriteConfig{AllowedDirs: abs})

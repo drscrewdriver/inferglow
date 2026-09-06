@@ -25,6 +25,7 @@ export function DetailsPanel({ open, onToggle, onOpenBottom, width }: DetailsPan
         <div className="dsh-details">
           <div className="dsh-details-body">
             <TabbedPane
+              defaultTabs={[{ id: 'todo', kind: 'tasks', label: '待办', active: true }]}
               headerActions={
                 <>
                   <button

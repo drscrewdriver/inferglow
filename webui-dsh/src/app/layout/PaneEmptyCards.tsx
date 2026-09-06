@@ -4,12 +4,12 @@
  * Mirrors the reference `.nArs4W_paneEmptyCards`.
  */
 
-export type TabKind = 'files' | 'scm' | 'tasks' | 'sidechat' | 'terminal' | 'browser'
+export type TabKind = 'files' | 'scm' | 'tasks' | 'subagent' | 'sidechat' | 'terminal' | 'browser'
 
 export const TAB_TYPES: { kind: TabKind; label: string }[] = [
   { kind: 'files', label: '文件' },
   { kind: 'scm', label: '源代码管理' },
-  { kind: 'tasks', label: '任务管理' },
+  { kind: 'tasks', label: '待办' },
   { kind: 'sidechat', label: '侧边对话(beta)' },
   { kind: 'terminal', label: '终端' },
   { kind: 'browser', label: '浏览器' },
