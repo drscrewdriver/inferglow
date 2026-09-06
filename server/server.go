@@ -48,6 +48,12 @@ type Config struct {
 	// ExecEnabled gates POST /v1/exec (webui terminal). Fail-closed: the
 	// route is registered only when ExecEnabled AND APIKey are both set.
 	ExecEnabled bool
+	// PTYEnabled gates GET /v1/pty (persistent interactive shells). A PTY is
+	// full-permission (a real shell can cd beyond the workspace), so it gets
+	// its own switch on top of the API key. Fail-closed like ExecEnabled.
+	PTYEnabled bool
+	// PTYShell overrides the PTY shell program (empty = platform default).
+	PTYShell string
 }
 
 // DefaultConfig returns a sensible default configuration.
@@ -89,6 +95,7 @@ type Server struct {
 	reportGen      *session.ReportGenerator
 	approvalMgr    *approval.PolicyApprovalManager
 	sbxRegistry    *sandboxRegistry
+	ptyReg         *ptyRegistry // persistent PTY terminal sessions
 }
 
 // SetApprovalManager wires an approval authority into the server. It is used
@@ -223,6 +230,7 @@ func NewServer(cfg Config, agentStore AgentStore) *Server {
 		flowStore:  flowStore,
 		runMgr:     runMgr,
 		triggerReg: trigger.NewRegistry(starter),
+		ptyReg:     newPtyRegistry(cfg.PTYShell),
 	}
 	s.registerRoutes()
 	return s
@@ -242,6 +250,7 @@ func NewServerWithFlows(cfg Config, agentStore AgentStore, flowStore *FlowStore)
 		flowStore:  flowStore,
 		runMgr:     runMgr,
 		triggerReg: trigger.NewRegistry(starter),
+		ptyReg:     newPtyRegistry(cfg.PTYShell),
 	}
 	s.registerRoutes()
 	return s

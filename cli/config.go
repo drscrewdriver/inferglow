@@ -205,6 +205,29 @@ func DefaultConfigPath() string {
 	return filepath.Join(home, ".inferglow", "config.json")
 }
 
+// ProjectConfigPath walks up from the working directory looking for a
+// project first-level etc/config.json — the shared test-phase provider
+// config that keeps the CLI/TUI, the server and the webui agent picker on
+// the same provider list. Returns "" when none is found.
+func ProjectConfigPath() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for i := 0; i < 6; i++ {
+		candidate := filepath.Join(dir, "etc", "config.json")
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+	return ""
+}
+
 // SaveConfig writes the config to the given path as JSON.
 func SaveConfig(cfg CLIConfig, path string) error {
 	dir := filepath.Dir(path)
@@ -218,8 +241,9 @@ func SaveConfig(cfg CLIConfig, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// LoadOrDefaultConfig tries to load from the given path, then the default
-// location (~/.inferglow/config.json). If neither exists, it returns the
+// LoadOrDefaultConfig tries the given path, then the project-level
+// etc/config.json (shared gui/webui/tui provider config), then the default
+// location (~/.inferglow/config.json). If none exists, it returns the
 // default config and persists it to disk for future use.
 func LoadOrDefaultConfig(explicitPath string) (CLIConfig, string, error) {
 	cfg := DefaultCLIConfig()
@@ -228,6 +252,12 @@ func LoadOrDefaultConfig(explicitPath string) (CLIConfig, string, error) {
 	if explicitPath != "" {
 		loaded, err := LoadConfig(explicitPath)
 		return loaded, explicitPath, err
+	}
+
+	// Try the shared project config next.
+	if projectPath := ProjectConfigPath(); projectPath != "" {
+		loaded, err := LoadConfig(projectPath)
+		return loaded, projectPath, err
 	}
 
 	// Try default location.

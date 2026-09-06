@@ -226,6 +226,16 @@ func (s *Server) registerRoutes() {
 		api.HandleFunc("POST /v1/exec", s.handleExec)
 	}
 
+	// PTY — webui terminal v2: one persistent interactive shell per
+	// workspace, bridged over WebSocket. Full-permission by nature, so it
+	// carries its own gate (-pty) on top of the API key; fail-closed 404
+	// when either is missing. Registered directly on the mux (more specific
+	// than the "/" middleware chain) because a browser WebSocket cannot set
+	// the Authorization header — APIKeyAuthQuery also accepts ?token=.
+	if s.cfg.APIKey != "" && s.cfg.PTYEnabled {
+		s.mux.Handle("GET /v1/pty", middleware.APIKeyAuthQuery(http.HandlerFunc(s.handlePtyWS), s.cfg.APIKey))
+	}
+
 	// Skill Hub management (C-10)
 	api.HandleFunc("GET /v1/skill-hub", s.handleListSkills)
 	api.HandleFunc("GET /v1/skill-hub/{name}", s.handleGetSkill)

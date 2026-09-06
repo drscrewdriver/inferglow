@@ -109,3 +109,21 @@ func RateLimit(next http.Handler, rpm int) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// APIKeyAuthQuery validates Bearer-token auth via header OR ?token= query
+// parameter. The query fallback exists solely for browser WebSocket
+// upgrades, which cannot set custom headers; because tokens in URLs can leak
+// into access logs, this variant must only wrap WebSocket-only routes.
+func APIKeyAuthQuery(next http.Handler, expectedKey string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if expectedKey != "" && r.Header.Get("Authorization") == "Bearer "+expectedKey {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if expectedKey != "" && r.URL.Query().Get("token") == expectedKey {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+	})
+}

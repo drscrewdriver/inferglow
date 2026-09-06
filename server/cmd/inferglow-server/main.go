@@ -26,9 +26,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"strings"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,14 +62,17 @@ func (w *workspaceFlagList) Set(v string) error {
 
 func main() {
 	var (
-		addr       = flag.String("addr", ":8080", "Listen address")
-		apiKey     = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
-		cors       = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
-		timeout    = flag.Duration("timeout", 30*time.Second, "Request read timeout")
-		usageDir   = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
-		demoAgent  = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
-		configPath = flag.String("config", "", "Server YAML config: llm.providers are wired as real chat agents (one per provider, pure-chat)")
-		execEnable = flag.Bool("exec", false, "Enable POST /v1/exec gated command execution for the webui terminal (requires -api-key)")
+		addr        = flag.String("addr", ":8080", "Listen address")
+		apiKey      = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
+		cors        = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
+		timeout     = flag.Duration("timeout", 30*time.Second, "Request read timeout")
+		usageDir    = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
+		demoAgent   = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
+		configPath  = flag.String("config", "", "Server YAML config: llm.providers are wired as real chat agents (one per provider, pure-chat)")
+		execEnable  = flag.Bool("exec", false, "Enable POST /v1/exec gated command execution for the webui terminal (requires -api-key)")
+		ptyEnable   = flag.Bool("pty", false, "Enable GET /v1/pty persistent interactive shells for the webui terminal (full-permission; requires -api-key)")
+		ptyShell    = flag.String("pty-shell", "", "Shell program for PTY sessions (default: cmd.exe on Windows, $SHELL elsewhere)")
+		providerCfg = flag.String("provider-config", "", "Shared provider JSON config (etc/config.json schema). Default: project etc/config.json, falling back to ~/.inferglow/config.json")
 	)
 	wsFlags := &workspaceFlagList{}
 	flag.Var(wsFlags, "workspace", "Seed a workspace for the webui selector, repeatable: -workspace name=rootDir")
@@ -81,12 +84,33 @@ func main() {
 	cfg.ReadTimeout = *timeout
 	cfg.UsageDataDir = *usageDir
 	cfg.ExecEnabled = *execEnable
+	cfg.PTYEnabled = *ptyEnable
+	cfg.PTYShell = *ptyShell
 
 	if *cors != "" {
 		cfg.CORSOrigins = splitComma(*cors)
 	}
 
-	var agentStore server.AgentStore
+	// Provider resolution order (agent/model list for the webui picker):
+	// shared JSON (project etc/config.json over ~/.inferglow/config.json, the
+	// TUI's own config) → server YAML llm.providers override → -demo-agent
+	// echo agent appended last so it never crowds out real providers.
+	merged := config.MultiLLMConfig{}
+	var seedsFromConfig []server.WorkspaceSeed
+	if shared, sharedPath, err := config.LoadSharedProviderConfig(*providerCfg); err != nil {
+		log.Fatalf("load provider config: %v", err)
+	} else if shared != nil {
+		merged = shared.ToMultiLLM()
+		if len(merged.Providers) > 0 {
+			log.Printf("provider config loaded from %s (%d provider(s))", sharedPath, len(merged.Providers))
+		}
+		if len(shared.Workspaces) > 0 {
+			for name, root := range shared.Workspaces {
+				seedsFromConfig = append(seedsFromConfig, server.WorkspaceSeed{Name: name, Root: root})
+			}
+		}
+	}
+
 	var loadedConfig *config.Config
 	if *configPath != "" {
 		scfg, err := config.NewLoader(*configPath).Load()
@@ -95,17 +119,32 @@ func main() {
 		}
 		loadedConfig = scfg
 		if len(scfg.LLM.Providers) > 0 {
-			store, err := server.NewConfigAgentStore(scfg.LLM)
-			if err != nil {
-				log.Fatalf("wire real agents: %v", err)
+			if merged.Providers == nil {
+				merged.Providers = map[string]config.LLMConfig{}
 			}
-			agentStore = store
-			log.Printf("real agents wired from config: %d provider(s)", len(scfg.LLM.Providers))
+			for name, lc := range scfg.LLM.Providers {
+				merged.Providers[name] = lc
+			}
+			if scfg.LLM.Default != "" {
+				merged.Default = scfg.LLM.Default
+			}
+			log.Printf("yaml providers merged: %d provider(s) total", len(merged.Providers))
 		}
+	}
+
+	var agentStore server.AgentStore
+	if len(merged.Providers) > 0 {
+		store, err := server.NewConfigAgentStore(merged)
+		if err != nil {
+			log.Fatalf("wire real agents: %v", err)
+		}
+		agentStore = store
+		log.Printf("real agents wired: %d provider(s)", len(merged.Providers))
 	}
 	if *demoAgent {
 		if agentStore != nil {
-			log.Println("-demo-agent ignored: real agents already wired from config")
+			agentStore = &agentStoreGroup{stores: []server.AgentStore{agentStore, newDemoAgentStore()}}
+			log.Println("demo agent appended: id=a1 (echo)")
 		} else {
 			agentStore = newDemoAgentStore()
 			log.Println("demo agent wired: id=a1 (echo)")
@@ -128,11 +167,12 @@ func main() {
 	srv.SetCredentialStore(server.NewCredentialStore())
 	srv.SetWorkspaceProvider(server.NewWorkspaceProvider())
 
-	// Seed the workspace registry: -workspace flags first, then YAML
-	// workspaces section. Later entries override earlier names (Provider.Open
-	// replaces existing bindings).
+	// Seed the workspace registry: -workspace flags first, then the shared
+	// provider config's workspaces section, then YAML workspaces. Later
+	// entries override earlier names (Provider.Open replaces bindings).
 	var seeds []server.WorkspaceSeed
 	seeds = append(seeds, wsFlags.seeds...)
+	seeds = append(seeds, seedsFromConfig...)
 	if loadedConfig != nil {
 		for name, root := range loadedConfig.Workspaces {
 			seeds = append(seeds, server.WorkspaceSeed{Name: name, Root: root})
@@ -167,8 +207,45 @@ func main() {
 		log.Printf("shutdown error: %v", err)
 		os.Exit(1)
 	}
+	srv.ShutdownTerminals()
 
 	fmt.Println("Server stopped gracefully")
+}
+
+// agentStoreGroup merges several AgentStore implementations into one listing
+// (e.g. config-derived agents + the demo echo agent).
+type agentStoreGroup struct {
+	stores []server.AgentStore
+}
+
+func (g *agentStoreGroup) Get(id string) server.AgentLike {
+	for _, st := range g.stores {
+		if a := st.Get(id); a != nil {
+			return a
+		}
+	}
+	return nil
+}
+
+func (g *agentStoreGroup) List() []server.AgentLike {
+	var out []server.AgentLike
+	for _, st := range g.stores {
+		out = append(out, st.List()...)
+	}
+	return out
+}
+
+func (g *agentStoreGroup) Create(_ server.AgentConfig) (string, error) {
+	return "", fmt.Errorf("grouped agent store is read-only")
+}
+
+func (g *agentStoreGroup) Delete(id string) error {
+	for _, st := range g.stores {
+		if st.Get(id) != nil {
+			return st.Delete(id)
+		}
+	}
+	return nil
 }
 
 func splitComma(s string) []string {

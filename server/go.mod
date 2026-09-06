@@ -33,8 +33,10 @@ replace github.com/inferglow/rag => ../rag
 replace github.com/inferglow/mcpserver => ../mcpserver
 
 require (
+	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/gorilla/websocket v1.5.3
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/approval v0.0.0
 	github.com/inferglow/audit v0.0.0
@@ -56,6 +58,7 @@ require (
 require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v27.5.1+incompatible // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
@@ -71,8 +74,9 @@ require (
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.0-rc3 // indirect
+	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/u-root/u-root v0.16.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
