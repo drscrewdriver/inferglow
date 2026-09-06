@@ -22,6 +22,8 @@ Go 语言实现的 AI Agent 基础设施框架，对标 [Agently](https://github
 
 Go 生态缺乏一个对标 Agently 设计理念的框架：**契约优先、可单测编排、内置沙箱、明确的 Pause/Resume/Persist 能力**。Inferglow 提供一套可组合的基础设施模块，为下游引用 AI Agent 框架（inferglow）提供支撑（已经初步合并）。
 <img width="1107" height="626" alt="image" src="https://github.com/user-attachments/assets/b4b892d0-d20b-49e2-ac50-9c0785f7209f" />
+<img width="1041" height="588" alt="image" src="https://github.com/user-attachments/assets/fe9ec36a-16ff-4b61-95d9-8c96cb42e952" />
+
 
 
 ## 架构概览
