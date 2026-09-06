@@ -41,18 +41,18 @@ type ProvidersConfig struct {
 
 // CLIConfig holds the full configuration for the CLI agent.
 type CLIConfig struct {
-	LLM          LLMConfig      `json:"llm"`
-	Providers    ProvidersConfig `json:"providers,omitempty"` // RF-1: multi-provider routes
-	DataDir      string         `json:"data_dir"`
-	WorkspaceDir string       `json:"workspace_dir"`
-	Constitutional string     `json:"constitutional,omitempty"`
-	WindowTokens int          `json:"window_tokens"`
-	TopK         int          `json:"top_k"`
-	UnsafeMode   bool         `json:"unsafe_mode"`
-	SandboxMode  string       `json:"sandbox_mode,omitempty"` // "trusted_local", "local", "docker", "gvisor", "auto"
-	Features     FeatureFlags `json:"features"`
-	Audit        AuditConfig  `json:"audit,omitempty"`
-	TUI          TUIConfig    `json:"tui,omitempty"`
+	LLM            LLMConfig       `json:"llm"`
+	Providers      ProvidersConfig `json:"providers,omitempty"` // RF-1: multi-provider routes
+	DataDir        string          `json:"data_dir"`
+	WorkspaceDir   string          `json:"workspace_dir"`
+	Constitutional string          `json:"constitutional,omitempty"`
+	WindowTokens   int             `json:"window_tokens"`
+	TopK           int             `json:"top_k"`
+	UnsafeMode     bool            `json:"unsafe_mode"`
+	SandboxMode    string          `json:"sandbox_mode,omitempty"` // "trusted_local", "local", "docker", "gvisor", "auto"
+	Features       FeatureFlags    `json:"features"`
+	Audit          AuditConfig     `json:"audit,omitempty"`
+	TUI            TUIConfig       `json:"tui,omitempty"`
 	// MC-1: context management mode (passthrough/three_zone/summary/hybrid).
 	ContextMode string `json:"context_mode,omitempty"`
 	// MC-2: dedicated compression model; nil = fallback to main LLM.
@@ -100,35 +100,40 @@ type LLMConfig struct {
 	Model    string `json:"model"`
 	APIKey   string `json:"api_key,omitempty"`
 	Provider string `json:"provider,omitempty"` // "openai", "deepseek", "anthropic", etc.
+	// EnableThinking injects chat_template_kwargs.enable_thinking=true into
+	// every request (vLLM-hosted Qwen3-family models gate reasoning on this;
+	// --reasoning-parser then splits it into the reasoning field). The
+	// server shares this field via the shared etc/config.json schema.
+	EnableThinking bool `json:"enable_thinking,omitempty"`
 }
 
 // FeatureFlags controls optional features.
 type FeatureFlags struct {
-	MemoryInjection  bool   `json:"memory_injection"`  // Per-turn auto recall
-	MemoryStorage    bool   `json:"memory_storage"`    // Tool result auto-ingest
-	Constitutional   bool   `json:"constitutional"`    // Load constitutional zone
-	MetaInstructions bool   `json:"meta_instructions"` // CM-3: inject tool/background/compression guidance into Zone 0.5
-	Compression      bool   `json:"compression"`       // Auto compression
-	ProactiveRecall  bool   `json:"proactive_recall"`  // Auto recall on session start
-	RuntimeModeSwitch bool  `json:"runtime_mode_switch"` // MC-3: enable /mode TUI command
-	TUIMode          bool   `json:"tui_mode"`          // Enable full-screen TUI mode
-	AutoBackground   bool   `json:"auto_background"`   // CM-2: auto-trigger /rebackground when Zone 1 (head buffer) is empty; false disables the auto project-analysis tool loop
-	OutputMode       string `json:"output_mode"`       // "tui", "cli", or "oneshot"; mirrors CLI flag dispatch
-	SlashCompat      bool   `json:"slash_compat"`      // SC-1: accept claude/pi/opencode/codex slash commands via alias catalog (default true)
-	SlashPopup       bool   `json:"slash_popup"`       // SC-2: IME-style "/" prefix autocomplete popup (default true)
-	TaskPanel        bool   `json:"task_panel"`        // SC-3: right-side task list panel (default true)
-	MessageActions   bool   `json:"message_actions"`   // SC-4: history message action menu (default true)
-	WorkspaceSwitch  bool   `json:"workspace_switch"`  // SC-5: workspace directory switching (default true)
-	SkillLoader      bool   `json:"skill_loader"`      // SC-6: load ~/.agents/skills as slash commands (default true)
-	ModelSwitch      bool   `json:"model_switch"`      // RF-1: runtime multi-provider/model switching (default true)
-	EffortControl    bool   `json:"effort"`            // RF-2: /effort reasoning-level control (default true)
-	ThemeSwitch      bool   `json:"theme_switch"`      // RF-3: /theme real switching (default true)
-	InputHistory     bool   `json:"input_history"`     // RF-5: persisted input history (default true)
-	TurnStats        bool   `json:"turn_stats"`        // RF-6: per-turn stats (thinking/tool durations) (default true)
-	TPS              bool   `json:"tps"`               // RF-7: TPS output efficiency (default true)
-	CacheHit         bool   `json:"cache_hit"`         // RF-8: cache hit rate (default true)
-	Welcome          bool   `json:"welcome"`           // RF-9: startup welcome page (default true)
-	HealthCheck      bool   `json:"health_check"`      // RF-10: API health check (default true)
+	MemoryInjection   bool   `json:"memory_injection"`    // Per-turn auto recall
+	MemoryStorage     bool   `json:"memory_storage"`      // Tool result auto-ingest
+	Constitutional    bool   `json:"constitutional"`      // Load constitutional zone
+	MetaInstructions  bool   `json:"meta_instructions"`   // CM-3: inject tool/background/compression guidance into Zone 0.5
+	Compression       bool   `json:"compression"`         // Auto compression
+	ProactiveRecall   bool   `json:"proactive_recall"`    // Auto recall on session start
+	RuntimeModeSwitch bool   `json:"runtime_mode_switch"` // MC-3: enable /mode TUI command
+	TUIMode           bool   `json:"tui_mode"`            // Enable full-screen TUI mode
+	AutoBackground    bool   `json:"auto_background"`     // CM-2: auto-trigger /rebackground when Zone 1 (head buffer) is empty; false disables the auto project-analysis tool loop
+	OutputMode        string `json:"output_mode"`         // "tui", "cli", or "oneshot"; mirrors CLI flag dispatch
+	SlashCompat       bool   `json:"slash_compat"`        // SC-1: accept claude/pi/opencode/codex slash commands via alias catalog (default true)
+	SlashPopup        bool   `json:"slash_popup"`         // SC-2: IME-style "/" prefix autocomplete popup (default true)
+	TaskPanel         bool   `json:"task_panel"`          // SC-3: right-side task list panel (default true)
+	MessageActions    bool   `json:"message_actions"`     // SC-4: history message action menu (default true)
+	WorkspaceSwitch   bool   `json:"workspace_switch"`    // SC-5: workspace directory switching (default true)
+	SkillLoader       bool   `json:"skill_loader"`        // SC-6: load ~/.agents/skills as slash commands (default true)
+	ModelSwitch       bool   `json:"model_switch"`        // RF-1: runtime multi-provider/model switching (default true)
+	EffortControl     bool   `json:"effort"`              // RF-2: /effort reasoning-level control (default true)
+	ThemeSwitch       bool   `json:"theme_switch"`        // RF-3: /theme real switching (default true)
+	InputHistory      bool   `json:"input_history"`       // RF-5: persisted input history (default true)
+	TurnStats         bool   `json:"turn_stats"`          // RF-6: per-turn stats (thinking/tool durations) (default true)
+	TPS               bool   `json:"tps"`                 // RF-7: TPS output efficiency (default true)
+	CacheHit          bool   `json:"cache_hit"`           // RF-8: cache hit rate (default true)
+	Welcome           bool   `json:"welcome"`             // RF-9: startup welcome page (default true)
+	HealthCheck       bool   `json:"health_check"`        // RF-10: API health check (default true)
 
 	// ToolDenoise mechanically denoises tool output (ANSI escapes, \r
 	// redraw frames, adjacent duplicate lines) before it enters the L0
@@ -142,11 +147,11 @@ func DefaultCLIConfig() CLIConfig {
 	home, _ := os.UserHomeDir()
 	dataDir := filepath.Join(home, ".inferglow")
 	return CLIConfig{
-		DataDir:      dataDir,
-		WorkspaceDir: ".",
-		WindowTokens: 32000,
-		TopK:         5,
-		SandboxMode:  "trusted_local",
+		DataDir:        dataDir,
+		WorkspaceDir:   ".",
+		WindowTokens:   32000,
+		TopK:           5,
+		SandboxMode:    "trusted_local",
 		Constitutional: filepath.Join(dataDir, "constitutional", "rules.md"),
 		Audit: AuditConfig{
 			Enabled: false,
@@ -176,10 +181,10 @@ func DefaultCLIConfig() CLIConfig {
 			Welcome:           true,
 			HealthCheck:       true,
 		},
-		ContextMode:  "hybrid",
+		ContextMode: "hybrid",
 		TUI: TUIConfig{
-			Theme:              "dark",
-			ShowReasoning:      false,
+			Theme:               "dark",
+			ShowReasoning:       false,
 			HealthCheckInterval: 60,
 			HealthProbeMode:     "tcp",
 		},
