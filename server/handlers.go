@@ -94,6 +94,9 @@ type ChatRequest struct {
 	Message     string `json:"message" validate:"required"`
 	PreemptMode string `json:"preempt_mode,omitempty"` // "queue"|"safe_point"|"force"
 	SessionID   string `json:"session_id,omitempty"`   // optional: persist into the session message log
+	// R10 orthogonal context improvements, applied per run regardless of the
+	// base context mode. nil fields fall back to the server defaults.
+	ToolDenoise *bool `json:"tool_denoise,omitempty"` // mechanical tool-output denoise before truncation
 }
 
 // ChatResponse is the response body for agent chat.

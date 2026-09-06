@@ -54,6 +54,12 @@ type Config struct {
 	PTYEnabled bool
 	// PTYShell overrides the PTY shell program (empty = platform default).
 	PTYShell string
+	// ToolDenoise (R10) is the server-default for the orthogonal tool-output
+	// denoise pass; a per-request tool_denoise field overrides it per run.
+	// Applied in the engine tool-result funnel BEFORE the size cap, so every
+	// base context mode benefits.
+	ToolDenoise bool
+
 	// AuthOpen (T0 test mode) skips API-key checks for ALL requests: any
 	// browser can use the webui without configuring a key. Exec/PTY routes
 	// still require their own feature flags. Deliberately temporary —

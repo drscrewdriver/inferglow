@@ -27,22 +27,42 @@ import (
 
 // handleContextSearch performs a semantic or keyword search via ContextProvider.
 
-// contextModeInfo is one selectable context-management mode.
+// contextModeInfo is one selectable BASE context-management mode (the base
+// logic axis). Improvement passes are a separate orthogonal axis below.
 type contextModeInfo struct {
 	ID          string `json:"id"`
+	Name        string `json:"name"`
 	Description string `json:"description"`
+	Default     bool   `json:"default,omitempty"`
 }
 
-// handleContextModes lists the context management modes the engine supports
-// (context.Mode constants). The webui context chip renders this list; the
-// per-run engine switch itself is a planned follow-up.
+// contextImprovement is one orthogonal improvement pass. Passes compose with
+// EVERY base mode: each runs at a fixed point of the pipeline regardless of
+// the mode chosen (R10: tool_denoise runs in the engine tool-result funnel,
+// before truncation).
+type contextImprovement struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Default     bool   `json:"default"`
+}
+
+// handleContextModes composes the context-management surface: base modes ×
+// orthogonal improvements. The webui context chip renders the two sections
+// independently; stream-run takes tool_denoise per run (base-mode per-run
+// engine switch remains a planned follow-up).
 func (s *Server) handleContextModes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []contextModeInfo{
-		{"passthrough", "直通 — 不压缩,前缀缓存最优"},
-		{"three_zone", "三分区 — 会话适配器分区管理"},
-		{"summary", "摘要压缩 — 超阈值时旧消息 LLM 摘要替换"},
-		{"hybrid", "混合 — L0-L4 分层压缩(默认,前缀优化+分层)"},
-		{"assembly", "9 层装配引擎 — 检索/渲染/衰减全管线"},
+	writeJSON(w, http.StatusOK, map[string]any{
+		"modes": []contextModeInfo{
+			{"passthrough", "直通", "不压缩,前缀缓存最优", false},
+			{"three_zone", "三分区", "会话适配器分区管理", false},
+			{"summary", "摘要压缩", "超阈值时旧消息 LLM 摘要替换", false},
+			{"hybrid", "混合", "L0-L4 分层压缩,前缀优化+分层", true},
+			{"assembly", "装配引擎", "9 层装配 — 检索/渲染/衰减全管线", false},
+		},
+		"improvements": []contextImprovement{
+			{"tool_denoise", "工具返回降噪", "机械清洗工具输出(ANSI/回刷帧/重复行),先于截断、独立于基础模式生效", true},
+		},
 	})
 }
 

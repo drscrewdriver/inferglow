@@ -157,6 +157,11 @@ type Engine struct {
 	// Propagated from Agent.Run via runConfig.compactHook.
 	compactHook func(promptTokens int)
 
+	// toolResultHook rewrites tool-result content BEFORE the size cap
+	// truncates it (R10 orthogonal improvement pass, e.g. tool_denoise).
+	// Set per run via Agent.Run(WithToolResultHook(...)); nil passthrough.
+	toolResultHook func(toolName, content string) string
+
 	// inputQueue is the bounded FIFO queue for user inputs submitted while
 	// the agent is busy. nil disables queue draining (default).
 	// Propagated from Agent.inputQueue.
@@ -1091,7 +1096,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if res.Error != "" {
 				item.Error = res.Error
 			} else {
-				item.Result = formatToolResult(res)
+				item.Result = e.formatToolResult(ac.Name, res)
 			}
 			if res.Metadata != nil {
 				if rid, ok := res.Metadata["recordID"]; ok {
@@ -1108,7 +1113,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			// Native function calling: add role="tool" messages with tool_call_id.
 			for i, tc := range nativeToolCalls {
 				if i < len(results) {
-					resultContent := formatToolResult(results[i])
+					resultContent := e.formatToolResult(tc.Name, results[i])
 					e.session.AddToolResultNamed(tc.ID, tc.Name, resultContent)
 				}
 			}
@@ -1289,9 +1294,11 @@ func truncateToolResult(s string, maxBytes int) string {
 
 // formatToolResult converts an *action.ActionResult into a human-readable
 // string suitable for sending back to the model as a tool message content.
-// Results exceeding defaultToolResultMaxBytes are truncated to keep the
-// context window compact.
-func formatToolResult(result *action.ActionResult) string {
+// The per-run toolResultHook (R10 improvement pass, e.g. mechanical
+// tool_denoise) runs BEFORE the size cap so it optimizes the full input;
+// results exceeding defaultToolResultMaxBytes are then truncated to keep
+// the context window compact.
+func (e *Engine) formatToolResult(toolName string, result *action.ActionResult) string {
 	var raw string
 	if result == nil {
 		raw = "null"
@@ -1301,6 +1308,9 @@ func formatToolResult(result *action.ActionResult) string {
 		raw = string(b)
 	} else {
 		raw = fmt.Sprintf("%v", result.Result)
+	}
+	if e.toolResultHook != nil {
+		raw = e.toolResultHook(toolName, raw)
 	}
 	return truncateToolResult(raw, defaultToolResultMaxBytes)
 }

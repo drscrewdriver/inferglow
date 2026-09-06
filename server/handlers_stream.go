@@ -6,10 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/inferglow/context/toolclean"
 
 	"github.com/inferglow/model"
 	"github.com/inferglow/observability"
@@ -110,7 +113,25 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 		runCtx := WithRunSessionID(r.Context(), req.SessionID)
 		if supportsCallbacks {
 			cbs := mergeCallbacks(sc.agentCallbacks(), persistedCallbacks(agent))
-			resp, runErr = runner.RunWithCallbacks(runCtx, req.Message, agentpkg.WithCallbacks(cbs))
+			opts := []agentpkg.RunOption{agentpkg.WithCallbacks(cbs)}
+			// R10: orthogonal tool-output denoise — per request, falling back
+			// to the server default. The hook runs in the engine funnel
+			// BEFORE the 16KB truncation, for every base context mode.
+			denoise := s.cfg.ToolDenoise
+			if req.ToolDenoise != nil {
+				denoise = *req.ToolDenoise
+			}
+			if denoise {
+				opts = append(opts, agentpkg.WithToolResultHook(func(toolName, content string) string {
+					cleaned, rep := toolclean.Clean(content)
+					if rep.OutputBytes < rep.InputBytes {
+						log.Printf("[tool_denoise] %s: %d -> %d bytes (ansi=%d cr=%d dup=%d err_kept=%d)",
+							toolName, rep.InputBytes, rep.OutputBytes, rep.ANSIRemoved, rep.CRFolded, rep.DupLinesRemoved, rep.ErrorLinesKept)
+					}
+					return cleaned
+				}))
+			}
+			resp, runErr = runner.RunWithCallbacks(runCtx, req.Message, opts...)
 		} else {
 			// Demo/legacy agents expose no callback surface.
 			sc.emit("run_start", "", 0, 0, "")

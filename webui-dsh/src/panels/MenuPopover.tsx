@@ -20,6 +20,8 @@ export interface MenuItem {
   selected?: boolean
   /** Destructive rows (删除…). */
   danger?: boolean
+  /** Toggle rows: keep the menu open after picking. */
+  stayOpen?: boolean
 }
 
 export interface MenuSection {
@@ -98,7 +100,10 @@ export function MenuPopover({ anchor, sections, onPick, onClose, width = 200 }: 
               key={item.id}
               type="button"
               role="menuitem"
-              onClick={() => onPick(item.id)}
+              onClick={() => {
+                onPick(item.id)
+                if (!item.stayOpen) onClose()
+              }}
               style={{
                 display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between',
                 gap: 8, textAlign: 'left', cursor: 'pointer',

@@ -852,6 +852,8 @@ input, textarea { font-family: inherit; font-size: inherit; }
   display: flex;
   align-items: center;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
 .dsh-composer-add {
@@ -2687,7 +2689,18 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .dsh-composer-textarea::placeholder { color: var(--dsw-alias-label-caption); }
 .dsh-composer-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.dsh-composer-modes { flex: 1; }
+.dsh-composer-modes {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* One row: the context chip sits to the RIGHT of the permission chip —
+     never wraps below (overflow scrolls instead). */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.dsh-composer-modes::-webkit-scrollbar { display: none; }
 
 .dsh-composer-mode {
   display: flex;
@@ -2695,6 +2708,7 @@ input, textarea { font-family: inherit; font-size: inherit; }
   gap: 6px;
   height: 28px;
   padding: 0 10px;
+  flex-shrink: 0;
   border-radius: 999px;
   border: 1px solid var(--dsw-alias-border-l2-darkmode-thin, var(--dsw-alias-border-l1));
   background: var(--dsw-alias-interactive-bg-hover);
@@ -2710,7 +2724,7 @@ input, textarea { font-family: inherit; font-size: inherit; }
 }
 
 .dsh-composer-mode-icon { display: flex; color: var(--dsw-alias-label-tertiary); }
-.dsh-composer-mode-label { font-weight: 500; white-space: nowrap; }
+.dsh-composer-mode-label { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 
 .dsh-composer-command {
   width: 28px;

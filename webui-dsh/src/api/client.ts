@@ -36,7 +36,25 @@ export interface SendChatOptions {
   agentId: string
   sessionId?: string
   message: string
+  /** Orthogonal context knobs, per run (R10). toolDenoise omitted = server default. */
+  context?: { toolDenoise?: boolean }
   handlers: SendChatHandlers
+}
+
+/** One selectable BASE context mode (GET /v1/context/modes). */
+export interface ContextModeInfo {
+  id: string
+  name: string
+  description: string
+  default?: boolean
+}
+
+/** One orthogonal improvement pass — composes with every base mode. */
+export interface ContextImprovement {
+  id: string
+  name: string
+  description: string
+  default: boolean
 }
 
 export interface FsEntry {
@@ -141,7 +159,7 @@ export interface InferGlowApi {
   /** Whole-file read (server caps at 10MB). */
   fsRead(path: string, workspace?: string): Promise<FsReadResult>
   sessionTrace(sessionId: string, limit?: number): Promise<SessionTrace[]>
-  contextModes(): Promise<{ id: string; description: string }[]>
+  contextModes(): Promise<{ modes: ContextModeInfo[]; improvements: ContextImprovement[] }>
   listTasks(status?: string): Promise<TaskItem[]>
   createTask(title: string): Promise<TaskItem>
   updateTask(id: string, changes: { status?: string; title?: string }): Promise<TaskItem>
@@ -245,6 +263,7 @@ export function createInferGlowApi(
           body: JSON.stringify({
             message: opts.message,
             session_id: opts.sessionId || undefined,
+            tool_denoise: opts.context?.toolDenoise,
           }),
           signal: controller.signal,
         }),
@@ -386,7 +405,7 @@ export function createInferGlowApi(
       return request<FsTreeResult>(base(), `/v1/fs/tree${q ? `?${q}` : ''}`, getApiKey)
     },
     async contextModes() {
-      return request<{ id: string; description: string }[]>(
+      return request<{ modes: ContextModeInfo[]; improvements: ContextImprovement[] }>(
         base(),
         '/v1/context/modes',
         getApiKey,

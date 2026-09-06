@@ -67,6 +67,9 @@ export interface Settings {
   /** Context management mode (context.Mode: passthrough/three_zone/
    * summary/hybrid/assembly). UI-facing; per-run engine switch is planned. */
   contextMode: string
+  /** Orthogonal tool-output denoise pass (R10): runs before truncation
+   * regardless of contextMode. Sent per stream-run request. */
+  toolDenoise: boolean
   /** Sidebar list organization (R9 view-options menu). flat = one ungrouped
    * list; workspace = one group per registered workspace. */
   sidebarGroupBy: 'workspace' | 'flat'
@@ -172,6 +175,7 @@ const defaultSettings: Settings = {
   mode: '',
   permission: 'workspace-write',
   contextMode: 'hybrid',
+  toolDenoise: true,
   sidebarGroupBy: 'workspace',
   sidebarSort: 'recent',
 }

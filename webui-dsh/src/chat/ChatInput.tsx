@@ -13,6 +13,8 @@ import { store, subscribe, type Message } from '../store.ts'
 import { api, ensureSession, getActiveAgentId, agentName, recordUsage } from '../bridge/inferglow.ts'
 import { AgentPicker } from '../panels/AgentPicker.tsx'
 import { ConfigPopover } from '../panels/ConfigPopover.tsx'
+import { MenuPopover } from '../panels/MenuPopover.tsx'
+import type { ContextModeInfo, ContextImprovement } from '../api/client.ts'
 
 interface ChatInputProps {
   sessionId: string | null
@@ -45,7 +47,8 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   const ctxChipRef = useRef<HTMLButtonElement | null>(null)
   const [perm, setPerm] = useState(store.settings.permission)
   const [ctxMode, setCtxMode] = useState(store.settings.contextMode)
-  const [ctxModes, setCtxModes] = useState<{ id: string; description: string }[] | null>(null)
+  const [ctxModes, setCtxModes] = useState<{ modes: ContextModeInfo[]; improvements: ContextImprovement[] } | null>(null)
+  const [toolDenoise, setToolDenoise] = useState(store.settings.toolDenoise)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   /* Model chip reflects the resolved agent (settings.model / first agent). */
@@ -146,6 +149,7 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
         agentId,
         sessionId: sid,
         message: text,
+        context: { toolDenoise },
         handlers: {
           onToolStart: toolName => {
             store.addToolCall(sid, assistantMsg.id, {
@@ -267,11 +271,11 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
                   onClose={() => setChipOpen(null)} />
               )}
               <button ref={ctxChipRef} className="dsh-composer-mode" type="button"
-                title={`上下文管理模式，当前：${ctxMode}`} aria-haspopup="listbox" aria-expanded={chipOpen === 'context'}
+                title={`上下文管理，当前：${ctxMode}${toolDenoise ? ' + 工具返回降噪' : ''}`} aria-haspopup="listbox" aria-expanded={chipOpen === 'context'}
                 onClick={() => {
                   setChipOpen(o => (o === 'context' ? null : 'context'))
                   if (ctxModes === null) {
-                    void api.contextModes().then(ms => setCtxModes(ms)).catch(() => setCtxModes([]))
+                    void api.contextModes().then(ms => setCtxModes(ms)).catch(() => setCtxModes(null))
                   }
                 }}>
                 <span className="dsh-composer-mode-icon">
@@ -285,11 +289,38 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
                 </svg>
               </button>
               {chipOpen === 'context' && (
-                <ConfigPopover anchor={ctxChipRef.current}
-                  items={(ctxModes ?? []).map(m => ({ id: m.id, label: m.id, detail: m.description, selected: m.id === ctxMode }))}
-                  emptyText="后端未提供上下文模式列表" footer="GET /v1/context/modes · 引擎 per-run 切换二期"
-                  onPick={id => { setCtxMode(id); store.updateSetting('contextMode', id); setChipOpen(null) }}
-                  onClose={() => setChipOpen(null)} />
+                <MenuPopover
+                  anchor={ctxChipRef.current}
+                  width={300}
+                  sections={[
+                    {
+                      label: '基础模式',
+                      items: (ctxModes?.modes ?? []).map(m => ({
+                        id: 'mode:' + m.id, label: `${m.name} · ${m.id}`, selected: m.id === ctxMode,
+                      })),
+                    },
+                    {
+                      label: '优化项（正交，随任一基础模式生效）',
+                      items: (ctxModes?.improvements ?? []).map(imp => ({
+                        id: 'imp:' + imp.id, label: imp.name,
+                        selected: toolDenoise, stayOpen: true,
+                      })),
+                    },
+                  ]}
+                  onPick={id => {
+                    if (id.startsWith('mode:')) {
+                      const mode = id.slice(5)
+                      setCtxMode(mode)
+                      store.updateSetting('contextMode', mode)
+                      setChipOpen(null)
+                    } else if (id.startsWith('imp:')) {
+                      const next = !toolDenoise
+                      setToolDenoise(next)
+                      store.updateSetting('toolDenoise', next)
+                    }
+                  }}
+                  onClose={() => setChipOpen(null)}
+                />
               )}
             </div>
           </div>

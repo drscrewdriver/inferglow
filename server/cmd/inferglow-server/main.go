@@ -74,6 +74,7 @@ func main() {
 		execEnable  = flag.Bool("exec", false, "Enable POST /v1/exec gated command execution for the webui terminal (requires -api-key)")
 		ptyEnable   = flag.Bool("pty", false, "Enable GET /v1/pty persistent interactive shells for the webui terminal (full-permission; requires -api-key)")
 		ptyShell    = flag.String("pty-shell", "", "Shell program for PTY sessions (default: cmd.exe on Windows, $SHELL elsewhere)")
+		toolDenoise = flag.Bool("tool-denoise", true, "Mechanically denoise tool output (ANSI/redraw/dup lines) before truncation; per-request tool_denoise overrides")
 		providerCfg = flag.String("provider-config", "", "Shared provider JSON config (etc/config.json schema). Default: project etc/config.json, falling back to ~/.inferglow/config.json")
 		authOpen    = flag.Bool("auth-open", false, "T0 test mode: skip API-key checks entirely (any browser can use the webui; exec/pty still need -exec/-pty)")
 	)
@@ -90,6 +91,7 @@ func main() {
 	cfg.PTYEnabled = *ptyEnable
 	cfg.PTYShell = *ptyShell
 	cfg.AuthOpen = *authOpen
+	cfg.ToolDenoise = *toolDenoise
 	if *authOpen {
 		log.Println("⚠ 鉴权已关闭(-auth-open):任意浏览器可访问全部 API — 仅限本机/可信网络测试")
 	}
