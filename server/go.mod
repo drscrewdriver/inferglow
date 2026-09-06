@@ -40,7 +40,7 @@ require (
 	github.com/inferglow/action v0.0.0
 	github.com/inferglow/approval v0.0.0
 	github.com/inferglow/audit v0.0.0
-	github.com/inferglow/flow v0.0.0-00010101000000-000000000000
+	github.com/inferglow/flow v0.0.0
 	github.com/inferglow/mcpserver v0.0.0
 	github.com/inferglow/messagebus v0.0.0-00010101000000-000000000000
 	github.com/inferglow/model v0.0.0
@@ -70,7 +70,11 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/inferglow/builtins v0.0.0
+	github.com/inferglow/context v0.0.0 // indirect
+	github.com/inferglow/memory v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
+	github.com/inferglow/skill v0.0.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -89,3 +93,11 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 )
+
+replace github.com/inferglow/builtins => ../builtins
+
+replace github.com/inferglow/context => ../context
+
+replace github.com/inferglow/memory => ../memory
+
+replace github.com/inferglow/skill => ../skill

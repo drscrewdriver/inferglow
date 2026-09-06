@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +46,7 @@ func TestStreamRunRealAgentDeltaEndToEnd(t *testing.T) {
 		Providers: map[string]config.LLMConfig{
 			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("config agent store: %v", err)
 	}
@@ -156,7 +159,7 @@ func TestStreamRunEnvelopeReplyExtraction(t *testing.T) {
 		Providers: map[string]config.LLMConfig{
 			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("config agent store: %v", err)
 	}
@@ -203,7 +206,7 @@ func TestStreamRunPlainReplyStillStreams(t *testing.T) {
 		Providers: map[string]config.LLMConfig{
 			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("config agent store: %v", err)
 	}
@@ -277,7 +280,7 @@ func TestStreamRunExecuteOnlyEnvelope(t *testing.T) {
 		Providers: map[string]config.LLMConfig{
 			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("config agent store: %v", err)
 	}
@@ -294,5 +297,72 @@ func TestStreamRunExecuteOnlyEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(body, "get_user_info") || !strings.Contains(body, "纯聊天模式") {
 		t.Fatalf("tool-call notice missing:\n%s", body)
+	}
+}
+
+// TestAgentFunctionCallLoop — the full function-calling round trip: the model
+// (fake) answers with a decision envelope calling the ALIAS tool name
+// list_directory; the real builtins list_dir executor runs against the
+// workspace; the result lands back in the model's context; round 2 produces
+// a final_response carrying the listed file. Proves tool wiring + alias
+// adaptation + envelope display end to end.
+func TestAgentFunctionCallLoop(t *testing.T) {
+	dir := t.TempDir()
+	marker := "fc-marker-9f31.txt"
+	if err := os.WriteFile(filepath.Join(dir, marker), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stateful fake LLM: round 1 requests list_directory; once the tool
+	// result (containing the marker file name) appears in the context,
+	// respond with the final answer.
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sawResult := strings.Contains(string(body), marker)
+		content := `{"action_calls":[{"name":"list_directory","params":{"path":"."}}]}`
+		if sawResult {
+			content = `{"action_calls":[],"final_response":"已列出目录，找到 ` + marker + `"}`
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":null}]}\n\n", content)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n")
+	}))
+	defer llmSrv.Close()
+
+	store, err := NewConfigAgentStore(config.MultiLLMConfig{
+		Providers: map[string]config.LLMConfig{
+			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
+		},
+	}, []string{dir})
+	if err != nil {
+		t.Fatalf("config agent store: %v", err)
+	}
+	srv := NewServer(DefaultConfig(), store)
+	srv.SetMessageStore(NewMessageStore())
+
+	req := httptest.NewRequest("POST", "/v1/agents/fake/stream-run", strings.NewReader(`{"message":"list the directory","session_id":"sess-fc"}`))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	body := w.Body.String()
+
+	if !strings.Contains(body, "event: tool_start") || !strings.Contains(body, "list_directory") {
+		t.Fatalf("tool_start for list_directory missing:\n%s", body)
+	}
+	want := "已列出目录，找到 " + marker
+	if !strings.Contains(body, fmt.Sprintf("%q", want)) {
+		t.Fatalf("final_response with listed file missing:\n%s", body)
+	}
+	if strings.Contains(body, `"action_calls"`) {
+		t.Fatalf("raw decision JSON leaked:\n%s", body)
+	}
+	recs, _ := srv.msgStore.ListBefore("sess-fc", time.Time{}, 10)
+	var assistant string
+	for _, m := range recs {
+		if m.Role == MessageRoleAssistant {
+			assistant = m.Content
+		}
+	}
+	if assistant != want {
+		t.Fatalf("assistant record = %q, want %q", assistant, want)
 	}
 }

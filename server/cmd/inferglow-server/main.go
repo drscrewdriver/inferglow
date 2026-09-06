@@ -134,12 +134,27 @@ func main() {
 
 	var agentStore server.AgentStore
 	if len(merged.Providers) > 0 {
-		store, err := server.NewConfigAgentStore(merged)
+		// Tool roots: every workspace root known at startup (flags + shared
+		// config + YAML). The agents' file tools are confined to these dirs;
+		// empty list means pure-chat agents without tools.
+		toolDirs := make([]string, 0, len(wsFlags.seeds)+len(seedsFromConfig))
+		for _, seed := range wsFlags.seeds {
+			toolDirs = append(toolDirs, seed.Root)
+		}
+		for _, seed := range seedsFromConfig {
+			toolDirs = append(toolDirs, seed.Root)
+		}
+		if loadedConfig != nil {
+			for _, root := range loadedConfig.Workspaces {
+				toolDirs = append(toolDirs, root)
+			}
+		}
+		store, err := server.NewConfigAgentStore(merged, toolDirs)
 		if err != nil {
 			log.Fatalf("wire real agents: %v", err)
 		}
 		agentStore = store
-		log.Printf("real agents wired: %d provider(s)", len(merged.Providers))
+		log.Printf("real agents wired: %d provider(s), file tools on %d workspace root(s)", len(merged.Providers), len(toolDirs))
 	}
 	if *demoAgent {
 		if agentStore != nil {

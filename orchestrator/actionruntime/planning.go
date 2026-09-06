@@ -236,7 +236,18 @@ func ParseDecision(content string) (*Decision, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	if j.NextAction == "" {
-		return nil, fmt.Errorf("missing next_action field")
+		// Served models routinely omit next_action while emitting the other
+		// decision fields — infer the intent instead of rejecting the whole
+		// decision (which left raw JSON as the agent's reply and tool calls
+		// unexecuted). Ambiguous shapes (neither field) stay an error.
+		switch {
+		case len(j.ActionCalls) > 0:
+			j.NextAction = "execute"
+		case j.FinalResponse != "":
+			j.NextAction = "response"
+		default:
+			return nil, fmt.Errorf("missing next_action field")
+		}
 	}
 	if j.NextAction != "execute" && j.NextAction != "response" {
 		return nil, fmt.Errorf("invalid next_action: %q", j.NextAction)

@@ -21,12 +21,19 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
-	agentpkg "github.com/inferglow/orchestrator/agent"
+	"github.com/inferglow/action"
+	"github.com/inferglow/builtins/actions"
 	"github.com/inferglow/model"
+	agentpkg "github.com/inferglow/orchestrator/agent"
 	"github.com/inferglow/server/config"
 	"github.com/inferglow/session"
 )
@@ -86,11 +93,13 @@ func (s *ConfigAgentStore) Delete(id string) error {
 	return nil
 }
 
-// NewConfigAgentStore builds one pure-chat agent per configured LLM provider
-// (agent id = provider key). Pure-chat v1: no tool actions are registered, so
-// these agents answer with the LLM directly (streaming deltas included) and
-// never invoke tools; the CLI remains the tool-capable runtime.
-func NewConfigAgentStore(llm config.MultiLLMConfig) (*ConfigAgentStore, error) {
+// NewConfigAgentStore builds one agent per configured LLM provider (agent id
+// = provider key). toolDirs (absolute workspace roots) wires the file tools
+// so models that answer with function calls get a real executor — without
+// them the pure-chat agent has an empty registry and a tool-calling model
+// just loops on "unknown action" (looks like a hang). nil/empty keeps the
+// pure-chat form (used by tests).
+func NewConfigAgentStore(llm config.MultiLLMConfig, toolDirs []string) (*ConfigAgentStore, error) {
 	if len(llm.Providers) == 0 {
 		return nil, fmt.Errorf("no llm.providers configured")
 	}
@@ -100,6 +109,15 @@ func NewConfigAgentStore(llm config.MultiLLMConfig) (*ConfigAgentStore, error) {
 	}
 	sort.Strings(s.order)
 
+	// One shared action extension: the tools are stateless and safe to share
+	// across provider agents.
+	actExt := agentpkg.NewActionExtension()
+	if len(toolDirs) > 0 {
+		if err := registerWorkspaceTools(actExt, toolDirs); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, name := range s.order {
 		lc := llm.Providers[name]
 		req, err := modelRequesterFromServerConfig(name, lc)
@@ -107,10 +125,165 @@ func NewConfigAgentStore(llm config.MultiLLMConfig) (*ConfigAgentStore, error) {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
 		sess := session.NewSession("sess-"+name, defaultAgentWindowTokens)
-		ag := agentpkg.New(sess, agentpkg.NewActionExtension(), req)
+		ag := agentpkg.New(sess, actExt, req)
 		s.agents[name] = &ConfigAgent{Agent: ag, ID: name, Name: name, Model: lc.Model}
 	}
 	return s, nil
+}
+
+// registerWorkspaceTools wires the builtins file tools (list_dir, file_read,
+// file_write, grep) confined to the given workspace roots, plus aliases for
+// the tool names served models commonly invent (list_directory/read_file/
+// write_file) so a model following its own template still lands on a real
+// executor instead of "unknown action". Deliberately NO shell/bash tool:
+// model-side command execution stays out of the server's default surface.
+func registerWorkspaceTools(ext *agentpkg.ActionExtension, dirs []string) error {
+	abs := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if a, err := filepath.Abs(d); err == nil {
+			abs = append(abs, filepath.Clean(a))
+		}
+	}
+	if len(abs) == 0 {
+		return nil
+	}
+	listDir := actions.NewListDirAction(actions.ListDirConfig{AllowedDirs: abs})
+	fileRead := actions.NewFileReadAction(actions.FileReadConfig{AllowedDirs: abs})
+	fileWrite := actions.NewFileWriteAction(actions.FileWriteConfig{AllowedDirs: abs})
+	grep := actions.NewGrepAction(&nativeGrepRunner{roots: abs})
+
+	// Models speak workspace-relative paths ("."  for the root); the builtins
+	// resolve relative paths against the process CWD, which on a server is
+	// NOT the workspace. Rewrite relative "path" params against the first
+	// workspace root before the builtin sees them.
+	anchor := func(a *action.Action) *action.Action {
+		a.Executor = pathAnchoredExecutor{inner: a.Executor, root: abs[0]}
+		return a
+	}
+	listDir, fileRead, fileWrite, grep = anchor(listDir), anchor(fileRead), anchor(fileWrite), anchor(grep)
+
+	for _, a := range []*action.Action{listDir, fileRead, fileWrite, grep} {
+		if err := ext.Register(a); err != nil {
+			return fmt.Errorf("register %s: %w", a.Name, err)
+		}
+	}
+	for _, alias := range []struct{ name, of string }{
+		{"list_directory", actions.ListDirActionID},
+		{"read_file", actions.FileReadActionID},
+		{"write_file", actions.FileWriteActionID},
+	} {
+		src, err := ext.GetRegistry().Get(alias.of)
+		if err != nil {
+			continue
+		}
+		if err := ext.Register(&action.Action{
+			Name: alias.name, Description: src.Description + " (alias of " + alias.of + ")",
+			Schema: src.Schema, Executor: src.Executor,
+		}); err != nil {
+			return fmt.Errorf("register alias %s: %w", alias.name, err)
+		}
+	}
+	return nil
+}
+
+// pathAnchoredExecutor resolves workspace-relative "path" parameters against
+// the workspace root before delegating to the real executor.
+type pathAnchoredExecutor struct {
+	inner action.ActionExecutor
+	root  string
+}
+
+func (e pathAnchoredExecutor) Execute(ctx context.Context, input map[string]any) (*action.ActionResult, error) {
+	if p, ok := input["path"].(string); ok && p != "" && !filepath.IsAbs(p) {
+		input["path"] = filepath.Join(e.root, filepath.FromSlash(p))
+	}
+	return e.inner.Execute(ctx, input)
+}
+
+// nativeGrepRunner implements actions.GrepRunner in pure Go (no system grep —
+// Windows server hosts don't ship one). Walks the workspace roots, matching
+// lines with regexp, with binary/hidden-dir skips and hard result caps.
+type nativeGrepRunner struct {
+	roots []string
+}
+
+const (
+	grepMaxFileSize    = 512 << 10 // skip files above this
+	grepMaxMatches     = 200
+	grepMaxFilesWalked = 5000
+)
+
+func (r *nativeGrepRunner) Run(ctx context.Context, req actions.GrepRequest) ([]actions.GrepMatch, error) {
+	if req.Pattern == "" {
+		return nil, fmt.Errorf("grep: pattern is required")
+	}
+	re, err := regexp.Compile(req.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("grep: bad pattern: %w", err)
+	}
+	// Search path: a requested subpath of (or inside) the roots; default ".".
+	base := r.roots
+	if req.Path != "" && req.Path != "." {
+		p := filepath.Clean(req.Path)
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(r.roots[0], p)
+		}
+		allowed := false
+		for _, root := range r.roots {
+			if strings.HasPrefix(p, root+string(filepath.Separator)) || p == root {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("grep: path %q is outside the workspace", req.Path)
+		}
+		base = []string{p}
+	}
+	skipNames := map[string]bool{".git": true, "node_modules": true, ".gobuild": true}
+	matches := make([]actions.GrepMatch, 0, 32)
+	walked := 0
+	for _, root := range base {
+		walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // unreadable entries are skipped, not fatal
+			}
+			if d.IsDir() {
+				if skipNames[d.Name()] && path != root {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if walked++; walked > grepMaxFilesWalked {
+				return filepath.SkipAll
+			}
+			info, err := d.Info()
+			if err != nil || info.Size() > grepMaxFileSize {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || bytes.IndexByte(data, 0) >= 0 {
+				return nil // binary
+			}
+			rel, _ := filepath.Rel(root, path)
+			for i, line := range strings.Split(string(data), "\n") {
+				if re.MatchString(line) {
+					matches = append(matches, actions.GrepMatch{
+						File: filepath.ToSlash(rel), Line: i + 1,
+						Content: strings.TrimSpace(line),
+					})
+					if len(matches) >= grepMaxMatches {
+						return filepath.SkipAll
+					}
+				}
+			}
+			return ctx.Err()
+		})
+		if walkErr != nil {
+			break
+		}
+	}
+	return matches, nil
 }
 
 // modelRequesterFromServerConfig maps the server YAML llm entry onto the
