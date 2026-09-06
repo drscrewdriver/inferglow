@@ -21,7 +21,11 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,15 +47,19 @@ const (
 // Title/Group/Pinned are GUI metadata (patchable via PATCH /v1/sessions/{id});
 // all new fields use omitempty so existing responses stay byte-compatible.
 type SessionRecord struct {
-	ID        string        `json:"id"`
-	Owner     string        `json:"owner,omitempty"`
-	AgentID   string        `json:"agent_id,omitempty"`
-	Status    SessionStatus `json:"status"`
-	Title     string        `json:"title,omitempty"`
-	Group     string        `json:"group,omitempty"`
-	Pinned    bool          `json:"pinned,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	ID      string        `json:"id"`
+	Owner   string        `json:"owner,omitempty"`
+	AgentID string        `json:"agent_id,omitempty"`
+	Status  SessionStatus `json:"status"`
+	Title   string        `json:"title,omitempty"`
+	Group   string        `json:"group,omitempty"`
+	Pinned  bool          `json:"pinned,omitempty"`
+	// Workspace names the workspace this conversation belongs to (R8: the
+	// sidebar groups sessions under their workspace; empty = unassigned and
+	// the client groups by its active workspace).
+	Workspace string    `json:"workspace,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // SessionStore is an in-memory store for session records.
@@ -61,6 +69,10 @@ type SessionStore struct {
 	*storage.Map[string, *SessionRecord]
 	metaMu sync.RWMutex // guards nextID + the id-assembly critical section
 	nextID int
+	// persistence: snapshot path; every mutation rewrites the file so a
+	// restart restores the conversation list (data volumes are small — the
+	// snapshot is a single JSON document, written synchronously).
+	path string
 }
 
 // NewSessionStore creates an empty SessionStore.
@@ -68,6 +80,75 @@ func NewSessionStore() *SessionStore {
 	return &SessionStore{
 		Map: storage.NewMap[string, *SessionRecord](),
 	}
+}
+
+// SetPersistence directs the store to snapshot every mutation to path and
+// returns whether a prior snapshot was restored.
+func (ss *SessionStore) SetPersistence(path string) bool {
+	ss.path = path
+	return ss.Load(path)
+}
+
+// Load restores sessions from a snapshot file. Missing file = no-op (false).
+func (ss *SessionStore) Load(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var recs []*SessionRecord
+	if err := json.Unmarshal(data, &recs); err != nil {
+		log.Printf("session snapshot %s corrupt (%v) — starting empty", path, err)
+		return false
+	}
+	maxID := 0
+	for _, rec := range recs {
+		if rec == nil || rec.ID == "" {
+			continue
+		}
+		ss.Map.Set(rec.ID, rec)
+		if n := parseSessID(rec.ID); n > maxID {
+			maxID = n
+		}
+	}
+	ss.metaMu.Lock()
+	ss.nextID = maxID
+	ss.metaMu.Unlock()
+	return true
+}
+
+func parseSessID(id string) int {
+	var n int
+	if _, err := fmt.Sscanf(id, "sess-%d", &n); err != nil {
+		return 0
+	}
+	return n
+}
+
+// snapshot writes the full store to disk (called with mutations).
+func (ss *SessionStore) snapshot() {
+	if ss.path == "" {
+		return
+	}
+	keys := ss.Map.Keys()
+	recs := make([]*SessionRecord, 0, len(keys))
+	for _, k := range keys {
+		if rec, ok := ss.Map.Get(k); ok && rec != nil {
+			recs = append(recs, rec)
+		}
+	}
+	data, err := json.MarshalIndent(recs, "", " ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(ss.path), 0o755); err != nil {
+		return
+	}
+	tmp := ss.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("session snapshot write: %v", err)
+		return
+	}
+	_ = os.Rename(tmp, ss.path)
 }
 
 // Create adds a new session and returns its ID.
@@ -89,6 +170,7 @@ func (ss *SessionStore) Create(rec SessionRecord) (string, error) {
 	}
 
 	ss.Map.Set(id, &rec)
+	ss.snapshot()
 	return id, nil
 }
 
@@ -106,8 +188,8 @@ func (ss *SessionStore) List() []*SessionRecord {
 // SessionListFilter specifies optional search / grouping / pin filters for
 // ListFiltered. A nil Pinned means "don't filter by pin state".
 type SessionListFilter struct {
-	Q     string
-	Group string
+	Q      string
+	Group  string
 	Pinned *bool
 }
 
@@ -148,6 +230,7 @@ func (ss *SessionStore) Delete(id string) error {
 		return fmt.Errorf("session %q not found", id)
 	}
 	ss.Map.Delete(id)
+	ss.snapshot()
 	return nil
 }
 
@@ -160,6 +243,7 @@ func (ss *SessionStore) UpdateStatus(id string, status SessionStatus) bool {
 	}
 	rec.Status = status
 	rec.UpdatedAt = time.Now()
+	ss.snapshot()
 	return true
 }
 

@@ -36,15 +36,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Owner   string `json:"owner,omitempty"`
-		AgentID string `json:"agent_id" validate:"required"`
-		Title   string `json:"title,omitempty"`
+		Owner     string `json:"owner,omitempty"`
+		AgentID   string `json:"agent_id" validate:"required"`
+		Title     string `json:"title,omitempty"`
+		Workspace string `json:"workspace,omitempty"` // R8: conversation belongs to this workspace
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	rec := SessionRecord{Owner: req.Owner, AgentID: req.AgentID, Title: req.Title}
+	rec := SessionRecord{Owner: req.Owner, AgentID: req.AgentID, Title: req.Title, Workspace: req.Workspace}
 	id, err := s.sessionStore.Create(rec)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -24,8 +24,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -64,6 +64,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// R8: runtime registrations survive restarts.
+	if s.cfg.UsageDataDir != "" {
+		s.PersistWorkspaces(filepath.Join(s.cfg.UsageDataDir, "workspaces.json"))
 	}
 	writeJSON(w, http.StatusCreated, info)
 }
@@ -218,6 +222,16 @@ func (s *Server) SeedWorkspaces(seeds []WorkspaceSeed) {
 		log.Println("workspace seeding skipped: no provider configured")
 		return
 	}
+	// R8: the registry persists (data/workspaces.json). Runtime registrations
+	// (UI form, flags) survive restarts, so the sidebar grouping cannot break
+	// because a restart used fewer -workspace flags than the last run.
+	if s.cfg.UsageDataDir != "" {
+		var restored []WorkspaceSeed
+		if LoadWorkspaceSnapshot(filepath.Join(s.cfg.UsageDataDir, "workspaces.json"), s.wsProvider) {
+			log.Printf("已从快照恢复 workspace 注册表 (data=%s)", s.cfg.UsageDataDir)
+		}
+		_ = restored
+	}
 	for _, seed := range seeds {
 		if seed.Name == "" || seed.Root == "" {
 			continue
@@ -235,6 +249,67 @@ func (s *Server) SeedWorkspaces(seeds []WorkspaceSeed) {
 		}
 		log.Printf("workspace %q → %s", info.Name, info.Root)
 	}
+	if s.cfg.UsageDataDir != "" {
+		s.PersistWorkspaces(filepath.Join(s.cfg.UsageDataDir, "workspaces.json"))
+	}
+}
+
+// PersistWorkspaces writes the current registry to path (called after every
+// successful seed/registration so restarts restore the exact set).
+func (s *Server) PersistWorkspaces(path string) {
+	if s.wsProvider == nil {
+		return
+	}
+	type wsSnapshot struct {
+		Workspaces []WorkspaceSeed `json:"workspaces"`
+	}
+	snap := wsSnapshot{Workspaces: []WorkspaceSeed{}}
+	for _, info := range s.wsProvider.List() {
+		snap.Workspaces = append(snap.Workspaces, WorkspaceSeed{Name: info.Name, Root: info.Root})
+	}
+	data, err := json.MarshalIndent(snap, "", " ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("workspace snapshot write: %v", err)
+		return
+	}
+	_ = os.Rename(tmp, path)
+}
+
+// LoadWorkspaceSnapshot restores a workspace registry snapshot. Missing or
+// corrupt file = false (no-op).
+func LoadWorkspaceSnapshot(path string, provider WorkspaceProvider) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	type wsSnapshot struct {
+		Workspaces []WorkspaceSeed `json:"workspaces"`
+	}
+	var snap wsSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		log.Printf("workspace snapshot %s corrupt (%v) — ignored", path, err)
+		return false
+	}
+	for _, seed := range snap.Workspaces {
+		if seed.Name == "" || seed.Root == "" {
+			continue
+		}
+		if info, err := os.Stat(seed.Root); err != nil || !info.IsDir() {
+			log.Printf("workspace %q → %s skipped on restore: root missing", seed.Name, seed.Root)
+			continue
+		}
+		if _, err := provider.Open(seed.Name, seed.Root); err != nil {
+			log.Printf("workspace %q restore failed: %v", seed.Name, err)
+		}
+	}
+	return true
 }
 
 // fsEntry is one row of a directory listing.

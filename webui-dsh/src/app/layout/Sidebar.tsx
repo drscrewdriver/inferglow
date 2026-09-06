@@ -19,7 +19,7 @@ import {
   IconPanelLeft, IconPlus, IconSettings, IconTrash, IconChat, IconSearch,
 } from '../../components/Icons.tsx'
 import { store, subscribe } from '../../store.ts'
-import { createSession, deleteSession, selectSession } from '../../bridge/inferglow.ts'
+import { createSession, deleteSession, renameSession, selectSession } from '../../bridge/inferglow.ts'
 import { WorkspaceAddModal } from '../../panels/WorkspaceAddModal.tsx'
 import styles from './Sidebar.module.css'
 
@@ -38,14 +38,10 @@ const SCROLLBAR_LINGER_MS = 2000
  * (hydrated by the bridge); the single live group renders the real list
  * filtered by the workspace search.
  */
-const WS_GROUPS: {
-  id: string
-  label: string
-  expanded?: boolean
-  live?: boolean
-}[] = [
-  { id: 'sessions', label: '会话', expanded: true, live: true },
-]
+// Sessions are grouped UNDER their workspace (R8): one group per registered
+// workspace, plus an "unassigned" group for records without a workspace field
+// (legacy snapshots).
+const WS_GROUPS_FALLBACK = [{ id: 'sessions', label: '会话', expanded: true, live: true }]
 
 interface SidebarProps {
   onOpenSettings: () => void
@@ -63,7 +59,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const [activeWs, setActiveWs] = useState(store.activeWorkspace)
   const [addWsOpen, setAddWsOpen] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
-    () => new Set(WS_GROUPS.filter(g => !g.expanded).map(g => g.id)),
+    () => new Set(WS_GROUPS_FALLBACK.filter(g => !g.expanded).map(g => g.id)),
   )
 
   /** Track whether the sidebar was ever expanded (for railIn animation). */
@@ -143,6 +139,13 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
     document.addEventListener('pointermove', onMove)
     return () => { document.removeEventListener('pointermove', onMove); cancelLinger() }
   }, [pointerInside])
+
+  // One sidebar group per registered workspace; sessions without a
+  // workspace field (legacy records) land in the trailing unassigned group.
+  const wsGroups = useMemo(() => {
+    const base = workspaces.map(w => ({ id: w.name, label: w.name, expanded: true, live: true }))
+    return [...base, { id: '(unassigned)', label: '未分配', expanded: true, live: true }]
+  }, [workspaces])
 
   const filteredSessions = useMemo(() => {
     if (!searchQuery) return sessions
@@ -314,6 +317,22 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                     </span>
                     <span className="dsh-ws-group-label">注册的 workspace</span>
                   </button>
+                  {store.authRequired && (
+                    <button
+                      type="button"
+                      className="dsh-ws-auth-hint"
+                      title="设置 → API 配置 中填写 Bearer Key"
+                      onClick={() => store.openSettings()}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+                        margin: '4px 0', padding: '6px 10px', borderRadius: 8, border: 'none',
+                        background: 'color-mix(in srgb, #d4544a 14%, transparent)', color: '#e0857d',
+                        font: 'inherit', fontSize: 11.5, lineHeight: 1.5,
+                      }}
+                    >
+                      ⚠ API Key 未配置或无效 — 列表不可用，点击打开设置
+                    </button>
+                  )}
                   <div className="dsh-ws-rows">
                     {workspaces.map(w => (
                       <div
@@ -328,6 +347,20 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                           </svg>
                         </span>
                         <span className="dsh-ws-row-title">{w.name}</span>
+                        <button
+                          className="dsh-ws-row-delete"
+                          title={'在 ' + w.name + ' 开启对话'}
+                          aria-label={'在 ' + w.name + ' 开启对话'}
+                          onClick={e => {
+                            e.stopPropagation()
+                            store.setActiveWorkspace(w.name)
+                            void createSession(w.name)
+                          }}
+                        >
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                            <path d="M6 1.5v9M1.5 6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                          </svg>
+                        </button>
                       </div>
                     ))}
                     {workspaces.length === 0 && (
@@ -342,8 +375,13 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
             <div className="dsh-ws-list-area">
               <div className="dsh-ws-tree">
                 <div className="dsh-ws-groups">
-                  {WS_GROUPS.map(group => {
+                  {wsGroups.map(group => {
                     const isCollapsed = collapsedGroups.has(group.id)
+                    const groupSessions = filteredSessions.filter(sess =>
+                      group.id === '(unassigned)'
+                        ? !sess.workspace
+                        : (sess.workspace ?? activeWs) === group.id,
+                    )
                     return (
                       <div className="dsh-ws-group" key={group.id}>
                         <button
@@ -360,16 +398,26 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                           <span className="dsh-ws-group-label">{group.label}</span>
                         </button>
 
-                        {!isCollapsed && group.live && (
+                        {!isCollapsed && (
                           <div className="dsh-ws-rows">
-                            {filteredSessions.map(session => (
+                            {groupSessions.map(session => (
                               <div
                                 key={session.id}
                                 className={`dsh-ws-row${activeId === session.id ? ' dsh-ws-row-active' : ''}`}
                                 onClick={() => handleSelectSession(session.id)}
                               >
                                 <span className="dsh-ws-row-icon"><IconChat size={13} /></span>
-                                <span className="dsh-ws-row-title" title={session.title}>
+                                <span
+                                  className="dsh-ws-row-title"
+                                  title={session.title + '（双击重命名）'}
+                                  onDoubleClick={e => {
+                                    e.stopPropagation()
+                                    const next = prompt('重命名会话', session.title)
+                                    if (next === null || next.trim() === '' || next === session.title) return
+                                    store.renameSession(session.id, next.trim())
+                                    renameSession(session.id, next.trim())
+                                  }}
+                                >
                                   {session.title}
                                 </span>
                                 <button
@@ -381,9 +429,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                                 </button>
                               </div>
                             ))}
-                            {filteredSessions.length === 0 && (
+                            {groupSessions.length === 0 && (
                               <div className="dsh-ws-empty">
-                                {sessions.length === 0 ? '暂无对话' : '无匹配结果'}
+                                {group.id !== '(unassigned)' ? '在此 workspace 开启对话' : '暂无对话'}
                               </div>
                             )}
                           </div>

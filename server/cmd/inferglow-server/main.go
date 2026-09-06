@@ -28,10 +28,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/inferglow/builtins/actions"
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
 	"github.com/inferglow/server"
@@ -73,6 +75,7 @@ func main() {
 		ptyEnable   = flag.Bool("pty", false, "Enable GET /v1/pty persistent interactive shells for the webui terminal (full-permission; requires -api-key)")
 		ptyShell    = flag.String("pty-shell", "", "Shell program for PTY sessions (default: cmd.exe on Windows, $SHELL elsewhere)")
 		providerCfg = flag.String("provider-config", "", "Shared provider JSON config (etc/config.json schema). Default: project etc/config.json, falling back to ~/.inferglow/config.json")
+		authOpen    = flag.Bool("auth-open", false, "T0 test mode: skip API-key checks entirely (any browser can use the webui; exec/pty still need -exec/-pty)")
 	)
 	wsFlags := &workspaceFlagList{}
 	flag.Var(wsFlags, "workspace", "Seed a workspace for the webui selector, repeatable: -workspace name=rootDir")
@@ -86,6 +89,10 @@ func main() {
 	cfg.ExecEnabled = *execEnable
 	cfg.PTYEnabled = *ptyEnable
 	cfg.PTYShell = *ptyShell
+	cfg.AuthOpen = *authOpen
+	if *authOpen {
+		log.Println("⚠ 鉴权已关闭(-auth-open):任意浏览器可访问全部 API — 仅限本机/可信网络测试")
+	}
 
 	if *cors != "" {
 		cfg.CORSOrigins = splitComma(*cors)
@@ -132,6 +139,10 @@ func main() {
 		}
 	}
 
+	// R8: shared task store must exist BEFORE agent wiring — the model-side
+	// task_tracker tools register only when the store is non-nil.
+	server.SetTaskStore(actions.NewTaskStore(filepath.Join(*usageDir, "tasks.json")))
+
 	var agentStore server.AgentStore
 	if len(merged.Providers) > 0 {
 		// Tool roots: every workspace root known at startup (flags + shared
@@ -177,7 +188,14 @@ func main() {
 	srv.SetSpanCollector(observability.NewSpanCollector(4096))
 
 	// C-4~C-7: default in-memory wiring for the management backend, zero-config.
-	srv.SetSessionStore(server.NewSessionStore())
+	// R8: disk persistence — sessions, chat history (incl. run traces) and
+	// later tasks survive restarts under -usage-dir.
+	persistDir := *usageDir
+	sessStore := server.NewSessionStore()
+	if sessStore.SetPersistence(filepath.Join(persistDir, "sessions.json")) {
+		log.Printf("已从快照恢复会话 (data=%s)", persistDir)
+	}
+	srv.SetSessionStore(sessStore)
 	srv.SetScheduleStore(server.NewScheduleStore())
 	srv.SetCredentialStore(server.NewCredentialStore())
 	srv.SetWorkspaceProvider(server.NewWorkspaceProvider())
@@ -194,7 +212,9 @@ func main() {
 		}
 	}
 	srv.SeedWorkspaces(seeds)
-	srv.SetMessageStore(server.NewMessageStore())
+	msgStore := server.NewMessageStore()
+	msgStore.SetPersistence(filepath.Join(persistDir, "messages.json"))
+	srv.SetMessageStore(msgStore)
 
 	// C-10: Skill Hub store (backed by action.ActionRegistry). Skills are
 	// installed by Go-side registration via SkillStore.Install; see the

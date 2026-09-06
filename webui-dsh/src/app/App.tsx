@@ -19,6 +19,7 @@ const DETAILS_MAX = 520
 const DEFAULT_BOTTOM_TABS: PanelTab[] = [
   { id: 'files', kind: 'files', label: 'Files', active: true },
   { id: 'pwsh', kind: 'terminal', label: 'powershell', active: false },
+  { id: 'todo', kind: 'tasks', label: '待办', active: false },
 ]
 
 export function AppShell() {
@@ -96,7 +97,9 @@ export function AppShell() {
    * right column opens it manages itself (merged top bar). */
   const togglesVisible = !detailsOpen
   const convSession = store.sessions.find(s => s.id === activeSessionId)
-  const conv = !!(convSession && convSession.messages.length > 0)
+  // A selected session shows the conv tabs even before its history backfills
+  // (messages arrive async); requiring messages hid the tabs entirely on restore.
+  const conv = !!convSession
   const convTitle = convSession?.title ?? ''
 
   return (

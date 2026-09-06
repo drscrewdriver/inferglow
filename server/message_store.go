@@ -21,7 +21,11 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -33,6 +37,12 @@ const (
 	MessageRoleUser      MessageRole = "user"
 	MessageRoleAssistant MessageRole = "assistant"
 	MessageRoleTool      MessageRole = "tool"
+	// MessageRoleTrace carries one run's observability summary (spans
+	// timeline + usage, JSON in Content). Infrastructure records: excluded
+	// from chat history listing (ListBefore), served by the session trace
+	// endpoint (ListTraces) so the 轨迹/上下文 panels survive restarts and
+	// session restores.
+	MessageRoleTrace MessageRole = "trace"
 )
 
 // MessageRecord is a single entry in a session's message log. It backs the
@@ -54,11 +64,68 @@ type MessageStore struct {
 	mu   sync.RWMutex
 	seq  int
 	msgs map[string][]*MessageRecord // sessionID -> ordered log
+	// persistence: snapshot path; Append rewrites the file so chat history,
+	// tool records and run traces survive restarts (R8).
+	path string
 }
 
 // NewMessageStore creates an empty MessageStore.
 func NewMessageStore() *MessageStore {
 	return &MessageStore{msgs: make(map[string][]*MessageRecord)}
+}
+
+// SetPersistence directs the store to snapshot every Append to path.
+func (ms *MessageStore) SetPersistence(path string) {
+	ms.path = path
+	ms.Load(path)
+}
+
+// Load restores messages (incl. trace records) from a snapshot. Missing or
+// corrupt file = silent no-op (fresh deployment).
+func (ms *MessageStore) Load(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var snap struct {
+		Seq  int                         `json:"seq"`
+		Msgs map[string][]*MessageRecord `json:"msgs"`
+	}
+	if err := json.Unmarshal(data, &snap); err != nil {
+		log.Printf("message snapshot %s corrupt (%v) — starting empty", path, err)
+		return
+	}
+	ms.mu.Lock()
+	ms.seq = snap.Seq
+	ms.msgs = snap.Msgs
+	if ms.msgs == nil {
+		ms.msgs = make(map[string][]*MessageRecord)
+	}
+	ms.mu.Unlock()
+}
+
+// snapshot writes the full log atomically (called with mu held by mutators).
+func (ms *MessageStore) snapshot() {
+	if ms.path == "" {
+		return
+	}
+	snap := struct {
+		Seq  int                         `json:"seq"`
+		Msgs map[string][]*MessageRecord `json:"msgs"`
+	}{Seq: ms.seq, Msgs: ms.msgs}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(ms.path), 0o755); err != nil {
+		return
+	}
+	tmp := ms.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("message snapshot write: %v", err)
+		return
+	}
+	_ = os.Rename(tmp, ms.path)
 }
 
 // Append adds a message to the session's log and returns the stored record.
@@ -76,6 +143,7 @@ func (ms *MessageStore) Append(sessionID string, rec MessageRecord) (*MessageRec
 	}
 	stored := rec
 	ms.msgs[sessionID] = append(ms.msgs[sessionID], &stored)
+	ms.snapshot()
 	return &stored, nil
 }
 
@@ -103,13 +171,31 @@ func (ms *MessageStore) ListBefore(sessionID string, before time.Time, limit int
 		return nil, false
 	}
 
-	// Collect newest-first up to limit.
+	// Collect newest-first up to limit. Trace records are infrastructure,
+	// never chat history.
 	out := make([]*MessageRecord, 0, min(limit, len(log)-start))
 	for i := start; i >= 0 && len(out) < limit; i-- {
+		if log[i].Role == MessageRoleTrace {
+			continue
+		}
 		out = append(out, log[i])
 	}
 	hasMore := start-len(out)+1 > 0
 	return out, hasMore
+}
+
+// ListTraces returns the session's run-summary trace records, newest first.
+func (ms *MessageStore) ListTraces(sessionID string, limit int) []MessageRecord {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	log := ms.msgs[sessionID]
+	out := make([]MessageRecord, 0, min(limit, len(log)))
+	for i := len(log) - 1; i >= 0 && len(out) < limit; i-- {
+		if log[i].Role == MessageRoleTrace {
+			out = append(out, *log[i])
+		}
+	}
+	return out
 }
 
 // Count returns the number of messages stored for a session (test helper).
