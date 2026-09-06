@@ -23,6 +23,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -155,29 +157,84 @@ func (s *Server) handleListWorkspaceFiles(w http.ResponseWriter, r *http.Request
 // are relative to a shared workspace root and confined to it via the
 // workspace.Workspace boundary (SafePath rejects traversal).
 
-// workspaceRoot resolves the workspace root directory this server exposes for
-// file operations. It prefers the first opened workspace (C-7 provider); when
-// none is open it falls back to the process working directory.
+// workspaceRoot resolves the default workspace root: the first opened
+// workspace (C-7 provider, name-ordered) or, when none is open, the process
+// working directory.
 func (s *Server) workspaceRoot() string {
+	root, _ := s.workspaceRootByName("")
+	return root
+}
+
+// workspaceRootByName resolves the fs root for a named workspace. An empty
+// name keeps the default chain (first registered → CWD); a non-empty name
+// must match a registered workspace exactly — a typo must fail loudly rather
+// than silently showing a different workspace's files.
+func (s *Server) workspaceRootByName(name string) (string, error) {
 	if s.wsProvider != nil {
+		if name != "" {
+			if info, ok := s.wsProvider.Get(name); ok {
+				return info.Root, nil
+			}
+			return "", fmt.Errorf("workspace %q not found", name)
+		}
 		if ws := s.wsProvider.List(); len(ws) > 0 {
-			return ws[0].Root
+			return ws[0].Root, nil
 		}
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		return cwd
+		return cwd, nil
 	}
-	return ""
+	return "", errors.New("no workspace root configured")
 }
 
 // newFileWorkspace returns a workspace.Workspace confined to the server's
 // workspace root. Callers own the returned instance (stateless).
 func (s *Server) newFileWorkspace() (*workspace.Workspace, error) {
-	root := s.workspaceRoot()
-	if root == "" {
-		return nil, errors.New("no workspace root configured")
+	return s.newFileWorkspaceNamed("")
+}
+
+// newFileWorkspaceNamed is newFileWorkspace for an explicitly selected
+// workspace (the ?workspace= / body workspace parameter).
+func (s *Server) newFileWorkspaceNamed(name string) (*workspace.Workspace, error) {
+	root, err := s.workspaceRootByName(name)
+	if err != nil {
+		return nil, err
 	}
 	return workspace.New(workspace.Config{RootDir: root})
+}
+
+// WorkspaceSeed is one name→root pair for startup seeding.
+type WorkspaceSeed struct {
+	Name string
+	Root string
+}
+
+// SeedWorkspaces registers startup workspace pairs into the provider
+// (-workspace flags / YAML workspaces section). Entries whose root does not
+// exist are logged and skipped — a missing test directory must not take the
+// whole server down.
+func (s *Server) SeedWorkspaces(seeds []WorkspaceSeed) {
+	if s.wsProvider == nil {
+		log.Println("workspace seeding skipped: no provider configured")
+		return
+	}
+	for _, seed := range seeds {
+		if seed.Name == "" || seed.Root == "" {
+			continue
+		}
+		// Open does not validate the root; require an existing directory so a
+		// typo'd seed cannot shadow the default chain with a dead workspace.
+		if info, err := os.Stat(seed.Root); err != nil || !info.IsDir() {
+			log.Printf("workspace %q → %s skipped: root is not an existing directory", seed.Name, seed.Root)
+			continue
+		}
+		info, err := s.wsProvider.Open(seed.Name, seed.Root)
+		if err != nil {
+			log.Printf("workspace %q → %s skipped: %v", seed.Name, seed.Root, err)
+			continue
+		}
+		log.Printf("workspace %q → %s", info.Name, info.Root)
+	}
 }
 
 // fsEntry is one row of a directory listing.
@@ -191,9 +248,9 @@ type fsEntry struct {
 // handleWorkspaceTree handles GET /v1/workspace/tree (alias /v1/fs/tree) —
 // single-level directory listing inside the workspace root.
 func (s *Server) handleWorkspaceTree(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	rel := r.URL.Query().Get("path")
@@ -233,9 +290,9 @@ func (s *Server) handleWorkspaceTree(w http.ResponseWriter, r *http.Request) {
 // handleWorkspaceRead handles GET /v1/workspace/read (alias /v1/fs/read) —
 // read a file's text content within the workspace root.
 func (s *Server) handleWorkspaceRead(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	rel := r.URL.Query().Get("path")
@@ -259,9 +316,9 @@ func (s *Server) handleWorkspaceRead(w http.ResponseWriter, r *http.Request) {
 // handleWorkspaceWrite handles POST /v1/workspace/write (alias /v1/fs/write)
 // — create/overwrite a file within the workspace root.
 func (s *Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req struct {
@@ -290,9 +347,9 @@ func (s *Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
 // handleWorkspaceRename handles POST /v1/workspace/rename (alias
 // /v1/fs/rename) — rename or move a file/dir within the workspace root.
 func (s *Server) handleWorkspaceRename(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req struct {
@@ -335,9 +392,9 @@ func (s *Server) handleWorkspaceRename(w http.ResponseWriter, r *http.Request) {
 // handleWorkspaceDelete handles POST /v1/workspace/delete (alias /v1/fs/delete)
 // — remove a file or directory tree within the workspace root.
 func (s *Server) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req struct {
@@ -376,9 +433,9 @@ var fsSearchSkipDirs = map[string]bool{
 // handleWorkspaceSearch handles GET /v1/workspace/search (alias /v1/fs/search)
 // — recursive case-insensitive filename substring search within the root.
 func (s *Server) handleWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	q := r.URL.Query().Get("q")
@@ -451,9 +508,9 @@ func (s *Server) handleWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
 // with ?path=, or multipart/form-data with "path" (fallback ?path=) and
 // "file" fields.
 func (s *Server) handleWorkspaceUpload(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	target := r.URL.Query().Get("path")

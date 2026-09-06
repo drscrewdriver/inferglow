@@ -61,7 +61,10 @@ var execAllowlist = map[string]bool{
 
 type execRequest struct {
 	Argv      []string `json:"argv"`
-	Workdir   string   `json:"workdir,omitempty"`
+	// Workspace selects which registered workspace provides the root for
+	// Workdir (empty = first registered, matching the fs endpoints).
+	Workspace string `json:"workspace,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
 	TimeoutMs int      `json:"timeout_ms,omitempty"`
 }
 
@@ -105,10 +108,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Resolve workdir inside the workspace root (SafePath rejects traversal).
-	ws, err := s.newFileWorkspace()
+	// Resolve workdir inside the selected workspace root (SafePath rejects
+	// traversal).
+	ws, err := s.newFileWorkspaceNamed(req.Workspace)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	workdir, err := ws.SafePath(req.Workdir)
@@ -161,6 +165,7 @@ func (s *Server) auditExec(req execRequest, exitCode int, note string) {
 	entry := map[string]any{
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 		"argv":      req.Argv,
+		"workspace": req.Workspace,
 		"workdir":   req.Workdir,
 		"exit_code": exitCode,
 		"note":      note,

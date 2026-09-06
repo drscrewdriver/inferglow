@@ -41,9 +41,9 @@ type producedFile struct {
 // list the produced/modified files inside the workspace root, newest first.
 // run_id is echoed back for correlation when provided.
 func (s *Server) handleProducedFiles(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.newFileWorkspace()
+	ws, err := s.newFileWorkspaceNamed(r.URL.Query().Get("workspace"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	limit := 200

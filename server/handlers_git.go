@@ -54,8 +54,12 @@ type errGit struct{ msg string }
 func (e errGit) Error() string { return e.msg }
 
 // handleGitStatus handles GET /v1/git/status — working-tree status snapshot.
-func (s *Server) handleGitStatus(w http.ResponseWriter, _ *http.Request) {
-	root := s.workspaceRoot()
+func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -98,7 +102,11 @@ func parsePorcelain(out string) []map[string]string {
 
 // handleGitDiff handles GET /v1/git/diff?path=&staged= — unified diff text.
 func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -120,7 +128,11 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGitLog handles GET /v1/git/log?count=&skip= — commit history rows.
 func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -174,8 +186,12 @@ func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGitBranches handles GET /v1/git/branches — branch names, current first.
-func (s *Server) handleGitBranches(w http.ResponseWriter, _ *http.Request) {
-	root := s.workspaceRoot()
+func (s *Server) handleGitBranches(w http.ResponseWriter, r *http.Request) {
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -209,8 +225,12 @@ func stringContains(list []string, v string) bool {
 }
 
 // handleGitWorktrees handles GET /v1/git/worktrees — linked checkouts.
-func (s *Server) handleGitWorktrees(w http.ResponseWriter, _ *http.Request) {
-	root := s.workspaceRoot()
+func (s *Server) handleGitWorktrees(w http.ResponseWriter, r *http.Request) {
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -251,7 +271,11 @@ func (s *Server) handleGitWorktrees(w http.ResponseWriter, _ *http.Request) {
 
 // handleGitCommit handles POST /v1/git/commit — commit staged changes.
 func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -276,7 +300,11 @@ func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 
 // handleGitStage handles POST /v1/git/stage?path= — stage the worktree (or one path).
 func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -294,7 +322,11 @@ func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
 
 // handleGitReset handles POST /v1/git/reset?path= — unstage the index (or one path).
 func (s *Server) handleGitReset(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return
@@ -312,7 +344,11 @@ func (s *Server) handleGitReset(w http.ResponseWriter, r *http.Request) {
 
 // handleGitCheckout handles POST /v1/git/checkout — switch to a branch.
 func (s *Server) handleGitCheckout(w http.ResponseWriter, r *http.Request) {
-	root := s.workspaceRoot()
+	root, err := s.workspaceRootByName(r.URL.Query().Get("workspace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if root == "" {
 		writeError(w, http.StatusServiceUnavailable, "no workspace root configured")
 		return

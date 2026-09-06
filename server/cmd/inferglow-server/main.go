@@ -26,6 +26,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,6 +37,28 @@ import (
 	"github.com/inferglow/server"
 	"github.com/inferglow/server/config"
 )
+
+// workspaceFlagList collects repeated -workspace name=rootDir flags.
+type workspaceFlagList struct {
+	seeds []server.WorkspaceSeed
+}
+
+func (w *workspaceFlagList) String() string {
+	parts := make([]string, len(w.seeds))
+	for i, s := range w.seeds {
+		parts[i] = s.Name + "=" + s.Root
+	}
+	return strings.Join(parts, ",")
+}
+
+func (w *workspaceFlagList) Set(v string) error {
+	name, root, ok := strings.Cut(v, "=")
+	if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(root) == "" {
+		return fmt.Errorf("-workspace expects name=rootDir, got %q", v)
+	}
+	w.seeds = append(w.seeds, server.WorkspaceSeed{Name: name, Root: root})
+	return nil
+}
 
 func main() {
 	var (
@@ -48,6 +71,8 @@ func main() {
 		configPath = flag.String("config", "", "Server YAML config: llm.providers are wired as real chat agents (one per provider, pure-chat)")
 		execEnable = flag.Bool("exec", false, "Enable POST /v1/exec gated command execution for the webui terminal (requires -api-key)")
 	)
+	wsFlags := &workspaceFlagList{}
+	flag.Var(wsFlags, "workspace", "Seed a workspace for the webui selector, repeatable: -workspace name=rootDir")
 	flag.Parse()
 
 	cfg := server.DefaultConfig()
@@ -62,11 +87,13 @@ func main() {
 	}
 
 	var agentStore server.AgentStore
+	var loadedConfig *config.Config
 	if *configPath != "" {
 		scfg, err := config.NewLoader(*configPath).Load()
 		if err != nil {
 			log.Fatalf("load config %s: %v", *configPath, err)
 		}
+		loadedConfig = scfg
 		if len(scfg.LLM.Providers) > 0 {
 			store, err := server.NewConfigAgentStore(scfg.LLM)
 			if err != nil {
@@ -100,6 +127,18 @@ func main() {
 	srv.SetScheduleStore(server.NewScheduleStore())
 	srv.SetCredentialStore(server.NewCredentialStore())
 	srv.SetWorkspaceProvider(server.NewWorkspaceProvider())
+
+	// Seed the workspace registry: -workspace flags first, then YAML
+	// workspaces section. Later entries override earlier names (Provider.Open
+	// replaces existing bindings).
+	var seeds []server.WorkspaceSeed
+	seeds = append(seeds, wsFlags.seeds...)
+	if loadedConfig != nil {
+		for name, root := range loadedConfig.Workspaces {
+			seeds = append(seeds, server.WorkspaceSeed{Name: name, Root: root})
+		}
+	}
+	srv.SeedWorkspaces(seeds)
 	srv.SetMessageStore(server.NewMessageStore())
 
 	// C-10: Skill Hub store (backed by action.ActionRegistry). Skills are

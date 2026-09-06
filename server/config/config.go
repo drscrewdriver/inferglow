@@ -19,6 +19,9 @@ import (
 // Config is the top-level configuration parsed from a YAML file.
 type Config struct {
 	LLM      MultiLLMConfig `yaml:"llm"`
+	// Workspaces seeds the server's workspace registry at startup
+	// (name → absolute root directory), e.g. for the webui workspace selector.
+	Workspaces map[string]string `yaml:"workspaces"`
 	Server   ServerConfig   `yaml:"server"`
 	Security SecurityConfig `yaml:"security"`
 	Flows    FlowsConfig    `yaml:"flows"`
