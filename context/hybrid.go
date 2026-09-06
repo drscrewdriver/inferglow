@@ -879,7 +879,9 @@ func (h *HybridManager) SearchLongMem(ctx context.Context, query string, categor
 }
 
 // Expand retrieves content for a step (§8B.3).
-// Default (full=false) returns L1 (denoised); full=true returns L0 (original).
+// Default (full=false) returns L1 (denoised); full=true returns L0 (the
+// ingest text — mechanically denoised for tool steps when the CLI
+// tool_denoise flag is on).
 // Side effect: updates refs (same as §N citation) — affects decay to slow L1→L2→L3.
 func (h *HybridManager) Expand(stepID int, full bool) (*ExpandResult, error) {
 	// Side effect: update refs (same as §N citation)
@@ -893,7 +895,7 @@ func (h *HybridManager) Expand(stepID int, full bool) (*ExpandResult, error) {
 	}
 
 	if full {
-		// Full expand: return L0 original
+		// Full expand: return L0 (ingest text)
 		step, err := h.store.GetStep(stepID)
 		if err != nil {
 			return nil, err

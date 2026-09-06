@@ -23,11 +23,16 @@ package contextmgr
 // StepRecord is the L0 original content record stored in {uuid}.jsonl.
 // Each step represents one atomic unit of conversation (user message,
 // tool call/result, reasoning block, etc.).
+//
+// "Original" is scoped to the ingest boundary: when the CLI tool_denoise
+// flag is on, tool steps carry the mechanically denoised ingest text
+// (ANSI/\r/duplicate-line cleanup); the untouched raw output remains in
+// the session transcript and audit trail.
 type StepRecord struct {
 	StepID     int    `json:"step_id"`
 	Type       string `json:"type"`                 // "user" | "tool" | "reasoning" | "plan" | "failed"
 	Role       string `json:"role"`                 // "user" | "assistant" | "tool"
-	Content    string `json:"content"`              // full original content
+	Content    string `json:"content"`              // original content (tool steps: denoised when tool_denoise is on)
 	TokenCount int    `json:"token_count"`          // token count of content
 	ToolName   string `json:"tool_name,omitempty"`  // for tool steps
 	KeyParams  string `json:"key_params,omitempty"` // summarized key params
