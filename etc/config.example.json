@@ -4,7 +4,8 @@
     "endpoint": "http://127.0.0.1:8000/v1",
     "model": "Qwen3.6-35B-A3B",
     "api_key": "sk-xxxx",
-    "provider": "openai"
+    "provider": "openai",
+    "enable_thinking": true
   },
   "providers": {
     "active": "local-vllm",

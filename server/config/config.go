@@ -18,14 +18,14 @@ import (
 
 // Config is the top-level configuration parsed from a YAML file.
 type Config struct {
-	LLM      MultiLLMConfig `yaml:"llm"`
+	LLM MultiLLMConfig `yaml:"llm"`
 	// Workspaces seeds the server's workspace registry at startup
 	// (name → absolute root directory), e.g. for the webui workspace selector.
 	Workspaces map[string]string `yaml:"workspaces"`
-	Server   ServerConfig   `yaml:"server"`
-	Security SecurityConfig `yaml:"security"`
-	Flows    FlowsConfig    `yaml:"flows"`
-	Audit    AuditConfig    `yaml:"audit"`
+	Server     ServerConfig      `yaml:"server"`
+	Security   SecurityConfig    `yaml:"security"`
+	Flows      FlowsConfig       `yaml:"flows"`
+	Audit      AuditConfig       `yaml:"audit"`
 }
 
 // AuditConfig configures the audit chain for request/response logging
@@ -45,13 +45,13 @@ type AuditConfig struct {
 
 // ServerConfig configures the HTTP server.
 type ServerConfig struct {
-	Listen          string `yaml:"listen"`           // e.g. ":8080"
-	ReadTimeout     string `yaml:"read_timeout"`     // e.g. "30s"
-	WriteTimeout    string `yaml:"write_timeout"`    // e.g. "60s"
-	IdleTimeout     string `yaml:"idle_timeout"`     // e.g. "120s"
-	APIKey          string `yaml:"api_key"`          // Bearer token (empty = disabled)
-	APIKeyEnv       string `yaml:"api_key_env"`      // Env var for API key
-	CORSOrigins     []string `yaml:"cors_origins"`
+	Listen       string   `yaml:"listen"`        // e.g. ":8080"
+	ReadTimeout  string   `yaml:"read_timeout"`  // e.g. "30s"
+	WriteTimeout string   `yaml:"write_timeout"` // e.g. "60s"
+	IdleTimeout  string   `yaml:"idle_timeout"`  // e.g. "120s"
+	APIKey       string   `yaml:"api_key"`       // Bearer token (empty = disabled)
+	APIKeyEnv    string   `yaml:"api_key_env"`   // Env var for API key
+	CORSOrigins  []string `yaml:"cors_origins"`
 }
 
 // ResolveAPIKey returns the API key: direct value first, then env var.
@@ -68,9 +68,9 @@ func (c ServerConfig) ResolveAPIKey() string {
 // MultiLLMConfig supports multiple named LLM providers with a default
 // and an optional fallback chain.
 type MultiLLMConfig struct {
-	Default       string                `yaml:"default"`
-	Providers     map[string]LLMConfig  `yaml:"providers"`
-	FallbackChain []string              `yaml:"fallback_chain"`
+	Default       string               `yaml:"default"`
+	Providers     map[string]LLMConfig `yaml:"providers"`
+	FallbackChain []string             `yaml:"fallback_chain"`
 }
 
 // ResolveDefault returns the default provider name.
@@ -122,6 +122,12 @@ type LLMConfig struct {
 	APIKeyEnv string `yaml:"api_key_env"`
 	Timeout   string `yaml:"timeout"`
 	ForceJSON bool   `yaml:"force_json"`
+	// EnableThinking injects chat_template_kwargs.enable_thinking=true into
+	// every request (vLLM-hosted Qwen3-family models gate their reasoning
+	// on this flag; --reasoning-parser then splits it into the reasoning
+	// field). Opt-in: other OpenAI-compatible servers may reject the
+	// unknown body field.
+	EnableThinking bool `yaml:"enable_thinking"`
 }
 
 // ResolveAPIKey returns the API key: direct value first, then env var.

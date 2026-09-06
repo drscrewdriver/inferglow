@@ -20,17 +20,20 @@ import (
 )
 
 // CLIJSONLLM is one provider route in the CLI JSON schema (cli.LLMConfig).
+// EnableThinking is a server-side extension (not in the CLI schema): the
+// CLI/TUI ignore it, the server uses it for chat_template_kwargs injection.
 type CLIJSONLLM struct {
-	Endpoint string `json:"endpoint"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key,omitempty"`
-	Provider string `json:"provider,omitempty"`
+	Endpoint       string `json:"endpoint"`
+	Model          string `json:"model"`
+	APIKey         string `json:"api_key,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	EnableThinking bool   `json:"enable_thinking,omitempty"`
 }
 
 // CLIJSONProviders mirrors cli.ProvidersConfig (RF-1 multi-provider routes).
 type CLIJSONProviders struct {
-	Active string                  `json:"active,omitempty"`
-	List   map[string]CLIJSONLLM   `json:"list,omitempty"`
+	Active string                `json:"active,omitempty"`
+	List   map[string]CLIJSONLLM `json:"list,omitempty"`
 }
 
 // CLIJSONConfig is the provider-relevant subset of cli.CLIConfig. Unknown
@@ -113,10 +116,11 @@ func LoadSharedProviderConfig(explicit string) (*CLIJSONConfig, string, error) {
 func (c *CLIJSONConfig) ToMultiLLM() MultiLLMConfig {
 	conv := func(in CLIJSONLLM) LLMConfig {
 		return LLMConfig{
-			Provider: in.Provider,
-			BaseURL:  in.Endpoint,
-			Model:    in.Model,
-			APIKey:   in.APIKey,
+			Provider:       in.Provider,
+			BaseURL:        in.Endpoint,
+			Model:          in.Model,
+			APIKey:         in.APIKey,
+			EnableThinking: in.EnableThinking,
 		}
 	}
 	if c.Providers != nil && len(c.Providers.List) > 0 {
