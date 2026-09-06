@@ -4,9 +4,11 @@
  * spans from /v1/observability/*, turns render real session messages, and any
  * metric without a backend data source renders "—" instead of fake numbers.
  *
- * Known limits (documented in the foot notes): spans live in a bounded
- * in-memory ring on the server (lost on restart); context composition
- * (prompt breakdown / cache hit / compression) has no endpoint yet.
+ * Trace data sources, in order: the session's PERSISTED run summaries
+ * (GET /v1/sessions/{id}/trace — survives restarts and session restores)
+ * merged with the live in-memory ring (covers the still-running run, whose
+ * summary is only written at completion). Context composition metrics that
+ * still have no endpoint render "—".
  */
 
 import { useEffect, useState } from 'react'
@@ -23,6 +25,28 @@ interface TraceData {
   messages: ChatMessage[]
 }
 
+/** Parse one persisted run summary into SpanSummary lines (end = start+ms). */
+function tracesToSpans(traces: { content: string; created_at: string }[]): SpanSummary[] {
+  const out: SpanSummary[] = []
+  for (const t of traces) {
+    let parsed: { start?: string; spans?: { kind: string; name: string; duration_ms: number; error?: boolean }[] } = {}
+    try { parsed = JSON.parse(t.content) } catch { continue }
+    const startMs = parsed.start ? Date.parse(parsed.start) : Date.parse(t.created_at)
+    for (const sp of parsed.spans ?? []) {
+      const end = (Number.isNaN(startMs) ? Date.parse(t.created_at) : startMs) + (sp.duration_ms ?? 0)
+      out.push({
+        name: sp.name,
+        kind: (sp.kind as SpanSummary['kind']) ?? 'internal',
+        duration_ns: (sp.duration_ms ?? 0) * 1e6,
+        end_time: new Date(end).toISOString(),
+        has_error: !!sp.error,
+        attrs: {},
+      })
+    }
+  }
+  return out
+}
+
 function useTraceData(session: string | null, reloadKey: number): TraceData {
   const [data, setData] = useState<TraceData>({ spans: null, spansErr: null, messages: [] })
   useEffect(() => {
@@ -37,8 +61,21 @@ function useTraceData(session: string | null, reloadKey: number): TraceData {
     const msgsP = session
       ? api.listMessages(session, 200).catch(() => [] as ChatMessage[])
       : Promise.resolve([] as ChatMessage[])
-    void Promise.all([spansP, msgsP]).then(([spans, messages]) => {
+    // Persisted run summaries: the durable source after restarts/restores.
+    const tracesP = session
+      ? api.sessionTrace(session).catch(() => [])
+      : Promise.resolve([])
+    void Promise.all([spansP, msgsP, tracesP]).then(([liveSpans, messages, traces]) => {
       if (!alive) return
+      let spans: SpanSummary[] | null = liveSpans
+      if (session && traces.length > 0) {
+        const persisted = tracesToSpans(traces).map(t => ({
+          ...t, attrs: { 'inferglow.session_id': session },
+        }))
+        const seen = new Set((spans ?? []).map(x => `${x.name}@${x.end_time}`))
+        const merged = [...persisted.filter(x => !seen.has(`${x.name}@${x.end_time}`)), ...(spans ?? [])]
+        spans = merged.sort((a, b) => Date.parse(a.end_time) - Date.parse(b.end_time))
+      }
       setData(d => ({ ...d, spans, messages }))
     })
     return () => { alive = false }

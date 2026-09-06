@@ -80,6 +80,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("PATCH /v1/sessions/{id}", s.handleUpdateSession)
 	api.HandleFunc("DELETE /v1/sessions/{id}", s.handleDeleteSession)
 	api.HandleFunc("GET /v1/sessions/{id}/stream", s.handleSessionStream)
+	api.HandleFunc("GET /v1/sessions/{id}/trace", s.handleGetSessionTrace)
 	api.HandleFunc("GET /v1/sessions/{id}/messages", s.handleListSessionMessages)
 	api.HandleFunc("POST /v1/sessions/{id}/fork", s.handleSessionFork)
 
@@ -135,6 +136,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("POST /v1/teams/{id}/stream", s.handleTeamStream)
 
 	// Context / semantic search (enabled by SetContextProvider)
+	api.HandleFunc("GET /v1/context/modes", s.handleContextModes)
 	api.HandleFunc("GET /v1/context/search", s.handleContextSearch)
 	api.HandleFunc("GET /v1/context/stats", s.handleContextStats)
 
@@ -216,13 +218,19 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("POST /v1/git/reset", s.handleGitReset)
 	api.HandleFunc("POST /v1/git/checkout", s.handleGitCheckout)
 
+	// Tasks — webui 待办 + model task_tracker tools share one store (R8)
+	api.HandleFunc("GET /v1/tasks", s.handleListTasks)
+	api.HandleFunc("POST /v1/tasks", s.handleCreateTask)
+	api.HandleFunc("PATCH /v1/tasks/{id}", s.handlePatchTask)
+	api.HandleFunc("DELETE /v1/tasks/{id}", s.handleDeleteTask)
+
 	// Produced files (Spec B)
 	api.HandleFunc("GET /v1/produced-files", s.handleProducedFiles)
 
 	// Exec — webui terminal (v1: one command per request, allowlisted).
 	// Fail-closed: the route exists only when BOTH an API key and the -exec
 	// switch are configured (no key / no flag ⇒ 404, not 401).
-	if s.cfg.APIKey != "" && s.cfg.ExecEnabled {
+	if s.cfg.ExecEnabled && (s.cfg.APIKey != "" || s.cfg.AuthOpen) {
 		api.HandleFunc("POST /v1/exec", s.handleExec)
 	}
 
@@ -232,8 +240,12 @@ func (s *Server) registerRoutes() {
 	// when either is missing. Registered directly on the mux (more specific
 	// than the "/" middleware chain) because a browser WebSocket cannot set
 	// the Authorization header — APIKeyAuthQuery also accepts ?token=.
-	if s.cfg.APIKey != "" && s.cfg.PTYEnabled {
-		s.mux.Handle("GET /v1/pty", middleware.APIKeyAuthQuery(http.HandlerFunc(s.handlePtyWS), s.cfg.APIKey))
+	if s.cfg.PTYEnabled && (s.cfg.APIKey != "" || s.cfg.AuthOpen) {
+		authed := http.HandlerFunc(s.handlePtyWS)
+		if !s.cfg.AuthOpen {
+			authed = middleware.APIKeyAuthQuery(authed, s.cfg.APIKey).(http.HandlerFunc)
+		}
+		s.mux.Handle("GET /v1/pty", authed)
 	}
 
 	// Skill Hub management (C-10)
@@ -267,7 +279,7 @@ func (s *Server) registerRoutes() {
 	if len(s.cfg.CORSOrigins) > 0 {
 		h = middleware.CORS(h, s.cfg.CORSOrigins)
 	}
-	if s.cfg.APIKey != "" {
+	if s.cfg.APIKey != "" && !s.cfg.AuthOpen {
 		h = middleware.APIKeyAuth(h, s.cfg.APIKey)
 	}
 

@@ -32,8 +32,8 @@ import (
 	"github.com/inferglow/flow/stage"
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
-	"github.com/inferglow/session"
 	"github.com/inferglow/server/trigger"
+	"github.com/inferglow/session"
 )
 
 // Config holds server configuration.
@@ -54,6 +54,11 @@ type Config struct {
 	PTYEnabled bool
 	// PTYShell overrides the PTY shell program (empty = platform default).
 	PTYShell string
+	// AuthOpen (T0 test mode) skips API-key checks for ALL requests: any
+	// browser can use the webui without configuring a key. Exec/PTY routes
+	// still require their own feature flags. Deliberately temporary —
+	// proper webui authz is a planned follow-up.
+	AuthOpen bool
 }
 
 // DefaultConfig returns a sensible default configuration.
