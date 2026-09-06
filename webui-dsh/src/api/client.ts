@@ -19,10 +19,15 @@ import type { Agent, ChatMessage, Session } from './types.ts'
 export interface SendChatHandlers {
   onRunStart?(): void
   onLLMStart?(round: number): void
-  onLLMEnd?(round: number, tokens: number): void
+  /** Incremental assistant text chunk (real streaming). */
+  onDelta?(text: string): void
+  /** Incremental reasoning chunk (DeepSeek/MiMo style providers). */
+  onReasoning?(text: string): void
+  /** Provider-reported token usage per LLM call. */
+  onUsage?(usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }): void
   onToolStart?(toolName: string): void
   onToolEnd?(toolName: string, err?: string): void
-  /** Full assistant reply (from run_end / chat fallback). */
+  /** Full assistant reply (from run_end / chat fallback) — authoritative. */
   onDone(reply: string): void
   onError(message: string): void
 }
@@ -122,8 +127,11 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
         }
         const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : ''
         const round = typeof payload.round === 'number' ? payload.round : 0
-        const tokens = typeof payload.tokens === 'number' ? payload.tokens : 0
         const errText = typeof payload.error === 'string' ? payload.error : ''
+        const delta = typeof payload.delta === 'string' ? payload.delta : ''
+        const usage = payload.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined
         switch (ev.event) {
           case 'run_start':
             opts.handlers.onRunStart?.()
@@ -131,8 +139,14 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
           case 'llm_start':
             opts.handlers.onLLMStart?.(round)
             break
+          case 'delta':
+            if (delta) opts.handlers.onDelta?.(delta)
+            break
+          case 'reasoning':
+            if (delta) opts.handlers.onReasoning?.(delta)
+            break
           case 'llm_end':
-            opts.handlers.onLLMEnd?.(round, tokens)
+            if (usage) opts.handlers.onUsage?.(usage)
             break
           case 'tool_start':
             opts.handlers.onToolStart?.(toolName)

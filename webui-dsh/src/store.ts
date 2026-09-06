@@ -242,23 +242,29 @@ const actions: AppState = {
     const sessions = state.sessions ?? []
     const session = sessions.find(s => s.id === sessionId)
     if (session) {
-      const msg = session.messages.find(m => m.id === messageId)
-      if (msg) {
-        Object.assign(msg, updates)
+      const idx = session.messages.findIndex(m => m.id === messageId)
+      if (idx !== -1) {
+        // Rebuild the array (and the message object) so React sees a new
+        // reference — in-place mutation bails out of re-renders, which would
+        // freeze streaming deltas on screen.
+        session.messages = session.messages.map((m, i) =>
+          i === idx ? { ...m, ...updates } : m)
+        session.updatedAt = Date.now()
         notify()
       }
     }
   },
-  
+
   addToolCall(sessionId, messageId, toolCall) {
     const sessions = state.sessions ?? []
     const session = sessions.find(s => s.id === sessionId)
     if (session) {
-      const msg = session.messages.find(m => m.id === messageId)
-      if (msg) {
-        msg.toolCalls = [...(msg.toolCalls ?? []), toolCall]
-        notify()
-      }
+      session.messages = session.messages.map(m =>
+        m.id === messageId
+          ? { ...m, toolCalls: [...(m.toolCalls ?? []), toolCall] }
+          : m)
+      session.updatedAt = Date.now()
+      notify()
     }
   },
   

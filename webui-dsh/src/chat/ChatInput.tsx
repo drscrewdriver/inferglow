@@ -9,8 +9,8 @@
 
 import { useState, useRef, useEffect, type FormEvent } from 'react'
 import { IconStop } from '../components/Icons.tsx'
-import { store, subscribe } from '../store.ts'
-import { api, ensureSession, getActiveAgentId, agentName } from '../bridge/inferglow.ts'
+import { store, subscribe, type Message } from '../store.ts'
+import { api, ensureSession, getActiveAgentId, agentName, recordUsage } from '../bridge/inferglow.ts'
 
 interface ChatInputProps {
   sessionId: string | null
@@ -99,6 +99,26 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
       }
     }
 
+    // Real-stream buffering: server deltas arrive per token; flush into the
+    // store at 80ms intervals so React re-renders stay cheap. run_end carries
+    // the full reply and is authoritative (reconciles any dropped chunk).
+    let streamText = ''
+    let reasoningText = ''
+    let flushTimer: number | null = null
+    const flush = () => {
+      flushTimer = null
+      const updates: Partial<Message> = { status: 'streaming' }
+      if (streamText) updates.content = streamText
+      if (reasoningText) updates.reasoning = reasoningText
+      store.updateMessage(sid, assistantMsg.id, updates)
+    }
+    const cancelFlush = () => {
+      if (flushTimer !== null) {
+        window.clearTimeout(flushTimer)
+        flushTimer = null
+      }
+    }
+
     try {
       await api.sendChat({
         agentId,
@@ -113,14 +133,26 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
             })
           },
           onToolEnd: patchToolEnd,
+          onDelta: t => {
+            streamText += t
+            if (flushTimer === null) flushTimer = window.setTimeout(flush, 80)
+          },
+          onReasoning: t => {
+            reasoningText += t
+            if (flushTimer === null) flushTimer = window.setTimeout(flush, 80)
+          },
+          onUsage: recordUsage,
           onDone: reply => {
+            cancelFlush()
             store.updateMessage(sid, assistantMsg.id, {
-              content: reply || '(空回复)',
+              content: reply || streamText || '(空回复)',
               status: 'sent' as const,
+              reasoning: reasoningText || undefined,
             })
             store.setStreaming(false)
           },
           onError: message => {
+            cancelFlush()
             store.updateMessage(sid, assistantMsg.id, {
               status: 'error' as const,
               content: message,
@@ -130,10 +162,11 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
         },
       })
     } catch (err) {
+      cancelFlush()
       const aborted = (err as Error)?.name === 'AbortError'
       store.updateMessage(sid, assistantMsg.id, {
         status: aborted ? 'sent' : 'error',
-        content: aborted ? '(已停止)' : String((err as Error)?.message ?? err),
+        content: aborted ? (streamText || '(已停止)') : String((err as Error)?.message ?? err),
       })
       store.setStreaming(false)
     }

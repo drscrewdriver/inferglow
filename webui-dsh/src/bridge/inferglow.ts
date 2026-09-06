@@ -36,6 +36,30 @@ export function getAgents(): Agent[] {
   return agents
 }
 
+/* ── Per-session usage accumulation (llm_end events) ──
+ * Surfaced for the context panel's token counters; resets on reload. */
+const usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0, llmCalls: 0 }
+
+export function recordUsage(u: {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}): void {
+  usageTotals.promptTokens += u.prompt_tokens
+  usageTotals.completionTokens += u.completion_tokens
+  usageTotals.totalTokens += u.total_tokens
+  usageTotals.llmCalls += 1
+}
+
+export function getUsageTotals(): {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  llmCalls: number
+} {
+  return { ...usageTotals }
+}
+
 /** Map a backend session record onto the DSH session shape (no messages yet). */
 function toDshSession(s: {
   id: string

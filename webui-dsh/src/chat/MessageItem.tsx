@@ -7,7 +7,7 @@
  * - Streaming indicator
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { memo, useCallback, useRef, useState } from 'react'
 import type { Message, ToolCall } from '../store.ts'
 import { MarkdownRenderer } from './MarkdownRenderer.tsx'
 
@@ -15,7 +15,9 @@ interface MessageItemProps {
   message: Message
 }
 
-export function MessageItem({ message }: MessageItemProps) {
+/** Memoized: streaming flushes touch one message object; siblings must not
+ * re-render their markdown on every flush. */
+export const MessageItem = memo(function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
@@ -130,7 +132,7 @@ export function MessageItem({ message }: MessageItemProps) {
       </div>
     </div>
   )
-}
+})
 
 /* ── Tool call card ── */
 function ToolCallCard({ toolCall, expanded, onToggle }: {

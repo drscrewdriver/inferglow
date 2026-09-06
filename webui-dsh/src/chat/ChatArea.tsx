@@ -83,12 +83,15 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
     return unsub
   }, [activeSessionId])
 
-  /* Auto-scroll */
+  /* Auto-scroll — keyed on the tail message's content length so streaming
+   * deltas keep the view pinned to the newest text. autoScroll (设置) is the
+   * user's opt-out for scroll-following. */
+  const tailLen = messages.length > 0 ? messages[messages.length - 1].content.length : 0
   useEffect(() => {
-    if (autoScroll && scrollRef.current && !isStreaming) {
+    if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages.length, autoScroll, isStreaming])
+  }, [messages.length, tailLen, autoScroll, isStreaming])
 
   /* Show the centered hero composer when:
    * - no session is selected, OR
