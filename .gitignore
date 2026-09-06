@@ -9,8 +9,12 @@ bin/inferglow-cli.exe
 cli/bin/
 cli/inferglow-cli
 server/inferglow-server.exe
+server/*.local.exe
 sandbox/seatbelt_loader.exe
 bin/seatbelt-loader
+
+# Frontend dependencies (any subproject)
+node_modules/
 
 # Go build cache / local toolchain (used for reproducible builds)
 .gobuild/
@@ -22,3 +26,10 @@ findings.md
 findings_llm_port.md
 progress.md
 progress_llm_port.md
+
+# Shared test-phase provider config (contains local api_key; template committed)
+etc/config.json
+
+# server runtime artifacts (R10)
+server/data/
+server/*.log

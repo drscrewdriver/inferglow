@@ -1,0 +1,277 @@
+/**
+ * InferGlow bridge — glue between the DSH store and the backend API client.
+ *
+ * Owns: startup hydration (health → agents → sessions), backend session
+ * lifecycle (create/select/delete), history backfill, and the default agent
+ * selection used for new conversations. Components call these helpers instead
+ * of touching the client directly, keeping store.ts free of fetch logic.
+ */
+import { store, type Message, type Session } from '../store.ts'
+import { AuthError } from '../api/client.ts'
+import { createInferGlowApi, type InferGlowApi } from '../api/client.ts'
+import type { Agent, ChatMessage } from '../api/types.ts'
+
+export const api: InferGlowApi = createInferGlowApi(
+  () => store.settings.apiEndpoint,
+  () => store.settings.apiKey,
+)
+
+let agents: Agent[] = []
+
+/** First agent from the backend — fallback for new sessions. */
+export function getDefaultAgent(): Agent | null {
+  return agents[0] ?? null
+}
+
+/** Resolve the agent id backing the next chat: settings.model wins, else first agent. */
+export function getActiveAgentId(): string {
+  const fromSettings = store.settings.model.trim()
+  if (fromSettings) return fromSettings
+  return getDefaultAgent()?.id ?? ''
+}
+
+/** Agent display name for an id (falls back to the id itself). */
+export function agentName(id: string): string {
+  return agents.find(a => a.id === id)?.name ?? id
+}
+
+/** All agents known to the backend (populated by bootstrap). */
+export function getAgents(): Agent[] {
+  return agents
+}
+
+/** Re-fetch agents from the server (picker 打开时保持与配置同步). */
+export async function refreshAgents(): Promise<Agent[]> {
+  try {
+    agents = await api.listAgents()
+    // Keep the selection valid against the fresh list.
+    const ids = agents.map(a => a.id)
+    const cur = store.settings.model.trim()
+    if (agents.length > 0 && cur && !ids.includes(cur)) {
+      store.updateSetting('model', agents[0].id)
+    }
+  } catch { /* keep previous list on failure */ }
+  return agents
+}
+
+/** Workspace registry for the selector; empty server registry → default. */
+export async function refreshWorkspaces(): Promise<void> {
+  try {
+    const list = await api.listWorkspaces()
+    store.setWorkspaces(list.length > 0 ? list : [{ name: 'default', root: '' }])
+    store.setAuthRequired(false) // server may have switched to auth-open
+  } catch (err) {
+    if (err instanceof AuthError) {
+      store.setAuthRequired(true)
+      return // keep whatever is already rendered; the banner explains why
+    }
+    console.warn('[webui-dsh] load workspaces failed:', err)
+  }
+}
+
+/** Register a new workspace, refresh the selector, and select it. */
+export async function createWorkspace(name: string, root: string): Promise<void> {
+  await api.createWorkspace(name, root)
+  await refreshWorkspaces()
+  store.setActiveWorkspace(name)
+}
+
+/** Currently selected workspace name ('' = server default). */
+export function getActiveWorkspace(): string {
+  return store.activeWorkspace
+}
+
+/* ── Per-session usage accumulation (llm_end events) ──
+ * Surfaced for the context panel's token counters; resets on reload. */
+const usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0, llmCalls: 0 }
+
+export function recordUsage(u: {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}): void {
+  usageTotals.promptTokens += u.prompt_tokens
+  usageTotals.completionTokens += u.completion_tokens
+  usageTotals.totalTokens += u.total_tokens
+  usageTotals.llmCalls += 1
+}
+
+export function getUsageTotals(): {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  llmCalls: number
+} {
+  return { ...usageTotals }
+}
+
+/** Map a backend session record onto the DSH session shape (no messages yet). */
+function toDshSession(s: {
+  id: string
+  title: string
+  agent_id?: string
+  workspace?: string
+  status?: string
+  created_at: string
+  updated_at: string
+}): Session {
+  return {
+    id: s.id,
+    title: s.title || '新对话',
+    messages: [],
+    createdAt: Date.parse(s.created_at) || Date.now(),
+    updatedAt: Date.parse(s.updated_at) || Date.now(),
+    agentId: s.agent_id || undefined,
+    workspace: s.workspace || undefined,
+    status: s.status || undefined,
+    messagesLoaded: false,
+    localOnly: false,
+  }
+}
+
+/** Map a backend chat message onto the DSH message shape (already settled). */
+function toDshMessage(m: ChatMessage): Message {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content || (m.tool_name ? `工具调用: ${m.tool_name}` : ''),
+    status: 'sent',
+    timestamp: Date.parse(m.created_at) || Date.now(),
+  }
+}
+
+async function refreshSessions(): Promise<boolean> {
+  const online = await api.health()
+  store.setBackendOnline(online)
+  if (!online) return false
+  try {
+    agents = await api.listAgents()
+    const sessions = await api.listSessions()
+    store.replaceAllSessions(sessions.map(toDshSession))
+    await refreshWorkspaces()
+    store.setAuthRequired(false)
+    return true
+  } catch (err) {
+    // A 401 here means the key is missing/invalid (fresh browser): surface
+    // it instead of rendering silent empty lists.
+    store.setAuthRequired(err instanceof AuthError)
+    console.warn('[webui-dsh] bootstrap failed:', err)
+    return false
+  }
+}
+
+/** Startup hydration. Safe to call once from the app root. */
+export async function bootstrap(): Promise<void> {
+  await refreshSessions()
+  // Reconcile the persisted agent choice with what the server actually has:
+  // a stale id (config from another backend / deleted agent) falls back to
+  // the first listed agent instead of failing at send time.
+  const ids = agents.map(a => a.id)
+  const current = store.settings.model.trim()
+  if (agents.length > 0 && (!current || !ids.includes(current))) {
+    store.updateSetting('model', agents[0].id)
+  }
+}
+
+/**
+ * Ensure a persisted session exists for sending a message.
+ * - No session yet (hero state): create one on the backend titled from the
+ *   first message; falls back to a local-only session when the backend is
+ *   unreachable so the composer keeps working (send will surface the error).
+ * - An existing local-only session gets persisted in place.
+ */
+export async function ensureSession(firstMessage: string): Promise<string> {
+  const currentId = store.activeSessionId
+  const current = store.sessions.find(s => s.id === currentId)
+  const needsCreate = !current || (current.localOnly && !current.messagesLoaded)
+  if (!needsCreate) return current?.id ?? ''
+
+  const title = firstMessage.replace(/[#*`]/g, '').trim().slice(0, 40) || '新对话'
+  try {
+    const created = await api.createSession(getActiveAgentId(), title, getActiveWorkspace())
+    const dsh = toDshSession(created)
+    // Preserve any locally typed state: the new backend session replaces the
+    // local placeholder; the caller then targets the backend id.
+    store.replaceAllSessions([dsh, ...store.sessions.filter(s => s.id !== current?.id)])
+    store.selectSession(dsh.id)
+    return dsh.id
+  } catch (err) {
+    console.warn('[webui-dsh] create session failed:', err)
+    if (!current) store.createSession()
+    return store.activeSessionId ?? ''
+  }
+}
+
+/** Select a session and lazily backfill its history from the backend. */
+export async function selectSession(id: string): Promise<void> {
+  store.selectSession(id)
+  const session = store.sessions.find(s => s.id === id)
+  if (!session || session.messagesLoaded || session.localOnly) return
+  try {
+    const messages = await api.listMessages(id)
+    store.replaceMessages(id, messages.map(toDshMessage))
+  } catch (err) {
+    console.warn('[webui-dsh] load history failed:', err)
+    // Mark loaded to avoid retry loops; empty history is visible to the user.
+    store.replaceMessages(id, [])
+  }
+}
+
+/** Create a session immediately (sidebar "新会话"); falls back to local-only. */
+export async function createSession(forWorkspace?: string): Promise<void> {
+  const title = ''
+  try {
+    const created = await api.createSession(getActiveAgentId(), title, forWorkspace ?? getActiveWorkspace())
+    const dsh = toDshSession(created)
+    store.replaceAllSessions([dsh, ...store.sessions])
+    store.selectSession(dsh.id)
+  } catch {
+    store.createSession()
+  }
+}
+
+/** Rename on the backend (fire-and-forget); local state is already updated. */
+export function renameSession(id: string, title: string): void {
+  void api.renameSession(id, title).catch(() => {})
+}
+
+/** Delete on the backend (fire-and-forget) and remove locally. */
+export function deleteSession(id: string): void {
+  store.deleteSession(id)
+  void api.deleteSession(id).catch(() => {})
+}
+
+/** Fork a session (history copied server-side); selects the new copy. */
+export async function forkSession(id: string): Promise<void> {
+  const created = await api.forkSession(id)
+  const dsh = toDshSession(created)
+  store.replaceAllSessions([dsh, ...store.sessions])
+  store.selectSession(dsh.id)
+  // Backfill the copied history so the fork reads like its origin.
+  try {
+    const messages = await api.listMessages(dsh.id)
+    store.replaceMessages(dsh.id, messages.map(toDshMessage))
+  } catch { /* empty history is visible to the user */ }
+}
+
+/** Archive / unarchive a session: optimistic local toggle + backend PATCH. */
+export function setSessionArchived(id: string, archived: boolean): void {
+  store.setSessionStatus(id, archived ? 'archived' : 'active')
+  void api.setSessionStatus(id, archived ? 'archived' : 'active').catch(err => {
+    // Revert on failure so the row doesn't silently lie.
+    store.setSessionStatus(id, archived ? 'active' : 'archived')
+    console.warn('[webui-dsh] set session status failed:', err)
+  })
+}
+
+/** Rename a workspace binding; sessions and selectors follow. */
+export async function renameWorkspace(oldName: string, newName: string): Promise<void> {
+  await api.workspaceRename(oldName, newName)
+  await refreshSessions()
+}
+
+/** Remove a workspace binding; its sessions fall into 未分组. */
+export async function deleteWorkspace(name: string): Promise<void> {
+  await api.workspaceDelete(name)
+  await refreshSessions()
+}

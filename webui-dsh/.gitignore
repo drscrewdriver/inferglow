@@ -1,0 +1,15 @@
+# DSH Shell — Portable Frontend
+
+## Build outputs (do not commit)
+dist/
+
+## Dependency directories
+node_modules/
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## Editor
+.vscode/
+.idea/

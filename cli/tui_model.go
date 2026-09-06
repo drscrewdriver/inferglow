@@ -354,10 +354,11 @@ func newChatTUI(ag *agent.Agent, bridge *MemoryBridge, cfg CLIConfig, sessionID 
 		}
 	}
 
-	// RF-9: show the welcome page on first run (features.welcome gate).
-	if cfg.Features.Welcome && !welcomeSeenFrom(welcomeSeenPath()) {
+	// RF-9: show the welcome page on every interactive TUI startup when there
+	// is no initial input (TUI mode has none by definition — one-shot/REPL use
+	// separate paths). Gated only by features.welcome, not by first-run marker.
+	if cfg.Features.Welcome {
 		m.welcome.visible = true
-		markWelcomeSeen()
 	}
 	// SC-6: load ~/.agents/skills into the registry so every installed skill
 	// is summonable as /<skill>. Runs after buildSlashRegistry so native

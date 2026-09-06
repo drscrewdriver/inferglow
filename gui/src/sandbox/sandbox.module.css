@@ -1,0 +1,44 @@
+/* sandbox — 沙箱模式 / 权限预设 / Shell 环境选择器设置卡片 */
+
+.chipGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 10px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--igw-border);
+  background: transparent;
+  color: var(--igw-text-dim);
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--igw-panel-2);
+  color: var(--igw-text);
+}
+.chipOn {
+  border-color: var(--igw-accent);
+  color: var(--igw-accent);
+  background: var(--igw-accent-soft);
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot_safe {
+  background: var(--igw-ok);
+}
+.dot_medium {
+  background: var(--igw-warn);
+}
+.dot_high {
+  background: var(--igw-err);
+}

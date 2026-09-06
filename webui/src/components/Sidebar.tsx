@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import type { Session } from '../api/types'
+import { SidebarEnhance, BrandRow } from '../plugin/sidebar-enhance'
 
 interface SidebarProps {
   sessions: Session[]
@@ -26,7 +27,10 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession, connected 
   }
 
   return (
-    <aside className="sidebar">
+    <SidebarEnhance
+      header={<BrandRow />}
+      rail={<BrandRow collapsed />}
+    >
       <div className="sidebar-header">
         <button className="new-session-btn" disabled={!connected}>
           + 新会话
@@ -51,14 +55,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession, connected 
 
         {Array.from(groups.entries()).map(([group, items]) => (
           <div key={group}>
-            <div style={{
-              padding: '8px 16px 4px',
-              fontSize: 11,
-              fontWeight: 600,
-              color: 'var(--text-faint)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}>
+            <div className="session-group-head">
               {group}
             </div>
             {items.map(s => (
@@ -76,7 +73,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession, connected 
           </div>
         ))}
       </div>
-    </aside>
+    </SidebarEnhance>
   )
 }
 

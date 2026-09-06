@@ -34,6 +34,7 @@ import (
 
 	"github.com/inferglow/action"
 	"github.com/inferglow/audit"
+	"github.com/inferglow/flow"
 	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/actionruntime"
 	"github.com/inferglow/session"
@@ -155,6 +156,11 @@ type Engine struct {
 	// to trigger ModeSummary compaction. nil disables (default).
 	// Propagated from Agent.Run via runConfig.compactHook.
 	compactHook func(promptTokens int)
+
+	// toolResultHook rewrites tool-result content BEFORE the size cap
+	// truncates it (R10 orthogonal improvement pass, e.g. tool_denoise).
+	// Set per run via Agent.Run(WithToolResultHook(...)); nil passthrough.
+	toolResultHook func(toolName, content string) string
 
 	// inputQueue is the bounded FIFO queue for user inputs submitted while
 	// the agent is busy. nil disables queue draining (default).
@@ -374,6 +380,26 @@ func (e *Engine) preemptDrainNext() bool {
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
 // or maxRounds is reached.
 func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (dec *actionruntime.Decision, err error) {
+	// 裸聊天环（Agent.Run 不经 flow 编排）此前不带 flow 上下文，依赖
+	// flow.Context 的内建 action（如 spawn_agent）会因 ContextFrom 失败而
+	// 不可用。此处统一安装：已有上下文（executeFlow / RunAgent 嵌套路径）
+	// 时不覆盖。
+	if _, ok := flow.ContextFrom(ctx); !ok {
+		modelReq := e.modelReq
+		if e.modelReqOverride != nil {
+			modelReq = e.modelReqOverride
+		}
+		fc := &flowContextImpl{
+			session:   e.session,
+			actionExt: e.actionExt,
+			modelReq:  modelReq,
+			auditHook: e.auditHook,
+			tracer:    e.tracer,
+			engine:    e,
+		}
+		ctx = flow.WithFlowContext(ctx, fc)
+	}
+
 	// Fire OnRunStart callback.
 	fireOnRunStart(e.callbacks, ctx, userMessage)
 
@@ -1070,7 +1096,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			if res.Error != "" {
 				item.Error = res.Error
 			} else {
-				item.Result = formatToolResult(res)
+				item.Result = e.formatToolResult(ac.Name, res)
 			}
 			if res.Metadata != nil {
 				if rid, ok := res.Metadata["recordID"]; ok {
@@ -1087,7 +1113,7 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			// Native function calling: add role="tool" messages with tool_call_id.
 			for i, tc := range nativeToolCalls {
 				if i < len(results) {
-					resultContent := formatToolResult(results[i])
+					resultContent := e.formatToolResult(tc.Name, results[i])
 					e.session.AddToolResultNamed(tc.ID, tc.Name, resultContent)
 				}
 			}
@@ -1248,7 +1274,10 @@ func (e *Engine) ToolDefsHash() string {
 // defaultToolResultMaxBytes is the maximum byte size of a tool result
 // content before it is truncated. 4096 bytes keeps individual tool results
 // (especially file_read) from dominating the context window.
-const defaultToolResultMaxBytes = 4096
+// 16KB: directory listings of real workspaces run 200+ entries (~15KB JSON);
+// a 4KB cap silently dropped half the listing and the model "could not see"
+// files that exist. Tool results are per-call; the session window compresses.
+const defaultToolResultMaxBytes = 16 << 10
 
 // truncateToolResult shortens s to at most maxBytes bytes. When truncation
 // occurs the head (first half) and tail (last quarter) are preserved with a
@@ -1265,9 +1294,11 @@ func truncateToolResult(s string, maxBytes int) string {
 
 // formatToolResult converts an *action.ActionResult into a human-readable
 // string suitable for sending back to the model as a tool message content.
-// Results exceeding defaultToolResultMaxBytes are truncated to keep the
-// context window compact.
-func formatToolResult(result *action.ActionResult) string {
+// The per-run toolResultHook (R10 improvement pass, e.g. mechanical
+// tool_denoise) runs BEFORE the size cap so it optimizes the full input;
+// results exceeding defaultToolResultMaxBytes are then truncated to keep
+// the context window compact.
+func (e *Engine) formatToolResult(toolName string, result *action.ActionResult) string {
 	var raw string
 	if result == nil {
 		raw = "null"
@@ -1277,6 +1308,9 @@ func formatToolResult(result *action.ActionResult) string {
 		raw = string(b)
 	} else {
 		raw = fmt.Sprintf("%v", result.Result)
+	}
+	if e.toolResultHook != nil {
+		raw = e.toolResultHook(toolName, raw)
 	}
 	return truncateToolResult(raw, defaultToolResultMaxBytes)
 }

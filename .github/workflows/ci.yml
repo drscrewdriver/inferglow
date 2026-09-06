@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: gui
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,7 +130,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: gui/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -146,3 +146,38 @@ jobs:
 
       - name: Verify embedded build artifacts
         run: test -f ../server/webui/index.html && echo "webui embed artifacts present"
+
+  webui-dsh:
+    name: WebUI DSH (dsh-transition-webui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui-dsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: webui-dsh/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify embedded build artifacts
+        run: test -f ../server/webui-dsh/index.html && echo "webui-dsh embed artifacts present"

@@ -1,0 +1,70 @@
+/* 外观设置行：dark/light/system 三态选择 + 内置主题选择 */
+.themeAppearance {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.themeModes {
+  display: flex;
+  gap: 10px;
+}
+.themeModeCard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.themeModeSquares {
+  display: flex;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.themeModeCard.active .themeModeSquares {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary, var(--accent)) 35%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary, var(--accent)) 20%, transparent);
+}
+.themeSquare {
+  flex: 1;
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid var(--dsw-alias-border-l1);
+}
+.s1 { background: #0f1117; }
+.s2 { background: #e4e4e7; }
+.s3 { background: linear-gradient(135deg, #0f1117 50%, #e4e4e7 50%); }
+.themeModeLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: center;
+}
+.themeModeCard.active .themeModeLabel {
+  color: var(--dsw-alias-label-primary);
+}
+.themePickRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.themePickLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+.themePickSelect {
+  background: var(--dsw-alias-interactive-bg);
+  color: var(--dsw-alias-interactive-fg);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.themeCommunityNote {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}

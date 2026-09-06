@@ -34,6 +34,15 @@ type SubAgentConfig struct {
 	MaxDepth int
 	// MaxRounds is the maximum iteration rounds per sub-agent. Default 15.
 	MaxRounds int
+	// Registry, when non-nil, receives a record per spawn (running before
+	// the sub-agent loop starts, done/error after it returns) so an
+	// observation surface can list live sub-agent activity.
+	Registry *SubagentRegistry
+	// ParentSessionFn, when non-nil, extracts the owning session id from
+	// the run context for registry attribution (the host injects the id
+	// into the context; the action package stays decoupled from it).
+	// nil records an empty parent.
+	ParentSessionFn func(ctx context.Context) string
 }
 
 // NewSubAgentAction creates the "spawn_agent" action that allows the LLM
@@ -93,7 +102,25 @@ func (e *subAgentExecutor) Execute(ctx context.Context, input map[string]any) (*
 		MaxRounds: maxRounds,
 		MaxDepth:  e.cfg.MaxDepth,
 	}
+
+	// Registry instrumentation: running → done/error around the (blocking)
+	// sub-agent loop. Nil registry skips recording entirely.
+	var spawnID string
+	if e.cfg.Registry != nil {
+		parent := ""
+		if e.cfg.ParentSessionFn != nil {
+			parent = e.cfg.ParentSessionFn(ctx)
+		}
+		spawnID = e.cfg.Registry.Start(parent, task, systemPrompt).ID
+	}
 	resp, err := fc.RunAgent(ctx, task, systemPrompt, opts)
+	if e.cfg.Registry != nil && spawnID != "" {
+		if err != nil {
+			e.cfg.Registry.Finish(spawnID, false, "", fmt.Sprintf("%v", err))
+		} else {
+			e.cfg.Registry.Finish(spawnID, true, resp, "")
+		}
+	}
 	if err != nil {
 		return &action.ActionResult{
 			OK:     false,

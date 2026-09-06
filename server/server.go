@@ -32,8 +32,8 @@ import (
 	"github.com/inferglow/flow/stage"
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/observability"
-	"github.com/inferglow/session"
 	"github.com/inferglow/server/trigger"
+	"github.com/inferglow/session"
 )
 
 // Config holds server configuration.
@@ -45,6 +45,26 @@ type Config struct {
 	APIKey       string        // Optional Bearer token for auth (empty = disabled)
 	CORSOrigins  []string      // Allowed CORS origins (empty = disabled)
 	UsageDataDir string        // Directory holding sessions/*.usage.jsonl for usage reports
+	// ExecEnabled gates POST /v1/exec (webui terminal). Fail-closed: the
+	// route is registered only when ExecEnabled AND APIKey are both set.
+	ExecEnabled bool
+	// PTYEnabled gates GET /v1/pty (persistent interactive shells). A PTY is
+	// full-permission (a real shell can cd beyond the workspace), so it gets
+	// its own switch on top of the API key. Fail-closed like ExecEnabled.
+	PTYEnabled bool
+	// PTYShell overrides the PTY shell program (empty = platform default).
+	PTYShell string
+	// ToolDenoise (R10) is the server-default for the orthogonal tool-output
+	// denoise pass; a per-request tool_denoise field overrides it per run.
+	// Applied in the engine tool-result funnel BEFORE the size cap, so every
+	// base context mode benefits.
+	ToolDenoise bool
+
+	// AuthOpen (T0 test mode) skips API-key checks for ALL requests: any
+	// browser can use the webui without configuring a key. Exec/PTY routes
+	// still require their own feature flags. Deliberately temporary —
+	// proper webui authz is a planned follow-up.
+	AuthOpen bool
 }
 
 // DefaultConfig returns a sensible default configuration.
@@ -85,6 +105,8 @@ type Server struct {
 	msgStore       *MessageStore
 	reportGen      *session.ReportGenerator
 	approvalMgr    *approval.PolicyApprovalManager
+	sbxRegistry    *sandboxRegistry
+	ptyReg         *ptyRegistry // persistent PTY terminal sessions
 }
 
 // SetApprovalManager wires an approval authority into the server. It is used
@@ -219,6 +241,7 @@ func NewServer(cfg Config, agentStore AgentStore) *Server {
 		flowStore:  flowStore,
 		runMgr:     runMgr,
 		triggerReg: trigger.NewRegistry(starter),
+		ptyReg:     newPtyRegistry(cfg.PTYShell),
 	}
 	s.registerRoutes()
 	return s
@@ -238,6 +261,7 @@ func NewServerWithFlows(cfg Config, agentStore AgentStore, flowStore *FlowStore)
 		flowStore:  flowStore,
 		runMgr:     runMgr,
 		triggerReg: trigger.NewRegistry(starter),
+		ptyReg:     newPtyRegistry(cfg.PTYShell),
 	}
 	s.registerRoutes()
 	return s
@@ -396,6 +420,12 @@ func (s *Server) SetCredentialStore(st *CredentialStore) {
 // /v1/workspaces endpoints manage workspace records.
 func (s *Server) SetWorkspaceProvider(p WorkspaceProvider) {
 	s.wsProvider = p
+}
+
+// SetSandboxRegistry attaches the Spec B sandbox preset/rejection registry.
+// When nil, handlers create a default in-memory registry on first use.
+func (s *Server) SetSandboxRegistry(r *sandboxRegistry) {
+	s.sbxRegistry = r
 }
 
 // SetSkillStore attaches the C-10 Skill Hub store. When set, the /v1/skill-hub

@@ -1,0 +1,152 @@
+/* Phase 5 — @file chip input + produced-files. */
+
+.inputWrap {
+  position: relative;
+  width: 100%;
+}
+
+/* double-layer: transpaarent textarea over a mirrored backdrop */
+.backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  padding: 8px 12px;
+  font: inherit;
+  line-height: inherit;
+  color: var(--igw-text);
+  visibility: hidden;
+}
+.backdropPainted {
+  visibility: visible;
+}
+
+.mention {
+  position: relative;
+  display: inline-block;
+  color: var(--igw-accent-strong);
+  background: var(--igw-accent-soft);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+.mentionInvalid {
+  background: var(--igw-err, #c0392b);
+  color: #fff;
+  text-decoration: line-through;
+}
+
+.input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--igw-text);
+  resize: none;
+  font: inherit;
+  line-height: inherit;
+  border: 0;
+  outline: 0;
+  padding: 8px 12px;
+  box-sizing: border-box;
+}
+.input::selection {
+  color: transparent;
+  background: var(--igw-accent-soft);
+}
+.input::placeholder {
+  color: var(--igw-text-faint);
+  opacity: 0.7;
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--igw-elev-2);
+  border: 1px solid var(--igw-border);
+  border-radius: var(--igw-radius-sm);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
+  padding: 4px;
+}
+.menuHead {
+  font-size: 11px;
+  color: var(--igw-text-faint);
+  padding: 4px 8px;
+}
+.menuEmpty {
+  font-size: 12px;
+  color: var(--igw-text-faint);
+  padding: 8px;
+}
+.menuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.menuItem:hover,
+.menuActive {
+  background: var(--igw-accent-soft);
+}
+.menuKind {
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex: none;
+  font-weight: 600;
+}
+.menuLabel {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.menuDesc {
+  font-size: 11px;
+  color: var(--igw-text-faint);
+  white-space: nowrap;
+}
+
+/* produced-files chip row */
+.produced {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+.producedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  background: var(--igw-accent-soft);
+  color: var(--igw-accent-strong);
+  border: 1px solid var(--igw-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.producedChip:hover {
+  border-color: var(--igw-accent);
+}
+.producedKind {
+  font-size: 10px;
+  color: var(--igw-text-faint);
+}

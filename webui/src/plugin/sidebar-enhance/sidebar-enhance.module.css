@@ -1,0 +1,187 @@
+/* 侧栏增强插件样式：折叠/展开 crossfade+slide 动画 + 滚动条 pointer-follow。 */
+
+/* 外层容器：折叠时宽度收窄到 rail，由 width transition 承担 slide。 */
+.container {
+  --enh-expanded: 280px;
+  --enh-rail: 56px;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  color: var(--text);
+  transition: width 0.25s ease;
+}
+
+/* 内部纵向布局；collapsed 时渲染 rail，否则渲染 header + scroll。 */
+.inner {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 展开态内容 crossfade + slide 入场。 */
+.wideIn {
+  animation: wide-in 0.25s ease;
+}
+
+@keyframes wide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+
+/* 折叠 rail 内容 slide 入场。 */
+.railIn {
+  animation: rail-in 0.25s ease;
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(4px);
+  }
+}
+
+/* ── 头部：品牌槽位 + 折叠开关 ── */
+.header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border-soft);
+  overflow: hidden;
+}
+
+.brandArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.toggleBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.toggleBtn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+/* ── 滚动区域：滚动条指针跟随 ──
+   原生滚动条 thumb 用 --enh-rb-thumb 控制显示；hover 立即露出，移开后
+   由 useLingerScroll 的 .revealed 续留 2s，再回到 transparent。 */
+.scrollbar-rail {
+  --enh-rb-thumb: transparent;
+
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--enh-rb-thumb) transparent;
+}
+
+.scrollbar-rail::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-rail::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-rail::-webkit-scrollbar-thumb {
+  background: var(--enh-rb-thumb);
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.scrollbar-rail::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+.scrollbar-rail:hover,
+.scrollbar-rail.revealed {
+  --enh-rb-thumb: var(--border);
+}
+
+.body {
+  padding: 8px 12px;
+}
+
+/* ── 折叠 rail ── */
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.railMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--accent);
+}
+
+/* ── 品牌行（BrandRow 槽位组合） ── */
+.brandRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brandMark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.brandName {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .container {
+    transition: none;
+  }
+
+  .wideIn,
+  .railIn {
+    animation: none;
+  }
+}

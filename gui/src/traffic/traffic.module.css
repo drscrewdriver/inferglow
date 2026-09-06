@@ -1,0 +1,333 @@
+/* Traffic dock / freeze / jobs — spec Phase 3 Task 11-13. */
+
+/* ── SteerQueueDock ─────────────────────────────── */
+.dock {
+  max-width: 820px;
+  margin: 0 auto 8px;
+  border: 1px solid var(--igw-border-soft);
+  border-radius: 12px;
+  background: var(--igw-panel);
+  padding: 8px 10px;
+}
+
+/* ── QueueBar: compact floating queue above composer ─── */
+.queueBar {
+  max-width: 820px;
+  margin: 0 auto;
+  border: 1px solid var(--igw-border-soft);
+  border-radius: 10px 10px 0 0;
+  background: var(--igw-panel);
+  border-bottom: none;
+  overflow: hidden;
+}
+.queueFrozen {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--igw-accent);
+  background: var(--igw-accent-soft);
+}
+.queueFrozenDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--igw-accent);
+  flex: none;
+}
+.queueCancelBtn {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--igw-accent);
+  color: var(--igw-accent);
+  background: transparent;
+}
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--igw-border-soft);
+}
+.queueRow:last-child {
+  border-bottom: none;
+}
+.queueDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.queueLabel {
+  font-size: 10.5px;
+  color: var(--igw-text-faint);
+  flex: none;
+  min-width: 32px;
+}
+.queueText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--igw-text-dim);
+}
+.queueSpacer {
+  flex: 1;
+}
+.queueAction {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--igw-text-faint);
+  flex: none;
+}
+.queueAction:hover {
+  background: var(--igw-panel-2);
+  color: var(--igw-text);
+}
+.dockHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--igw-text-faint);
+  margin-bottom: 8px;
+}
+.dockTitle {
+  font-weight: 600;
+  color: var(--igw-text-dim);
+}
+.dockSpacer {
+  flex: 1;
+}
+.dockBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--igw-border);
+  background: var(--igw-panel-2);
+  color: var(--igw-text-dim);
+}
+.dockBtn:hover:not(:disabled) {
+  border-color: var(--igw-accent);
+  color: var(--igw-accent);
+}
+.dockBtn:disabled {
+  opacity: 0.4;
+}
+.confirm {
+  border-color: var(--igw-err);
+  color: var(--igw-err);
+}
+
+.tierGroup {
+  margin-bottom: 6px;
+}
+.tierGroup:last-child {
+  margin-bottom: 0;
+}
+.tierHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--igw-text-faint);
+  padding: 2px 2px 4px;
+}
+.tierLabel {
+  font-weight: 600;
+}
+.tierEmpty {
+  font-size: 10.5px;
+  color: var(--igw-text-faint);
+  opacity: 0.7;
+}
+.tierClear {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--igw-text-faint);
+}
+.tierClear:hover {
+  color: var(--igw-err);
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--igw-border-soft);
+  border-radius: 8px;
+  background: var(--igw-bg-soft);
+  margin-bottom: 4px;
+}
+.itemTierBadge {
+  font-size: 10px;
+  line-height: 14px;
+  flex: none;
+  margin-top: 3px;
+  user-select: none;
+}
+.itemBody {
+  flex: 1;
+  min-width: 0;
+}
+.itemText {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: none;
+  resize: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--igw-text);
+  padding: 2px 4px;
+}
+.itemText:focus {
+  border-color: var(--igw-accent);
+  background: var(--igw-elev);
+}
+.itemMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+.itemMeta select {
+  background: var(--igw-elev);
+  border: 1px solid var(--igw-border);
+  border-radius: 5px;
+  font-size: 10.5px;
+  color: var(--igw-text-dim);
+  padding: 1px 4px;
+}
+.itemActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.miniBtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--igw-text-faint);
+}
+.miniBtn:hover {
+  background: var(--igw-panel-2);
+  color: var(--igw-text);
+}
+.miniBtn.danger:hover {
+  background: color-mix(in srgb, var(--igw-err) 14%, transparent);
+  color: var(--igw-err);
+}
+
+/* ── FreezeButton ──────────────────────────────── */
+.freezeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--igw-border);
+  background: var(--igw-elev);
+  font-size: 11.5px;
+  color: var(--igw-text-dim);
+}
+.freezeBtn:hover {
+  border-color: var(--igw-accent);
+}
+.frozen {
+  border-color: var(--igw-accent);
+  background: var(--igw-accent-soft);
+  color: var(--igw-accent);
+}
+
+/* ── JobList ───────────────────────────────────── */
+.jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.jobRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--igw-border-soft);
+}
+.jobRow:last-child {
+  border-bottom: none;
+}
+.jobDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.dotOngoing {
+  background: var(--igw-ok);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.dotStopping {
+  background: var(--igw-warn);
+}
+.dotCompleted {
+  background: var(--igw-accent);
+}
+.dotKilled {
+  background: var(--igw-warn);
+}
+.dotFailed {
+  background: var(--igw-err);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+.jobMain {
+  flex: 1;
+  min-width: 0;
+}
+.jobKind {
+  font-family: var(--igw-font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jobDesc {
+  font-size: 10.5px;
+  color: var(--igw-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jobDur {
+  font-size: 10.5px;
+  color: var(--igw-text-faint);
+  white-space: nowrap;
+}
+.jobActions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.jobEmpty {
+  font-size: 11.5px;
+  color: var(--igw-text-faint);
+}

@@ -207,6 +207,11 @@ type runConfig struct {
 	// of this run (RF-2: /effort reasoning_effort injection). Caller keys
 	// win over engine-built keys. nil keeps engine-built options only.
 	modelOptions map[string]any
+	// toolResultHook, when non-nil, rewrites every tool-result content
+	// BEFORE the size cap truncates it (R10: the orthogonal context-improve
+	// pass — e.g. mechanical tool_denoise — runs upstream of any base
+	// context mode). nil leaves results untouched.
+	toolResultHook func(toolName, content string) string
 }
 
 // WithMaxRounds sets the maximum number of PLAN → EXECUTE loop iterations.
@@ -250,6 +255,15 @@ func WithModelRequester(mr model.ModelRequester) RunOption {
 func WithModelOptions(opts map[string]any) RunOption {
 	return func(c *runConfig) {
 		c.modelOptions = opts
+	}
+}
+
+// WithToolResultHook installs a per-run tool-result rewriter. The hook runs
+// before the size-cap truncation, so an improvement pass (tool_denoise)
+// shrinks the input it sees; orthogonally to any base context mode.
+func WithToolResultHook(hook func(toolName, content string) string) RunOption {
+	return func(c *runConfig) {
+		c.toolResultHook = hook
 	}
 }
 
@@ -471,6 +485,9 @@ func (a *Agent) Run(ctx context.Context, userMessage string, opts ...RunOption) 
 	// Propagate the compact hook so executeLoop can trigger ModeSummary
 	// compaction after each LLM turn. nil disables.
 	a.engine.compactHook = c.compactHook
+
+	// R10: per-run tool-result improvement pass (nil = passthrough).
+	a.engine.toolResultHook = c.toolResultHook
 
 	// Propagate the input queue to the engine so executeLoop can drain it
 	// at turn boundaries.

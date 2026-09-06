@@ -1,0 +1,175 @@
+/* @file 提及输入：双层叠加式 Chip + 候选下拉（DSH 变量） */
+
+.inputWrap {
+  position: relative;
+}
+
+/* 双层叠加：外层占位层 paint 全部正文（含 chip 槽位），为内层文件名的对位提供锚点 */
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  padding: 8px 12px;
+  color: var(--text);
+  font: inherit;
+  line-height: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+
+.inputWrap:focus-within .backdrop,
+.backdropPainted {
+  color: var(--text);
+}
+
+.input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: transparent; /* 真实文本由 backdrop 绘制，光标仍需可见 */
+  caret-color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  line-height: inherit;
+  outline: none;
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+  caret-color: var(--text);
+}
+
+/* ===== Chip 双层叠加 =====
+ * .chipSlot 外层占位：隐藏/零宽，仅占据 U+FFFC 的原生度量，帮助内容对位；
+ * .chipFace 内层真实文件名：绝对定位浮在占位处，带背景色悬浮显示。 */
+.chip {
+  position: relative;
+  display: inline;
+}
+
+.chipSlot {
+  visibility: hidden;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.chipFace {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid transparent;
+  vertical-align: baseline;
+}
+
+.chip:hover .chipFace {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 删除/悬浮操作统一使用 --accent（供上层扩展，当前输入壳为只读绘制层） */
+.chipRemove {
+  margin-left: 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.chipRemove:hover {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+/* ===== 候选下拉（渲染于 conversation.input.menu 槽位）===== */
+.menu {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.menuHead {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--surface-hover);
+}
+
+.menuActive {
+  background: var(--accent-soft);
+}
+
+.menuActive:hover {
+  background: var(--accent-soft);
+}
+
+.menuKind {
+  flex: none;
+  width: 30px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: var(--radius-sm);
+}
+
+.menuLabel {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.menuDesc {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}

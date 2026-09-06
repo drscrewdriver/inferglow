@@ -575,7 +575,8 @@ func TestFormatToolResult_FileWrite(t *testing.T) {
 		Status: "success",
 		Result: fileWriteResult{Path: "/tmp/hello.go", BytesWritten: 42},
 	}
-	got := formatToolResult(ar)
+	eng := &Engine{}
+	got := eng.formatToolResult("t", ar)
 
 	var parsed fileWriteResult
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
@@ -596,7 +597,8 @@ func TestFormatToolResult_FileRead(t *testing.T) {
 		Status: "success",
 		Result: fileReadResult{Path: "/tmp/hello.go", BytesRead: int64(len(content)), Content: content},
 	}
-	got := formatToolResult(ar)
+	eng := &Engine{}
+	got := eng.formatToolResult("t", ar)
 
 	var parsed fileReadResult
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
@@ -615,14 +617,16 @@ func TestFormatToolResult_FileRead(t *testing.T) {
 
 func TestFormatToolResult_Error(t *testing.T) {
 	ar := &action.ActionResult{OK: false, Status: "error", Error: "file not found"}
-	got := formatToolResult(ar)
+	eng := &Engine{}
+	got := eng.formatToolResult("t", ar)
 	if got != "error: file not found" {
 		t.Errorf("got %q, want %q", got, "error: file not found")
 	}
 }
 
 func TestFormatToolResult_Nil(t *testing.T) {
-	got := formatToolResult(nil)
+	eng := &Engine{}
+	got := eng.formatToolResult("t", nil)
 	if got != "null" {
 		t.Errorf("got %q, want %q", got, "null")
 	}
@@ -848,19 +852,20 @@ func TestFormatToolResult_Truncation(t *testing.T) {
 		Status: "success",
 		Result: bigContent,
 	}
-	got := formatToolResult(result)
+	eng := &Engine{}
+	got := eng.formatToolResult("t", result)
 	if len(got) > defaultToolResultMaxBytes+200 { // some margin for the marker
 		t.Errorf("formatToolResult should truncate: got %d bytes, limit %d", len(got), defaultToolResultMaxBytes)
 	}
 
 	// Nil result should return "null".
-	if formatToolResult(nil) != "null" {
+	if eng.formatToolResult("t", nil) != "null" {
 		t.Error("nil result should return 'null'")
 	}
 
 	// Error result.
 	errResult := &action.ActionResult{OK: false, Error: "something failed"}
-	got = formatToolResult(errResult)
+	got = eng.formatToolResult("t", errResult)
 	if got != "error: something failed" {
 		t.Errorf("error result: got %q", got)
 	}

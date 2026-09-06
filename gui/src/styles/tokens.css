@@ -1,0 +1,63 @@
+/* ── InferGlow semantic design tokens (--igw-*) ────────────────────────────
+ * Component CSS Modules reference ONLY these vars (never hard-coded colors).
+ * Each maps to a runtime theme variable injected by ThemeProvider (or the
+ * app.css fallback palette), so switching themes flows through transparently.
+ * stylelint-disable */
+
+:root {
+  /* surfaces */
+  --igw-bg: var(--bg);
+  --igw-bg-soft: var(--bg2);
+  --igw-panel: var(--panel);
+  --igw-panel-2: var(--panel2);
+  --igw-elev: var(--bg-elev);
+  --igw-elev-2: var(--bg-elev-2);
+
+  /* borders */
+  --igw-border: var(--border);
+  --igw-border-soft: var(--border-soft);
+
+  /* text */
+  --igw-text: var(--fg);
+  --igw-text-dim: var(--fg-dim);
+  --igw-text-faint: var(--fg-faint);
+
+  /* accent + status */
+  --igw-accent: var(--accent);
+  --igw-accent-fg: var(--accent-fg);
+  --igw-accent-strong: var(--accent-strong);
+  --igw-accent-soft: var(--accent-soft);
+  --igw-ok: var(--ok);
+  --igw-err: var(--err);
+  --igw-warn: var(--warn);
+  --igw-gold: var(--gold);
+  --igw-coral: var(--coral);
+
+  /* goal (affordance) */
+  --igw-goal: var(--goal);
+  --igw-goal-strong: var(--goal-strong);
+  --igw-goal-soft: var(--goal-soft);
+
+  /* components / states */
+  --igw-sidebar-bg: var(--sidebar-bg);
+  --igw-sidebar-hover: var(--panel2);
+  --igw-sidebar-active: var(--sidebar-active);
+
+  /* avatars */
+  --igw-avatar-a: var(--avatar-a);
+  --igw-avatar-b: var(--avatar-b);
+  --igw-avatar-a2: var(--avatar-a2);
+  --igw-avatar-b2: var(--avatar-b2);
+  --igw-avatar-fg: var(--avatar-fg);
+
+  /* shape + type */
+  --igw-radius: var(--radius, 10px);
+  --igw-radius-sm: calc(var(--radius, 10px) - 3px);
+  --igw-font-ui: var(--font-ui);
+  --igw-font-mono: var(--font-mono);
+
+  /* layout constants */
+  --igw-sidebar-width: 258px;
+  --igw-sidebar-rail: 44px;
+  --igw-details-width: 300px;
+}

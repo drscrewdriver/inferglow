@@ -33,7 +33,7 @@ npm run build      # tsc + vite build → ../server/webui（产物入库，Go em
 
 **产物入库约定**：`server/webui/`（vite build 输出）随 commit 提交，保证
 `go build` 与 CI 无需 Node 工具链即可编译（与 `dashboard.html` 先例一致）；
-`web/node_modules`、`web/dist` 不入库。
+`gui/node_modules`、`gui/dist` 不入库。
 
 ## 启动与打包流程
 
@@ -97,7 +97,7 @@ go build -o inferglow-server.exe ./cmd/inferglow-server
 
 | 通道 | 状态 | 说明 |
 |---|---|---|
-| REST（`/v1/*`） | ✅ 本版实现 | `web/src/api/transport.ts` 的 `restTransport`：fetch JSON + SSE 流式 |
+| REST（`/v1/*`） | ✅ 本版实现 | `gui/src/api/transport.ts` 的 `restTransport`：fetch JSON + SSE 流式 |
 | Wails 绑定直调（`window.go.*` + `runtime.EventsOn`） | ⏳ 预留 | `detectTransport()` 运行时探测 `window.go?.desktop`；未来桌面壳（OT-10）只需新增一个 transport 实现，组件/stores 零改动 |
 
 组件与 stores 只依赖 `Transport` 接口（`request` / `streamRun`），通道切换对上层透明。
@@ -105,7 +105,7 @@ go build -o inferglow-server.exe ./cmd/inferglow-server
 ### 目录结构
 
 ```
-web/src/
+gui/src/
 ├── api/        # types.ts（后端契约）/ transport.ts（通道抽象）/ sse.ts（SSE 解析）
 ├── stores/     # zustand：sessionStore / chatStore / usageStore
 ├── settings/   # settingsSchema（15 tab，对齐 settings-spec.md）/ SettingsPanel / serverData
@@ -116,7 +116,7 @@ web/src/
 ## SSE 消费协议（关键契约）
 
 聊天使用 `POST /v1/agents/{id}/stream-run`（SSE，`fetch` + `ReadableStream` 解析，
-见 `web/src/api/sse.ts`）。消费方必须遵守两个**服务端契约怪癖**：
+见 `gui/src/api/sse.ts`）。消费方必须遵守两个**服务端契约怪癖**：
 
 1. **`run_end.tool_name` 承载完整回复正文**——助手最终回复文本放在
    `run_end` 事件的 `tool_name` 字段中（server/handlers_stream.go 的

@@ -1,8 +1,19 @@
-/* InferGlow Web UI — 对话区（消息流 + 输入框） */
+/* InferGlow Web UI — 对话区（消息流 + 输入框）
+
+   集成 DSH 插件槽位：
+   - conversation.input.dock  → SteerQueueDock（投放队列，Composer 上方）
+   - conversation.input.menu  → @file 候选下拉
+   - conversation.input.right → FreezeButton（Composer 右侧）
+   输入框由 MentionInput 包装，获得 `@` 文件引用能力。
+   */
 
 import { useState, useRef, useEffect } from 'react'
 import type { Session, Agent, ChatMessage } from '../api/types'
 import { get } from '../api/transport'
+import { renderSlot } from '../plugin/registry'
+import { MentionInput } from '../plugin/at-file'
+import { useTrafficStore, useFreezeStore, selectFrozen } from '../plugin/input-traffic'
+import type { QueueTier } from '../plugin/input-traffic/api'
 
 interface ChatAreaProps {
   session: Session | null
@@ -15,7 +26,20 @@ export function ChatArea({ session, agent, connected, activeTab }: ChatAreaProps
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [tier, setTier] = useState<QueueTier>('next')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const frozen = useFreezeStore(selectFrozen)
+
+  // 同步流量队列/冻结的会话上下文
+  const setTrafficSession = useTrafficStore((s) => s.setSession)
+  useEffect(() => {
+    setTrafficSession(session?.id ?? null)
+  }, [session?.id, setTrafficSession])
+
+  useEffect(() => {
+    if (agent?.id) useTrafficStore.getState().setAgent(agent.id)
+  }, [agent?.id])
 
   // 加载会话消息
   useEffect(() => {
@@ -41,7 +65,7 @@ export function ChatArea({ session, agent, connected, activeTab }: ChatAreaProps
   }, [messages.length])
 
   const handleSend = async () => {
-    if (!session || !input.trim() || sending) return
+    if (!session || !input.trim() || sending || frozen) return
     const text = input.trim()
     setInput('')
     setSending(true)
@@ -56,7 +80,6 @@ export function ChatArea({ session, agent, connected, activeTab }: ChatAreaProps
     setMessages(prev => [...prev, userMsg])
 
     try {
-      // TODO: 对接 SSE stream-run
       const res = await fetch(`/v1/agents/${session.agent_id}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -78,12 +101,15 @@ export function ChatArea({ session, agent, connected, activeTab }: ChatAreaProps
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
+  // 把当前输入投递到投放队列（而非立即发送）
+  const enqueue = () => {
+    useTrafficStore.getState().enqueue(input, tier)
+    setInput('')
   }
+
+  const pullBack = (text: string) => setInput(text)
+
+  const inputDisabled = !connected || sending || frozen
 
   // 轨迹 / 上下文标签页占位
   if (activeTab !== 'chat') {
@@ -130,20 +156,52 @@ export function ChatArea({ session, agent, connected, activeTab }: ChatAreaProps
       </div>
 
       <div className="chat-input-area">
+        {/* 投放队列（Composer 上方） */}
+        <div className="queue-dock-slot">
+          {renderSlot('conversation.input.dock', { onPullBack: pullBack })}
+        </div>
+
         <div className="input-wrapper">
-          <textarea
-            className="input-box"
-            placeholder={connected ? '给智能体发消息...' : '未连接后端...'}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={!connected || sending}
-            rows={1}
-          />
+          <div className="composer">
+            <div className="composer-steer">
+              <select
+                className="steer-select"
+                value={tier}
+                disabled={frozen}
+                title="投递层级"
+                onChange={e => setTier(e.target.value as QueueTier)}
+              >
+                <option value="later">🟢 稍后</option>
+                <option value="next">🟡 下一步</option>
+                <option value="now">🔴 立即</option>
+              </select>
+              <button
+                className="steer-btn"
+                disabled={!connected || frozen || !input.trim()}
+                onClick={enqueue}
+                title="入队（稍后发送）"
+              >
+                ＋ 入队
+              </button>
+            </div>
+            <div className="composer-menu">
+              {renderSlot('conversation.input.menu')}
+            </div>
+            <MentionInput
+              value={input}
+              onChange={setInput}
+              placeholder={connected ? '给智能体发消息...（@ 引用文件）' : '未连接后端...'}
+              disabled={inputDisabled}
+              onSubmit={handleSend}
+            />
+          </div>
+          <div className="composer-right">
+            {renderSlot('conversation.input.right', { disabled: !connected })}
+          </div>
           <button
             className="send-btn"
             onClick={handleSend}
-            disabled={!connected || sending || !input.trim()}
+            disabled={inputDisabled || !input.trim()}
           >
             ↑
           </button>

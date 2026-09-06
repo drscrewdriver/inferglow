@@ -1,0 +1,327 @@
+/* input-traffic 插件 — SteerQueueDock / FreezeButton 样式（基于 webui tokens）
+ * 显示结构与 dsh-input-traffic 的 steer-queue-dock.module.css 对齐。 */
+
+.dock {
+  max-width: 820px;
+  margin: 0 auto 8px;
+}
+.panel {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: 6px 8px 8px;
+}
+
+/* ── 折叠表头（toolbar） ───────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+}
+.header:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.header:disabled {
+  cursor: default;
+}
+.lead {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  flex: none;
+}
+.count {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.chevron {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex: none;
+}
+.toolbarActions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dockBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.dockBtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dockBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.clearCancel {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.clearConfirm {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+/* ── 行内 tier 徽章（SteerBadge） ──────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  user-select: none;
+}
+.badge .dot {
+  width: 7px;
+  height: 7px;
+}
+.badge_later {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.badge_next {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.badge_now {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.badgeLabel {
+  font-weight: 600;
+}
+
+/* ── 扁平队列 / steering 列表 ──────────────────────────────── */
+.list,
+.steeringList,
+.frozenList {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.steeringList {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.row,
+.frozenRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+.row:hover {
+  border-color: var(--border);
+}
+.frozenRow {
+  opacity: 0.72;
+  background: color-mix(in srgb, var(--bg2) 60%, transparent);
+}
+.preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.editor {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-hover);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  outline: none;
+  resize: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  padding: 2px 4px;
+  overflow: hidden;
+}
+
+/* ── 行内操作 ──────────────────────────────────────────────── */
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  margin-left: auto;
+}
+.action {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-faint);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.action:hover:not(:disabled) {
+  background: var(--bg2);
+  color: var(--text);
+}
+.action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.action.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+  color: var(--err);
+}
+
+/* ── 三档规划圆点 ──────────────────────────────────────────── */
+.plan {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 4px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border-soft);
+}
+.tier {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tier:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+.tier:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.tierActive {
+  box-shadow: inset 0 0 0 1px var(--text-dim);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.tier_later .dot,
+.badge_later .dot {
+  background: var(--ok);
+}
+.tier_next .dot,
+.badge_next .dot {
+  background: var(--warn);
+}
+.tier_now .dot,
+.badge_now .dot {
+  background: var(--err);
+}
+.tier_later.tierActive {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.tier_next.tierActive {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.tier_now.tierActive {
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+}
+
+/* ── frozen 面板 ───────────────────────────────────────────── */
+.frozenBanner {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.frozenRow .frozenBadge {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+/* ── 空提示 / 标识 ─────────────────────────────────────────── */
+.staticHint {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  opacity: 0.7;
+  padding: 0 4px;
+}
+.frozenMark {
+  display: none;
+}
+
+/* ── FreezeButton（Composer 右侧） ─────────────────────────── */
+.freezeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.freezeBtn:hover {
+  border-color: var(--accent);
+}
+.frozen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}

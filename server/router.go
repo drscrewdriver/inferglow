@@ -47,6 +47,19 @@ func (s *Server) registerRoutes() {
 	})
 	s.mux.HandleFunc("GET /web/{path...}", s.handleWebUI)
 
+	// WebUI2 — 原型重构布局（embedded in webui2/, 独立于 /gui/ 与 /web/, no auth）
+	s.mux.HandleFunc("GET /webui2", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/webui2/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /webui2/{path...}", s.handleWebUI2)
+
+	// WebUI DSH — vendored dsh-transition-webui 整合版（embedded in webui-dsh/,
+	// 与 /web/ 双挂载渐进替换, no auth）
+	s.mux.HandleFunc("GET /webui-dsh", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/webui-dsh/", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /webui-dsh/{path...}", s.handleWebUIDsh)
+
 	// API routes (with optional middleware)
 	api := http.NewServeMux()
 
@@ -67,6 +80,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("PATCH /v1/sessions/{id}", s.handleUpdateSession)
 	api.HandleFunc("DELETE /v1/sessions/{id}", s.handleDeleteSession)
 	api.HandleFunc("GET /v1/sessions/{id}/stream", s.handleSessionStream)
+	api.HandleFunc("GET /v1/sessions/{id}/trace", s.handleGetSessionTrace)
 	api.HandleFunc("GET /v1/sessions/{id}/messages", s.handleListSessionMessages)
 	api.HandleFunc("POST /v1/sessions/{id}/fork", s.handleSessionFork)
 
@@ -122,6 +136,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("POST /v1/teams/{id}/stream", s.handleTeamStream)
 
 	// Context / semantic search (enabled by SetContextProvider)
+	api.HandleFunc("GET /v1/context/modes", s.handleContextModes)
 	api.HandleFunc("GET /v1/context/search", s.handleContextSearch)
 	api.HandleFunc("GET /v1/context/stats", s.handleContextStats)
 
@@ -169,6 +184,76 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("DELETE /v1/workspaces/{id}", s.handleDeleteWorkspace)
 	api.HandleFunc("GET /v1/workspaces/{id}/files", s.handleListWorkspaceFiles)
 
+	// Workspace file management (Spec B) — /v1/workspace/* and /v1/fs/* aliases
+	for _, prefix := range []string{"/v1/workspace", "/v1/fs"} {
+		api.HandleFunc("GET "+prefix+"/tree", s.handleWorkspaceTree)
+		api.HandleFunc("GET "+prefix+"/read", s.handleWorkspaceRead)
+		api.HandleFunc("POST "+prefix+"/write", s.handleWorkspaceWrite)
+		api.HandleFunc("POST "+prefix+"/rename", s.handleWorkspaceRename)
+		api.HandleFunc("POST "+prefix+"/delete", s.handleWorkspaceDelete)
+		api.HandleFunc("GET "+prefix+"/search", s.handleWorkspaceSearch)
+		api.HandleFunc("POST "+prefix+"/upload", s.handleWorkspaceUpload)
+	}
+
+	// Sandbox (Spec B)
+	api.HandleFunc("GET /v1/sandbox/runtimes", s.handleListSandboxRuntimes)
+	api.HandleFunc("GET /v1/sandbox/presets", s.handleSandboxPresets)
+	api.HandleFunc("POST /v1/sandbox/preset", s.handleSandboxSetPreset)
+	api.HandleFunc("GET /v1/sandbox/rejections", s.handleListSandboxRejections)
+	api.HandleFunc("POST /v1/sandbox/rejections", s.handleRecordSandboxRejection)
+
+	// Background jobs (Spec B)
+	api.HandleFunc("GET /v1/jobs", s.handleListJobs)
+	api.HandleFunc("GET /v1/jobs/stream", s.handleJobsStream)
+	api.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
+
+	// Git (Spec B)
+	api.HandleFunc("GET /v1/git/status", s.handleGitStatus)
+	api.HandleFunc("GET /v1/git/diff", s.handleGitDiff)
+	api.HandleFunc("GET /v1/git/log", s.handleGitLog)
+	api.HandleFunc("GET /v1/git/branches", s.handleGitBranches)
+	api.HandleFunc("GET /v1/git/worktrees", s.handleGitWorktrees)
+	api.HandleFunc("POST /v1/git/commit", s.handleGitCommit)
+	api.HandleFunc("POST /v1/git/stage", s.handleGitStage)
+	api.HandleFunc("POST /v1/git/reset", s.handleGitReset)
+	api.HandleFunc("POST /v1/git/checkout", s.handleGitCheckout)
+
+	// Tasks — webui 待办 + model task_tracker tools share one store (R8)
+	api.HandleFunc("GET /v1/tasks", s.handleListTasks)
+	api.HandleFunc("POST /v1/tasks", s.handleCreateTask)
+	api.HandleFunc("PATCH /v1/tasks/{id}", s.handlePatchTask)
+	api.HandleFunc("DELETE /v1/tasks/{id}", s.handleDeleteTask)
+
+	// R9 Phase 0: sub-agent spawn observation (任务管理 panel data source).
+	api.HandleFunc("GET /v1/subagents", s.handleListSubagents)
+
+	// R9: workspace registry rename (binding name change, root preserved).
+	api.HandleFunc("PATCH /v1/workspaces/{id}", s.handleRenameWorkspace)
+
+	// Produced files (Spec B)
+	api.HandleFunc("GET /v1/produced-files", s.handleProducedFiles)
+
+	// Exec — webui terminal (v1: one command per request, allowlisted).
+	// Fail-closed: the route exists only when BOTH an API key and the -exec
+	// switch are configured (no key / no flag ⇒ 404, not 401).
+	if s.cfg.ExecEnabled && (s.cfg.APIKey != "" || s.cfg.AuthOpen) {
+		api.HandleFunc("POST /v1/exec", s.handleExec)
+	}
+
+	// PTY — webui terminal v2: one persistent interactive shell per
+	// workspace, bridged over WebSocket. Full-permission by nature, so it
+	// carries its own gate (-pty) on top of the API key; fail-closed 404
+	// when either is missing. Registered directly on the mux (more specific
+	// than the "/" middleware chain) because a browser WebSocket cannot set
+	// the Authorization header — APIKeyAuthQuery also accepts ?token=.
+	if s.cfg.PTYEnabled && (s.cfg.APIKey != "" || s.cfg.AuthOpen) {
+		authed := http.HandlerFunc(s.handlePtyWS)
+		if !s.cfg.AuthOpen {
+			authed = middleware.APIKeyAuthQuery(authed, s.cfg.APIKey).(http.HandlerFunc)
+		}
+		s.mux.Handle("GET /v1/pty", authed)
+	}
+
 	// Skill Hub management (C-10)
 	api.HandleFunc("GET /v1/skill-hub", s.handleListSkills)
 	api.HandleFunc("GET /v1/skill-hub/{name}", s.handleGetSkill)
@@ -200,7 +285,7 @@ func (s *Server) registerRoutes() {
 	if len(s.cfg.CORSOrigins) > 0 {
 		h = middleware.CORS(h, s.cfg.CORSOrigins)
 	}
-	if s.cfg.APIKey != "" {
+	if s.cfg.APIKey != "" && !s.cfg.AuthOpen {
 		h = middleware.APIKeyAuth(h, s.cfg.APIKey)
 	}
 

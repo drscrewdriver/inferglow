@@ -110,6 +110,9 @@ func buildModelRequester(cfg CLIConfig) (model.ModelRequester, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.LLM.EnableThinking {
+		req = &thinkingInjectRequester{inner: req}
+	}
 	// LLM-provider-port (P1): wire the provider profile's effort protocol
 	// facts (wire format + per-model level map) into the requester. No-op for
 	// unknown providers/models (legacy raw passthrough preserved).
@@ -169,4 +172,37 @@ func (a *compressModelAdapter) Available() bool {
 	req := &model.ModelRequest{Input: "ping"}
 	_, err := a.requester.GenerateRequestData(ctx, req)
 	return err == nil
+}
+
+// thinkingInjectRequester mirrors the server's optionsInjectRequester: it
+// merges chat_template_kwargs.enable_thinking=true into every request's
+// Options (caller keys win) so vLLM-hosted Qwen3-family models actually
+// emit reasoning. Defined here rather than in the model module because the
+// flag is a deployment-level choice, not a provider capability.
+type thinkingInjectRequester struct {
+	inner model.ModelRequester
+}
+
+func (w *thinkingInjectRequester) Name() string { return w.inner.Name() }
+
+func (w *thinkingInjectRequester) GenerateRequestData(ctx context.Context, req *model.ModelRequest) (*model.RequestData, error) {
+	d, err := w.inner.GenerateRequestData(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if d.Options == nil {
+		d.Options = make(map[string]any, 1)
+	}
+	if _, exists := d.Options["chat_template_kwargs"]; !exists {
+		d.Options["chat_template_kwargs"] = map[string]any{"enable_thinking": true}
+	}
+	return d, nil
+}
+
+func (w *thinkingInjectRequester) RequestModel(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+	return w.inner.RequestModel(ctx, data)
+}
+
+func (w *thinkingInjectRequester) BroadcastResponse(ctx context.Context, stream <-chan *model.StreamChunk) (<-chan *model.ResultEvent, error) {
+	return w.inner.BroadcastResponse(ctx, stream)
 }

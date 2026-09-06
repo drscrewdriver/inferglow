@@ -299,6 +299,12 @@ func (fc *flowContextImpl) RunAgent(ctx context.Context, userMessage string, sys
 	if fc.engine.depth >= maxDepth {
 		return "", flow.ErrAgentDepthExceeded
 	}
+	// 顺序子循环跑在同一个 engine 上。depth 此前只在并行分支
+	// （cloneEngineForParallel）递增，嵌套 spawn_agent → RunAgent →
+	// spawn_agent 永远不会触发上面的 MaxDepth 检查——在子循环期间递增，
+	// 返回时恢复，使每层嵌套都计入深度。
+	fc.engine.depth++
+	defer func() { fc.engine.depth-- }()
 	maxRounds := 10
 	_ = false // sessionIsolation 预留，Phase 2 使用
 	if opts != nil {

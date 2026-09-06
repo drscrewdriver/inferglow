@@ -46,6 +46,88 @@
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
 }
 
+/* ===== 浅色主题（深色为默认；由 ThemeRuntime 在 <html data-theme> 上切换）===== */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg2: #f6f7f9;
+  --surface: #eef0f4;
+  --surface-hover: #e4e7ee;
+  --border: #d6dbe3;
+  --border-soft: #e4e8ee;
+
+  --text: #1a1d24;
+  --text-dim: #5b6472;
+  --text-faint: #8a94a3;
+
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: rgba(79, 70, 229, 0.10);
+
+  --sidebar-bg: #f2f4f8;
+  --sidebar-hover: #eef0f4;
+  --sidebar-active: #e2e6ee;
+}
+
+/* ===== DSH 插件风格适配桥接层 =====
+ * 将 DSH 生态的 `--dsw-alias-*` 变量映射到 InferGlow 的 `--igw-*`/`--bg`/`--text`
+ * 变量，使 DSH 插件的 CSS Modules 与社区主题（Catppuccin、Solarized 等）可在
+ * webui 中直接生效。全部为「单级 var() 引用」（跟随 --bg/--text 等，随主题级联变化）。
+ * 社区主题若自行定义 `--dsw-alias-*` 并写入 <html> 内联 style，级联优先级更高，会覆盖此映射。
+ */
+:root {
+  /* 品牌 / 强调 */
+  --dsw-alias-brand-primary: var(--accent);
+  --dsw-alias-brand-hover: var(--accent-hover);
+  --dsw-alias-brand-soft: var(--accent-soft);
+
+  /* 背景层级 */
+  --dsw-alias-bg-base: var(--bg);
+  --dsw-alias-bg-layer-1: var(--bg2);
+  --dsw-alias-bg-layer-2: var(--surface);
+  --dsw-alias-bg-surface: var(--surface);
+  --dsw-alias-bg-hover: var(--surface-hover);
+  --dsw-alias-bg-subtle: color-mix(in srgb, var(--surface) 55%, transparent);
+
+  /* 边框 */
+  --dsw-alias-border-l1: var(--border-soft);
+  --dsw-alias-border-l2: var(--border);
+  --dsw-alias-border-strong: color-mix(in srgb, var(--text-faint) 70%, transparent);
+
+  /* 文本 */
+  --dsw-alias-label-primary: var(--text);
+  --dsw-alias-label-secondary: var(--text-dim);
+  --dsw-alias-label-tertiary: var(--text-faint);
+  --dsw-alias-label-disabled: color-mix(in srgb, var(--text) 40%, transparent);
+
+  /* 状态 */
+  --dsw-alias-state-error-primary: var(--err);
+  --dsw-alias-state-error-soft: color-mix(in srgb, var(--err) 15%, transparent);
+  --dsw-alias-state-success-primary: var(--ok);
+  --dsw-alias-state-success-soft: color-mix(in srgb, var(--ok) 15%, transparent);
+  --dsw-alias-state-warn-primary: var(--warn);
+  --dsw-alias-state-warn-soft: color-mix(in srgb, var(--warn) 18%, transparent);
+  --dsw-alias-state-info-primary: var(--accent);
+
+  /* 交互 */
+  --dsw-alias-interactive-bg: var(--surface);
+  --dsw-alias-interactive-bg-hover: var(--surface-hover);
+  --dsw-alias-interactive-bg-active: var(--sidebar-active);
+  --dsw-alias-interactive-bg-muted: var(--bg2);
+  --dsw-alias-interactive-fg: var(--text);
+  --dsw-alias-interactive-fg-muted: var(--text-dim);
+
+  /* 焦点 / 阴影 */
+  --dsw-alias-focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
+  --dsw-alias-shadow-l1: 0 1px 2px rgba(0, 0, 0, 0.15);
+  --dsw-alias-shadow-l2: 0 4px 14px rgba(0, 0, 0, 0.25);
+
+  /* 侧栏专用 */
+  --dsw-specific-sidebar-fill: var(--sidebar-bg);
+  --dsw-specific-sidebar-text: var(--text);
+  --dsw-specific-sidebar-hover: var(--sidebar-hover);
+  --dsw-specific-sidebar-active: var(--sidebar-active);
+}
+
 /* 重置 */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; width: 100%; overflow: hidden; }

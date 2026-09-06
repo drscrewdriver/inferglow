@@ -1,0 +1,127 @@
+/* todo — 待办清单面板（右侧面板串 details.panel.items 内，对齐原型 待办清单 dock 面板） */
+.card {
+  border: 1px solid var(--igw-border);
+  border-radius: 10px;
+  background: var(--igw-panel);
+  overflow: hidden;
+  flex: none;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+}
+.emoji {
+  font-size: 13px;
+  line-height: 1;
+}
+.cardTitle {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+}
+.badge {
+  font-size: 10.5px;
+  color: var(--igw-accent);
+  background: var(--igw-accent-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-weight: 600;
+}
+.refresh {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--igw-text-faint);
+}
+.refresh:hover {
+  background: var(--igw-panel-2);
+  color: var(--igw-text);
+}
+.cardBody {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--igw-border-soft);
+}
+.runLabel {
+  font-size: 10px;
+  color: var(--igw-text-faint);
+  margin: 4px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--igw-elev-2);
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--igw-accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.pct {
+  font-size: 10.5px;
+  color: var(--igw-accent);
+  font-weight: 600;
+}
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 11.5px;
+  color: var(--igw-text-dim);
+}
+.st {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--igw-border);
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: var(--igw-text-faint);
+}
+.stDone {
+  background: var(--igw-ok);
+  border-color: var(--igw-ok);
+  color: var(--igw-accent-fg);
+}
+.txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.txtDone {
+  color: var(--igw-text-faint);
+  text-decoration: line-through;
+}
+.dur {
+  font-size: 10px;
+  color: var(--igw-text-faint);
+  flex: none;
+  font-family: var(--igw-font-mono);
+}
+.empty {
+  font-size: 11.5px;
+  color: var(--igw-text-faint);
+  padding: 4px 2px;
+}

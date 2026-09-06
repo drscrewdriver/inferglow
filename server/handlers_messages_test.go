@@ -24,8 +24,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/inferglow/builtins/actions"
+	"github.com/inferglow/server/config"
 )
 
 // seedMessages appends n messages to a session via the store directly.
@@ -198,5 +203,185 @@ func TestListSessionMessages_InvalidBefore(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+// TestTracePersistence — a stream run persists one trace-role record; it is
+// served by /v1/sessions/{id}/trace and EXCLUDED from the chat history
+// listing, so restoring a session rebuilds the 轨迹 panel without polluting
+// the transcript.
+func TestTracePersistence(t *testing.T) {
+	chunks := []string{"ok"}
+	llmSrv := fakeOpenAIStreamLLM(chunks)
+	defer llmSrv.Close()
+
+	store, err := NewConfigAgentStore(config.MultiLLMConfig{
+		Providers: map[string]config.LLMConfig{
+			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(DefaultConfig(), store)
+	srv.SetMessageStore(NewMessageStore())
+
+	req := httptest.NewRequest("POST", "/v1/agents/fake/stream-run", strings.NewReader(`{"message":"hi","session_id":"sess-trace"}`))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Chat listing must NOT contain the trace record.
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, httptest.NewRequest("GET", "/v1/sessions/sess-trace/messages?limit=50", nil))
+	if strings.Contains(w2.Body.String(), `"role":"trace"`) {
+		t.Fatalf("trace leaked into chat listing: %s", w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), `"role":"assistant"`) {
+		t.Fatalf("assistant record missing: %s", w2.Body.String())
+	}
+
+	// Trace endpoint returns the run summary with spans + usage.
+	w3 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w3, httptest.NewRequest("GET", "/v1/sessions/sess-trace/trace", nil))
+	if w3.Code != 200 {
+		t.Fatalf("trace endpoint: %d %s", w3.Code, w3.Body.String())
+	}
+	var payload struct {
+		Traces []struct {
+			Content string `json:"content"`
+		} `json:"traces"`
+	}
+	if err := json.Unmarshal(w3.Body.Bytes(), &payload); err != nil || len(payload.Traces) != 1 {
+		t.Fatalf("trace endpoint: err=%v traces=%d body=%s", err, len(payload.Traces), w3.Body.String())
+	}
+	summary := payload.Traces[0].Content
+	for _, want := range []string{`"agent_id":"fake"`, `"kind":"llm"`, `"kind":"agent"`} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("trace summary missing %s: %s", want, summary)
+		}
+	}
+}
+
+// TestPersistenceRoundTrip — sessions, chat history (user/assistant/tool)
+// and run traces survive store reconstruction: create + stream → snapshot →
+// fresh stores + Load → everything back, trace excluded from chat listing.
+func TestPersistenceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	llmSrv := fakeOpenAIStreamLLM([]string{"持久化回复"})
+	defer llmSrv.Close()
+	store, err := NewConfigAgentStore(config.MultiLLMConfig{
+		Providers: map[string]config.LLMConfig{
+			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "m", APIKey: "k"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(DefaultConfig(), store)
+	ss := NewSessionStore()
+	ss.SetPersistence(filepath.Join(dir, "sessions.json"))
+	srv.SetSessionStore(ss)
+	ms := NewMessageStore()
+	ms.SetPersistence(filepath.Join(dir, "messages.json"))
+	srv.SetMessageStore(ms)
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/v1/sessions", strings.NewReader(`{"agent_id":"fake","title":"roundtrip","workspace":"rewrite-agently"}`)))
+	if w.Code != 201 {
+		t.Fatalf("create session: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/v1/agents/fake/stream-run", strings.NewReader(`{"message":"hi","session_id":"sess-1"}`)))
+
+	// ── Fresh stores, same snapshot files ──
+	ss2 := NewSessionStore()
+	if !ss2.SetPersistence(filepath.Join(dir, "sessions.json")) {
+		t.Fatalf("session snapshot not restored")
+	}
+	ms2 := NewMessageStore()
+	ms2.SetPersistence(filepath.Join(dir, "messages.json"))
+	if got := ss2.Get("sess-1"); got == nil || got.Title != "roundtrip" || got.Workspace != "rewrite-agently" {
+		t.Fatalf("session not restored: %+v", got)
+	}
+	srv2 := NewServer(DefaultConfig(), store)
+	srv2.SetSessionStore(ss2)
+	srv2.SetMessageStore(ms2)
+
+	w = httptest.NewRecorder()
+	srv2.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/sessions/sess-1/messages?limit=50", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, "持久化回复") {
+		t.Fatalf("assistant history lost: %s", body)
+	}
+	if strings.Contains(body, `"role":"trace"`) {
+		t.Fatalf("trace leaked into chat after restore: %s", body)
+	}
+	w = httptest.NewRecorder()
+	srv2.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/sessions/sess-1/trace", nil))
+	var tp struct {
+		Traces []struct {
+			Content string `json:"content"`
+		} `json:"traces"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &tp); err != nil || len(tp.Traces) == 0 {
+		t.Fatalf("trace not restored: err=%v n=%d body=%s", err, len(tp.Traces), w.Body.String())
+	}
+	if !strings.Contains(tp.Traces[0].Content, `"agent_id":"fake"`) {
+		t.Fatalf("restored trace content wrong: %s", tp.Traces[0].Content)
+	}
+	// New session continues the ID sequence (no sess-1 collision).
+	w = httptest.NewRecorder()
+	srv2.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/v1/sessions", strings.NewReader(`{"agent_id":"fake"}`)))
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"id":"sess-2"`) {
+		t.Fatalf("ID sequence not restored: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestTasksSharedStore — the /v1/tasks CRUD surface and (via the same store
+// instance) the model's task_tracker tools operate on one persisted file:
+// webui creates → model-side List sees it; restart reloads it.
+func TestTasksSharedStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks.json")
+	SetTaskStore(actions.NewTaskStore(path))
+	t.Cleanup(func() { SetTaskStore(nil) })
+
+	srv := NewServer(DefaultConfig(), newMockStore())
+
+	// Create via the webui API.
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/v1/tasks", strings.NewReader(`{"title":"面板新建"}`)))
+	if w.Code != 201 {
+		t.Fatalf("create task: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+
+	// The model-side store instance (same file, fresh handle) sees it.
+	modelView := actions.NewTaskStore(path).List("")
+	if len(modelView) != 1 || modelView[0].Title != "面板新建" {
+		t.Fatalf("model task_list misses webui task: %+v", modelView)
+	}
+
+	// Patch status; list endpoint reflects it.
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest("PATCH", "/v1/tasks/"+created.ID, strings.NewReader(`{"status":"done"}`)))
+	if w.Code != 200 {
+		t.Fatalf("patch: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/tasks?status=done", nil))
+	if !strings.Contains(w.Body.String(), "面板新建") {
+		t.Fatalf("status filter broken: %s", w.Body.String())
+	}
+
+	// Persistence: a fresh server-side view restores the done state.
+	after := actions.NewTaskStore(path).List("done")
+	if len(after) != 1 {
+		t.Fatalf("task snapshot lost: %+v", after)
 	}
 }
