@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react'
-import { api } from '../bridge/inferglow.ts'
+import { api, getActiveWorkspace } from '../bridge/inferglow.ts'
 
 interface HistEntry {
   cmd: string
@@ -41,7 +41,7 @@ export function TerminalPanel() {
     setRunning(true)
     setErr(null)
     try {
-      const r = await api.execRun(argv)
+      const r = await api.execRun({ argv, workspace: getActiveWorkspace() })
       setHist(h => [{
         cmd: line.trim(),
         exit: r.exit_code,

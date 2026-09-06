@@ -20,6 +20,7 @@ import {
 } from '../../components/Icons.tsx'
 import { store, subscribe } from '../../store.ts'
 import { createSession, deleteSession, selectSession } from '../../bridge/inferglow.ts'
+import { WorkspaceAddModal } from '../../panels/WorkspaceAddModal.tsx'
 import styles from './Sidebar.module.css'
 
 /** Wide-content unmount delay; matches the 150ms wide-content fade-out. */
@@ -58,6 +59,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const [sessions, setSessions] = useState(store.sessions)
   const [activeId, setActiveId] = useState(store.activeSessionId)
   const [searchVisible, setSearchVisible] = useState(false)
+  const [workspaces, setWorkspaces] = useState(store.workspaces)
+  const [activeWs, setActiveWs] = useState(store.activeWorkspace)
+  const [addWsOpen, setAddWsOpen] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(WS_GROUPS.filter(g => !g.expanded).map(g => g.id)),
   )
@@ -73,6 +77,8 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       setActiveId(store.activeSessionId)
       setCollapsed(store.sidebarCollapsed)
       setSearchQuery(store.searchQuery)
+      setWorkspaces(store.workspaces)
+      setActiveWs(store.activeWorkspace)
     })
     return unsub
   }, [])
@@ -225,7 +231,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       {!wide && (
         <div className="dsh-ws-rail">
           <Tooltip collapsed label="添加工作区" delayMs={500}>
-            <button type="button" className="dsh-ws-rail-btn" aria-label="添加工作区" title="添加工作区">
+            <button type="button" className="dsh-ws-rail-btn" aria-label="添加工作区" title="添加工作区" onClick={() => setAddWsOpen(true)}>
               <IconPlus size={18} />
             </button>
           </Tooltip>
@@ -290,9 +296,45 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                     <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3"/>
                   </svg>
                 </button>
-                <button type="button" className="dsh-ws-icon-btn" aria-label="添加工作区" title="添加工作区">
+                <button type="button" className="dsh-ws-icon-btn" aria-label="添加工作区" title="添加工作区" onClick={() => setAddWsOpen(true)}>
                   <IconPlus size={18} />
                 </button>
+              </div>
+            </div>
+
+            {/* ── Workspace registry (real, selectable; 添加工作区 opens the form) ── */}
+            <div className="dsh-ws-tree" style={{ marginBottom: 8 }}>
+              <div className="dsh-ws-groups">
+                <div className="dsh-ws-group">
+                  <button type="button" className="dsh-ws-group-title" aria-expanded="true">
+                    <span className="dsh-ws-group-caret dsh-ws-group-caret-collapsed">
+                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                        <path d="M4 2.5L8.5 6 4 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </span>
+                    <span className="dsh-ws-group-label">注册的 workspace</span>
+                  </button>
+                  <div className="dsh-ws-rows">
+                    {workspaces.map(w => (
+                      <div
+                        key={w.name}
+                        className={`dsh-ws-row${activeWs === w.name ? ' dsh-ws-row-active' : ''}`}
+                        title={w.root || '(server 默认目录)'}
+                        onClick={() => store.setActiveWorkspace(w.name)}
+                      >
+                        <span className="dsh-ws-row-icon">
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                            <path d="M2.3 3.5a1.2 1.2 0 011.2-1.2h3l1.1 1.4h5.2a1.2 1.2 0 011.2 1.2v1h.2a1.2 1.2 0 011 1.7l-1.1 3.2a1.2 1.2 0 01-1.1.8H3.2a1.2 1.2 0 01-1.2-1.5l.3-4.6z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+                          </svg>
+                        </span>
+                        <span className="dsh-ws-row-title">{w.name}</span>
+                      </div>
+                    ))}
+                    {workspaces.length === 0 && (
+                      <div className="dsh-ws-empty">server 未注册 workspace</div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -355,6 +397,8 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           </div>
         )}
       </div>
+
+      {addWsOpen && <WorkspaceAddModal onClose={() => setAddWsOpen(false)} />}
 
       {/* Footer — always mounted, sibling of regionArea (not nested) */}
       <div className={styles.footArea}>

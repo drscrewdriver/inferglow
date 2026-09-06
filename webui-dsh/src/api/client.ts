@@ -83,17 +83,21 @@ export interface InferGlowApi {
   deleteSession(sessionId: string): Promise<void>
   listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
   /** One-level directory listing (lazy-loading friendly). */
-  fsTree(path?: string): Promise<FsTreeResult>
+  fsTree(path?: string, workspace?: string): Promise<FsTreeResult>
   /** Whole-file read (server caps at 10MB). */
-  fsRead(path: string): Promise<FsReadResult>
+  fsRead(path: string, workspace?: string): Promise<FsReadResult>
   /** Recursive filename substring search. */
-  fsSearch(q: string, limit?: number): Promise<{ query: string; matches: string[]; truncated: boolean }>
+  fsSearch(q: string, limit?: number, workspace?: string): Promise<{ query: string; matches: string[]; truncated: boolean }>
   /** Most recently modified files under the workspace. */
-  producedFiles(limit?: number): Promise<{ files: ProducedFile[]; count: number }>
+  producedFiles(limit?: number, workspace?: string): Promise<{ files: ProducedFile[]; count: number }>
   /** Recent finished spans (bare JSON array; 503 when collector disabled). */
   spans(limit?: number): Promise<SpanSummary[]>
+  /** Registered workspaces (name→root) backing the workspace selector. */
+  listWorkspaces(): Promise<{ name: string; root: string }[]>
+  /** Register a new workspace (POST /v1/workspaces). */
+  createWorkspace(name: string, root: string): Promise<{ name: string; root: string }>
   /** Gated one-command execution (POST /v1/exec; server -api-key + -exec). */
-  execRun(argv: string[], workdir?: string, timeoutMs?: number): Promise<{
+  execRun(opts: { argv: string[]; workspace?: string; workdir?: string; timeoutMs?: number }): Promise<{
     exit_code: number
     stdout: string
     stderr: string
@@ -277,31 +281,31 @@ export function createInferGlowApi(
       }))
     },
     listMessages,
-    async fsTree(path = '') {
-      return request<FsTreeResult>(
-        base(),
-        `/v1/fs/tree${path ? `?path=${encodeURIComponent(path)}` : ''}`,
-        getApiKey,
-      )
+    async fsTree(path = '', workspace?: string) {
+      const qs = new URLSearchParams()
+      if (path) qs.set('path', path)
+      if (workspace) qs.set('workspace', workspace)
+      const q = qs.toString()
+      return request<FsTreeResult>(base(), `/v1/fs/tree${q ? `?${q}` : ''}`, getApiKey)
     },
-    async fsRead(path: string) {
+    async fsRead(path: string, workspace?: string) {
       return request<FsReadResult>(
         base(),
-        `/v1/fs/read?path=${encodeURIComponent(path)}`,
+        `/v1/fs/read?path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(workspace ?? '')}`,
         getApiKey,
       )
     },
-    async fsSearch(q: string, limit = 200) {
+    async fsSearch(q: string, limit = 200, workspace?: string) {
       return request<{ query: string; matches: string[]; truncated: boolean }>(
         base(),
-        `/v1/fs/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+        `/v1/fs/search?q=${encodeURIComponent(q)}&limit=${limit}&workspace=${encodeURIComponent(workspace ?? '')}`,
         getApiKey,
       )
     },
-    async producedFiles(limit = 10) {
+    async producedFiles(limit = 10, workspace?: string) {
       return request<{ files: ProducedFile[]; count: number }>(
         base(),
-        `/v1/produced-files?limit=${limit}`,
+        `/v1/produced-files?limit=${limit}&workspace=${encodeURIComponent(workspace ?? '')}`,
         getApiKey,
       )
     },
@@ -312,14 +316,28 @@ export function createInferGlowApi(
       if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => ''))}`)
       return (await res.json()) as SpanSummary[]
     },
-    async execRun(argv: string[], workdir?: string, timeoutMs?: number) {
+    async listWorkspaces() {
+      return request<{ name: string; root: string }[]>(base(), '/v1/workspaces', getApiKey)
+    },
+    async createWorkspace(name: string, root: string) {
+      return request<{ name: string; root: string }>(base(), '/v1/workspaces', getApiKey, {
+        method: 'POST',
+        body: JSON.stringify({ name, root_dir: root }),
+      })
+    },
+    async execRun(opts) {
       return request<{ exit_code: number; stdout: string; stderr: string; duration_ms: number; truncated: boolean }>(
         base(),
         '/v1/exec',
         getApiKey,
         {
           method: 'POST',
-          body: JSON.stringify({ argv, workdir: workdir || undefined, timeout_ms: timeoutMs || undefined }),
+          body: JSON.stringify({
+            argv: opts.argv,
+            workspace: opts.workspace || undefined,
+            workdir: opts.workdir || undefined,
+            timeout_ms: opts.timeoutMs || undefined,
+          }),
         },
       )
     },

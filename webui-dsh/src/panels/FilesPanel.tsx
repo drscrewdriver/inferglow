@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../bridge/inferglow.ts'
+import { api, getActiveWorkspace } from '../bridge/inferglow.ts'
 import type { FsEntry } from '../api/client.ts'
 
 const PAGE = 200
@@ -55,10 +55,12 @@ export function FilesPanel() {
   const [recent, setRecent] = useState<{ path: string; bytes: number }[] | null>(null)
   const mounted = useRef(true)
 
+  const wsRef = useRef('')
   useEffect(() => {
     mounted.current = true
+    wsRef.current = getActiveWorkspace()
     void reload()
-    void api.producedFiles(8).then(r => {
+    void api.producedFiles(8, wsRef.current).then(r => {
       if (mounted.current) setRecent(r.files)
     }).catch(() => { /* produced list is best-effort */ })
     return () => { mounted.current = false }
@@ -70,7 +72,7 @@ export function FilesPanel() {
     setPreview(null)
     setSearchHits(null)
     try {
-      const t = await api.fsTree('')
+      const t = await api.fsTree('', wsRef.current)
       if (!mounted.current) return
       setRoot(t.root)
       setChildren(new Map([['', sortEntries(t.entries)]]))
@@ -95,7 +97,7 @@ export function FilesPanel() {
     if (!children.has(path)) {
       setPending(prev => new Set(prev).add(path))
       try {
-        const t = await api.fsTree(path)
+        const t = await api.fsTree(path, wsRef.current)
         if (!mounted.current) return
         setChildren(prev => new Map(prev).set(path, sortEntries(t.entries)))
       } catch (e) {
@@ -118,7 +120,7 @@ export function FilesPanel() {
     setPreviewLoading(true)
     setPreview(null)
     try {
-      const r = await api.fsRead(path)
+      const r = await api.fsRead(path, wsRef.current)
       if (!mounted.current) return
       if (r.content.includes('\u0000')) {
         setPreview({ path, content: '⚠ 检测到 NUL 字节（二进制内容），只读预览不支持。', bytes: r.bytes, truncated: false })
@@ -143,7 +145,7 @@ export function FilesPanel() {
     if (!q) { setSearchHits(null); return }
     setLoading(true)
     try {
-      const r = await api.fsSearch(q)
+      const r = await api.fsSearch(q, 200, wsRef.current)
       if (!mounted.current) return
       setSearchHits({ matches: r.matches, truncated: r.truncated })
     } catch (e) {

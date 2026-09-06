@@ -72,6 +72,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   const [autoScroll, setAutoScroll] = useState(store.settings.autoScroll)
   const [fontZoom, setFontZoom] = useState(FONT_ZOOM[store.settings.fontSize] ?? 1)
   const [composerTouched, setComposerTouched] = useState(store.composerTouched)
+  const [activeWs, setActiveWs] = useState(store.activeWorkspace)
 
   /* Subscribe to store */
   useEffect(() => {
@@ -83,6 +84,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
       setAutoScroll(store.settings.autoScroll)
       setFontZoom(FONT_ZOOM[store.settings.fontSize] ?? 1)
       setComposerTouched(store.composerTouched)
+      setActiveWs(store.activeWorkspace)
     })
     return unsub
   }, [activeSessionId])
@@ -124,7 +126,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M2.3 3.5a1.2 1.2 0 011.2-1.2h3l1.1 1.4h5.2a1.2 1.2 0 011.2 1.2v1h.2a1.2 1.2 0 011 1.7l-1.1 3.2a1.2 1.2 0 01-1.1.8H3.2a1.2 1.2 0 01-1.2-1.5l.3-4.6z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
                   <path opacity="0.4" d="M2.3 5.6h11.4l-1 3a.6.6 0 01-.6.4H3.9l-.7-3.4z" fill="currentColor"/>
                 </svg>
-                <span className="dsh-hero-workspace-label">rewrite-agently</span>
+                <span className="dsh-hero-workspace-label">{activeWs || 'default'}</span>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>

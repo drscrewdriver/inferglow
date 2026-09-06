@@ -39,6 +39,28 @@ export function getAgents(): Agent[] {
   return agents
 }
 
+/** Workspace registry for the selector; empty server registry → default. */
+export async function refreshWorkspaces(): Promise<void> {
+  try {
+    const list = await api.listWorkspaces()
+    store.setWorkspaces(list.length > 0 ? list : [{ name: 'default', root: '' }])
+  } catch (err) {
+    console.warn('[webui-dsh] load workspaces failed:', err)
+  }
+}
+
+/** Register a new workspace, refresh the selector, and select it. */
+export async function createWorkspace(name: string, root: string): Promise<void> {
+  await api.createWorkspace(name, root)
+  await refreshWorkspaces()
+  store.setActiveWorkspace(name)
+}
+
+/** Currently selected workspace name ('' = server default). */
+export function getActiveWorkspace(): string {
+  return store.activeWorkspace
+}
+
 /* ── Per-session usage accumulation (llm_end events) ──
  * Surfaced for the context panel's token counters; resets on reload. */
 const usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0, llmCalls: 0 }
@@ -102,6 +124,7 @@ async function refreshSessions(): Promise<boolean> {
     agents = await api.listAgents()
     const sessions = await api.listSessions()
     store.replaceAllSessions(sessions.map(toDshSession))
+    await refreshWorkspaces()
     return true
   } catch (err) {
     console.warn('[webui-dsh] bootstrap failed:', err)

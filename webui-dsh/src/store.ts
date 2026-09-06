@@ -56,7 +56,17 @@ export interface Settings {
   fontSize: 'small' | 'medium' | 'large'
 }
 
+/** One registered server workspace (GET /v1/workspaces). */
+export interface WorkspaceInfo {
+  name: string
+  root: string
+}
+
 export interface AppState {
+  /* ── Workspaces ── */
+  workspaces: WorkspaceInfo[]
+  activeWorkspace: string
+
   /* ── Sessions ── */
   sessions: Session[]
   activeSessionId: string | null
@@ -78,6 +88,10 @@ export interface AppState {
   /* ── Composer: whether the user has begun typing (sinks the input to the bottom) ── */
   composerTouched: boolean
   
+  /* ── Actions: Workspaces ── */
+  setWorkspaces: (list: WorkspaceInfo[]) => void
+  setActiveWorkspace: (name: string) => void
+
   /* ── Actions: Sessions ── */
   createSession: () => void
   selectSession: (id: string) => void
@@ -177,6 +191,8 @@ export function clearPersistedSettings(): void {
 /* ── Store implementation ── */
 const listeners = new Set<() => void>()
 const state: Omit<Partial<AppState>, 'actions'> = {
+  workspaces: [],
+  activeWorkspace: '',
   sessions: [],
   activeSessionId: null,
   sidebarCollapsed: false,
@@ -192,6 +208,22 @@ const state: Omit<Partial<AppState>, 'actions'> = {
 
 /* ── Actions ── */
 const actions: AppState = {
+  /* Workspaces */
+  get workspaces() { return state.workspaces ?? [] },
+  get activeWorkspace() { return state.activeWorkspace ?? '' },
+  setWorkspaces(list) {
+    state.workspaces = list
+    // Keep the selection valid; default to the first (server-resolved) root.
+    if (!list.some(w => w.name === state.activeWorkspace)) {
+      state.activeWorkspace = list[0]?.name ?? ''
+    }
+    notify()
+  },
+  setActiveWorkspace(name) {
+    state.activeWorkspace = name
+    notify()
+  },
+
   /* Sessions */
   get sessions() { return state.sessions ?? [] },
   get activeSessionId() { return state.activeSessionId ?? null },
