@@ -33,16 +33,18 @@ import (
 
 	"github.com/inferglow/messagebus"
 	"github.com/inferglow/server"
+	"github.com/inferglow/server/config"
 )
 
 func main() {
 	var (
-		addr      = flag.String("addr", ":8080", "Listen address")
-		apiKey    = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
-		cors      = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
-		timeout   = flag.Duration("timeout", 30*time.Second, "Request read timeout")
-		usageDir  = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
-		demoAgent = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
+		addr       = flag.String("addr", ":8080", "Listen address")
+		apiKey     = flag.String("api-key", "", "API key for Bearer auth (empty = disabled)")
+		cors       = flag.String("cors", "", "Comma-separated CORS origins (empty = disabled)")
+		timeout    = flag.Duration("timeout", 30*time.Second, "Request read timeout")
+		usageDir   = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
+		demoAgent  = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
+		configPath = flag.String("config", "", "Server YAML config: llm.providers are wired as real chat agents (one per provider, pure-chat)")
 	)
 	flag.Parse()
 
@@ -57,12 +59,30 @@ func main() {
 	}
 
 	var agentStore server.AgentStore
+	if *configPath != "" {
+		scfg, err := config.NewLoader(*configPath).Load()
+		if err != nil {
+			log.Fatalf("load config %s: %v", *configPath, err)
+		}
+		if len(scfg.LLM.Providers) > 0 {
+			store, err := server.NewConfigAgentStore(scfg.LLM)
+			if err != nil {
+				log.Fatalf("wire real agents: %v", err)
+			}
+			agentStore = store
+			log.Printf("real agents wired from config: %d provider(s)", len(scfg.LLM.Providers))
+		}
+	}
 	if *demoAgent {
-		agentStore = newDemoAgentStore()
-		log.Println("demo agent wired: id=a1 (echo)")
+		if agentStore != nil {
+			log.Println("-demo-agent ignored: real agents already wired from config")
+		} else {
+			agentStore = newDemoAgentStore()
+			log.Println("demo agent wired: id=a1 (echo)")
+		}
 	}
 
-	srv := server.NewServer(cfg, agentStore) // TODO: wire real AgentStore
+	srv := server.NewServer(cfg, agentStore)
 
 	// C-3: demo wiring of the in-memory message bus (out-of-the-box).
 	srv.SetMessageBus(messagebus.NewInMemoryMessageBus())

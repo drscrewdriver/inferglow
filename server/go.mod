@@ -36,13 +36,16 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/inferglow/action v0.0.0
+	github.com/inferglow/approval v0.0.0
 	github.com/inferglow/audit v0.0.0
 	github.com/inferglow/flow v0.0.0-00010101000000-000000000000
 	github.com/inferglow/mcpserver v0.0.0
 	github.com/inferglow/messagebus v0.0.0-00010101000000-000000000000
+	github.com/inferglow/model v0.0.0
 	github.com/inferglow/observability v0.0.0
 	github.com/inferglow/orchestrator v0.0.0-00010101000000-000000000000
 	github.com/inferglow/rag v0.0.0
+	github.com/inferglow/sandbox v0.0.0
 	github.com/inferglow/session v0.0.0
 	github.com/inferglow/storage v0.0.0-00010101000000-000000000000
 	github.com/inferglow/workspace v0.0.0-00010101000000-000000000000
@@ -63,9 +66,6 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/inferglow/approval v0.0.0 // indirect
-	github.com/inferglow/model v0.0.0 // indirect
-	github.com/inferglow/sandbox v0.0.0 // indirect
 	github.com/inferglow/schema v0.0.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

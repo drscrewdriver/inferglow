@@ -6,25 +6,42 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
+
+	agentpkg "github.com/inferglow/orchestrator/agent"
+	"github.com/inferglow/model"
 )
 
-// ToolStreamEvent represents a streaming tool call event sent via SSE.
+// ToolStreamEvent represents a streaming event sent via SSE.
+//
+// Event types: run_start, delta, reasoning, llm_start, llm_end, tool_start,
+// tool_end, run_end, error, done. delta/reasoning carry the incremental LLM
+// output in Delta (never persisted; the full reply arrives at run_end and is
+// the persistence contract). llm_end carries the provider-reported Usage.
 type ToolStreamEvent struct {
-	Type      string `json:"type"`                // "tool_start", "tool_end", "llm_start", "llm_end", "run_start", "run_end", "error"
-	ToolName  string `json:"tool_name,omitempty"` // tool name (for tool events)
-	Round     int    `json:"round,omitempty"`     // iteration round (for LLM events)
-	Tokens    int    `json:"tokens,omitempty"`    // token count (for LLM end events)
-	Error     string `json:"error,omitempty"`
-	Timestamp string `json:"timestamp"`
+	Type      string           `json:"type"`                // event kind (see above)
+	ToolName  string           `json:"tool_name,omitempty"` // tool name (for tool events); full reply on run_end (contract quirk)
+	Round     int              `json:"round,omitempty"`     // iteration round (for LLM events)
+	Tokens    int              `json:"tokens,omitempty"`    // token count (for LLM end events)
+	Error     string           `json:"error,omitempty"`
+	Delta     string           `json:"delta,omitempty"`     // incremental text for delta/reasoning
+	Usage     *model.UsageInfo `json:"usage,omitempty"`     // provider-reported usage (llm_end)
+	Timestamp string           `json:"timestamp"`
+}
+
+// CallbacksRunner is implemented by agents able to take per-run options
+// (ConfigAgent.RunWithCallbacks forwarding to *agent.Agent's variadic Run).
+// A distinct method name is required: a single type cannot provide both
+// Run(ctx,msg) and Run(ctx,msg,...opts) under the same name. handleStreamRun
+// injects SSE streaming callbacks through it; plain AgentLike agents (demo
+// echo) take the legacy no-callbacks path.
+type CallbacksRunner interface {
+	RunWithCallbacks(ctx context.Context, userMessage string, opts ...agentpkg.RunOption) (string, error)
 }
 
 // handleStreamRun handles POST /v1/agents/{id}/stream-run — streaming agent
-// execution with real-time tool call feedback via SSE.
-//
-// Unlike handleStream (which blocks then sends), this handler creates
-// AgentCallbacks that emit SSE events as the agent progresses through
-// LLM calls and tool executions.
+// execution with real-time token deltas and tool call feedback via SSE.
 func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	agent := s.agentStore.Get(id)
@@ -64,53 +81,44 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the user message up-front when a session is attached.
 	s.recordMessage(req.SessionID, MessageRoleUser, req.Message, "", "")
 
-	// recordStreamEvent persists tool/assistant messages from SSE events.
-	// It is invoked for every event written to the client; tool_start is
-	// skipped so the history only carries settled tool records.
-	recordStreamEvent := func(ev ToolStreamEvent) {
-		switch ev.Type {
-		case "tool_end":
-			status := "ok"
-			if ev.Error != "" {
-				status = "error"
-			}
-			s.recordMessage(req.SessionID, MessageRoleTool, "", ev.ToolName, status)
-		case "run_end":
-			// NOTE: the run_end event carries the full assistant reply in
-			// its ToolName field (contract quirk of stream-run).
-			if ev.ToolName != "" {
-				s.recordMessage(req.SessionID, MessageRoleAssistant, ev.ToolName, "", "")
-			}
-		}
-	}
-
-
-	// Create a channel for streaming events.
-	eventCh := make(chan ToolStreamEvent, 32)
+	// Channel for streaming events; generously buffered so token-delta
+	// streams do not stall the agent goroutine on a slow client.
+	eventCh := make(chan ToolStreamEvent, 256)
 	doneCh := make(chan struct{})
 
-	// Build callbacks that push events to the channel.
-	cb := &streamCallbacks{
-		eventCh: eventCh,
-	}
+	sc := newStreamCallbacks(eventCh)
+	runner, supportsCallbacks := agent.(CallbacksRunner)
 
-	// Run agent in background goroutine.
+	// Run agent in background goroutine. Persistence of tool/assistant
+	// messages happens here — after the run settles — NOT in the client
+	// write loop, so an aborted or dropped connection no longer truncates
+	// the session history.
 	go func() {
 		defer close(doneCh)
 		defer close(eventCh)
 
-		// Emit run_start.
-		cb.emit("run_start", "", 0, 0, "")
-
-		// Execute agent (blocking).
-		resp, err := agent.Run(r.Context(), req.Message)
-		if err != nil {
-			cb.emit("error", "", 0, 0, err.Error())
-			return
+		var resp string
+		var runErr error
+		if supportsCallbacks {
+			cbs := mergeCallbacks(sc.agentCallbacks(), persistedCallbacks(agent))
+			resp, runErr = runner.RunWithCallbacks(r.Context(), req.Message, agentpkg.WithCallbacks(cbs))
+		} else {
+			// Demo/legacy agents expose no callback surface.
+			sc.emit("run_start", "", 0, 0, "")
+			resp, runErr = agent.Run(r.Context(), req.Message)
 		}
 
-		// Emit run_end with response.
-		cb.emit("run_end", resp, 0, 0, "")
+		if runErr == nil {
+			sc.persistMessages(s, req.SessionID, resp)
+		}
+
+		if runErr != nil {
+			sc.emit("error", "", 0, 0, runErr.Error())
+			return
+		}
+		// Contract quirk kept for compatibility: run_end carries the full
+		// assistant reply in its ToolName field.
+		sc.emit("run_end", resp, 0, 0, "")
 	}()
 
 	// Stream events to client.
@@ -127,13 +135,11 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			}
 			writeSSEEvent(w, ev.Type, ev)
 			flusher.Flush()
-			recordStreamEvent(ev)
 		case <-doneCh:
 			// Drain remaining events.
 			for ev := range eventCh {
 				writeSSEEvent(w, ev.Type, ev)
 				flusher.Flush()
-				recordStreamEvent(ev)
 			}
 			writeSSEEvent(w, "done", map[string]string{"agent_id": id})
 			flusher.Flush()
@@ -142,9 +148,22 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// streamCallbacks bridges AgentCallbacks to SSE events.
+// streamCallbacks bridges agentpkg.AgentCallbacks to SSE events and collects
+// the settled records persisted once the run completes.
 type streamCallbacks struct {
 	eventCh chan<- ToolStreamEvent
+
+	mu    sync.Mutex
+	tools []toolRecord
+}
+
+type toolRecord struct {
+	name   string
+	status string // "ok" | "error"
+}
+
+func newStreamCallbacks(eventCh chan<- ToolStreamEvent) *streamCallbacks {
+	return &streamCallbacks{eventCh: eventCh}
 }
 
 func (c *streamCallbacks) emit(typ, toolName string, round, tokens int, errMsg string) {
@@ -156,47 +175,186 @@ func (c *streamCallbacks) emit(typ, toolName string, round, tokens int, errMsg s
 		Error:     errMsg,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+	c.send(ev)
+}
+
+func (c *streamCallbacks) send(ev ToolStreamEvent) {
 	select {
 	case c.eventCh <- ev:
 	default:
-		// Drop if channel full (non-blocking).
+		// Drop if channel full (non-blocking); delta streams self-heal at
+		// run_end, which carries the full reply for client-side reconcile.
 	}
 }
 
-// OnRunStart implements the agent callback interface.
-func (c *streamCallbacks) OnRunStart(ctx context.Context, userMessage string) {
-	c.emit("run_start", "", 0, 0, "")
-}
-
-// OnRunEnd implements the agent callback interface.
-func (c *streamCallbacks) OnRunEnd(ctx context.Context, response string, err error) {
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
+// agentCallbacks renders the SSE bridging as an agentpkg.AgentCallbacks for
+// injection via WithCallbacks.
+func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
+	return &agentpkg.AgentCallbacks{
+		OnRunStart: func(ctx context.Context, userMessage string) {
+			c.emit("run_start", "", 0, 0, "")
+		},
+		OnLLMCallStart: func(ctx context.Context, round int) {
+			c.emit("llm_start", "", round, 0, "")
+		},
+		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
+			c.send(ToolStreamEvent{
+				Type:      "llm_end",
+				Round:     round,
+				Tokens:    tokens,
+				Usage:     usage,
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+		},
+		OnToolCallStart: func(ctx context.Context, toolName string) {
+			c.emit("tool_start", toolName, 0, 0, "")
+		},
+		OnToolCallEnd: func(ctx context.Context, toolName string, err error) {
+			status := "ok"
+			errMsg := ""
+			if err != nil {
+				status = "error"
+				errMsg = err.Error()
+			}
+			c.mu.Lock()
+			c.tools = append(c.tools, toolRecord{name: toolName, status: status})
+			c.mu.Unlock()
+			c.emit("tool_end", toolName, 0, 0, errMsg)
+		},
+		OnToken: func(ctx context.Context, delta string) {
+			c.send(ToolStreamEvent{
+				Type:      "delta",
+				Delta:     delta,
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+		},
+		OnReasoning: func(ctx context.Context, delta string) {
+			c.send(ToolStreamEvent{
+				Type:      "reasoning",
+				Delta:     delta,
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+		},
 	}
-	c.emit("run_end", response, 0, 0, errMsg)
 }
 
-// OnLLMCallStart implements the agent callback interface.
-func (c *streamCallbacks) OnLLMCallStart(ctx context.Context, round int) {
-	c.emit("llm_start", "", round, 0, "")
-}
-
-// OnLLMCallEnd implements the agent callback interface.
-func (c *streamCallbacks) OnLLMCallEnd(ctx context.Context, round int, tokens int) {
-	c.emit("llm_end", "", round, tokens, "")
-}
-
-// OnToolCallStart implements the agent callback interface.
-func (c *streamCallbacks) OnToolCallStart(ctx context.Context, toolName string) {
-	c.emit("tool_start", toolName, 0, 0, "")
-}
-
-// OnToolCallEnd implements the agent callback interface.
-func (c *streamCallbacks) OnToolCallEnd(ctx context.Context, toolName string, err error) {
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
+// persistMessages records the settled tool calls and the assistant reply for
+// the session. Called once per run from the agent goroutine.
+func (c *streamCallbacks) persistMessages(s *Server, sessionID, reply string) {
+	if sessionID == "" {
+		return
 	}
-	c.emit("tool_end", toolName, 0, 0, errMsg)
+	c.mu.Lock()
+	tools := append([]toolRecord(nil), c.tools...)
+	c.mu.Unlock()
+	for _, t := range tools {
+		s.recordMessage(sessionID, MessageRoleTool, "", t.name, t.status)
+	}
+	if reply != "" {
+		s.recordMessage(sessionID, MessageRoleAssistant, reply, "", "")
+	}
+}
+
+// persistedCallbacks reads the agent's construction-time callbacks so run-level
+// injection does not replace them (ConfigAgent promotes *agent.Agent.Callbacks).
+func persistedCallbacks(agent AgentLike) *agentpkg.AgentCallbacks {
+	type callbacksReader interface{ Callbacks() *agentpkg.AgentCallbacks }
+	if cr, ok := agent.(callbacksReader); ok {
+		return cr.Callbacks()
+	}
+	return nil
+}
+
+// mergeCallbacks chains base behind stream for every field stream sets, and
+// passes base-only fields (run-end hooks, approval, tool interventions,
+// compression) through untouched. Safe with either side nil.
+func mergeCallbacks(stream, base *agentpkg.AgentCallbacks) *agentpkg.AgentCallbacks {
+	if stream == nil {
+		return base
+	}
+	if base == nil {
+		return stream
+	}
+	m := *stream
+	chainStart := func(dst func(ctx context.Context, msg string), add func(ctx context.Context, msg string)) func(context.Context, string) {
+		return func(ctx context.Context, msg string) {
+			if dst != nil {
+				dst(ctx, msg)
+			}
+			add(ctx, msg)
+		}
+	}
+	if base.OnRunStart != nil {
+		m.OnRunStart = chainStart(m.OnRunStart, base.OnRunStart)
+	}
+	if base.OnLLMCallStart != nil {
+		prev := m.OnLLMCallStart
+		m.OnLLMCallStart = func(ctx context.Context, round int) {
+			if prev != nil {
+				prev(ctx, round)
+			}
+			base.OnLLMCallStart(ctx, round)
+		}
+	}
+	if base.OnLLMCallEnd != nil {
+		prev := m.OnLLMCallEnd
+		m.OnLLMCallEnd = func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
+			if prev != nil {
+				prev(ctx, round, tokens, usage)
+			}
+			base.OnLLMCallEnd(ctx, round, tokens, usage)
+		}
+	}
+	if base.OnToolCallStart != nil {
+		prev := m.OnToolCallStart
+		m.OnToolCallStart = func(ctx context.Context, toolName string) {
+			if prev != nil {
+				prev(ctx, toolName)
+			}
+			base.OnToolCallStart(ctx, toolName)
+		}
+	}
+	if base.OnToolCallEnd != nil {
+		prev := m.OnToolCallEnd
+		m.OnToolCallEnd = func(ctx context.Context, toolName string, err error) {
+			if prev != nil {
+				prev(ctx, toolName, err)
+			}
+			base.OnToolCallEnd(ctx, toolName, err)
+		}
+	}
+	if base.OnToken != nil {
+		prev := m.OnToken
+		m.OnToken = func(ctx context.Context, delta string) {
+			if prev != nil {
+				prev(ctx, delta)
+			}
+			base.OnToken(ctx, delta)
+		}
+	}
+	if base.OnReasoning != nil {
+		prev := m.OnReasoning
+		m.OnReasoning = func(ctx context.Context, delta string) {
+			if prev != nil {
+				prev(ctx, delta)
+			}
+			base.OnReasoning(ctx, delta)
+		}
+	}
+	if m.OnRunEnd == nil {
+		m.OnRunEnd = base.OnRunEnd
+	}
+	if m.OnApprovalRequired == nil {
+		m.OnApprovalRequired = base.OnApprovalRequired
+	}
+	if m.OnCompression == nil {
+		m.OnCompression = base.OnCompression
+	}
+	if m.PreToolCall == nil {
+		m.PreToolCall = base.PreToolCall
+	}
+	if m.PostToolCall == nil {
+		m.PostToolCall = base.PostToolCall
+	}
+	return &m
 }
