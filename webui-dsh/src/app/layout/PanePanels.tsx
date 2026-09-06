@@ -7,6 +7,7 @@
 
 import type { TabKind } from './PaneEmptyCards.tsx'
 import { FilesPanel } from '../../panels/FilesPanel.tsx'
+import { BrowserPanel } from '../../panels/BrowserPanel.tsx'
 
 /* ── 1) 文件树 (Files) — real workspace tree (panels/FilesPanel) ── */
 function FilesTree() {
@@ -119,24 +120,7 @@ function SidechatPanel() {
   )
 }
 
-/* ── 6) 浏览器 (空态) ── */
-function BrowserPanel() {
-  return (
-    <div className="dsh-pane dsh-pane-browser">
-      <div className="dsh-pane-browser-bar">
-        <button type="button" className="dsh-pane-iconbtn" disabled>◀</button>
-        <button type="button" className="dsh-pane-iconbtn" disabled>▶</button>
-        <button type="button" className="dsh-pane-iconbtn">⟳</button>
-        <input className="dsh-pane-browser-url" placeholder="输入网址，例如 example.com" />
-        <button type="button" className="dsh-pane-linkbtn">前往</button>
-      </div>
-      <div className="dsh-pane-browser-sandbox">
-        沙箱模式：已启用 · 页面无法访问界面数据与本地文件，登录态与第三方 Cookie 可能不可用
-      </div>
-      <div className="dsh-pane-browser-start">输入网址开始浏览（沙箱模式）</div>
-    </div>
-  )
-}
+/* ── 6) 浏览器 — real sandboxed iframe (panels/BrowserPanel) ── */
 
 /* ── Dispatcher ── */
 export function PaneContent({ kind }: { kind: TabKind }) {
