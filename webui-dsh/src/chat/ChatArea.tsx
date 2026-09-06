@@ -154,9 +154,9 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   return (
     <div className="dsh-chat-area">
       {convTab === '轨迹' ? (
-        <TracePanel />
+        <TracePanel session={activeSessionId} />
       ) : convTab === '上下文' ? (
-        <ContextPanel />
+        <ContextPanel session={activeSessionId} />
       ) : (
         <>
           {/* Message list — content width wrapped in a draggable body band */}

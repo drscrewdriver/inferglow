@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/inferglow/messagebus"
+	"github.com/inferglow/observability"
 	"github.com/inferglow/server"
 	"github.com/inferglow/server/config"
 )
@@ -86,6 +87,11 @@ func main() {
 
 	// C-3: demo wiring of the in-memory message bus (out-of-the-box).
 	srv.SetMessageBus(messagebus.NewInMemoryMessageBus())
+
+	// OT-13: bounded in-memory span ring so /v1/observability/* and the
+	// webui-dsh 轨迹 panel have real data. Spans are recorded by the
+	// stream-run bridge (agent/llm/tool lifecycles).
+	srv.SetSpanCollector(observability.NewSpanCollector(4096))
 
 	// C-4~C-7: default in-memory wiring for the management backend, zero-config.
 	srv.SetSessionStore(server.NewSessionStore())

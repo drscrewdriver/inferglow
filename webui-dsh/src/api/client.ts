@@ -65,6 +65,16 @@ export interface ProducedFile {
   modified: string
 }
 
+/** Mirrors observability.SpanSummary (duration in nanoseconds). */
+export interface SpanSummary {
+  name: string
+  kind: 'llm' | 'tool' | 'agent' | 'compress' | 'retrieval' | 'internal'
+  duration_ns: number
+  end_time: string
+  has_error: boolean
+  attrs?: Record<string, string>
+}
+
 export interface InferGlowApi {
   health(): Promise<boolean>
   listAgents(): Promise<Agent[]>
@@ -80,6 +90,8 @@ export interface InferGlowApi {
   fsSearch(q: string, limit?: number): Promise<{ query: string; matches: string[]; truncated: boolean }>
   /** Most recently modified files under the workspace. */
   producedFiles(limit?: number): Promise<{ files: ProducedFile[]; count: number }>
+  /** Recent finished spans (bare JSON array; 503 when collector disabled). */
+  spans(limit?: number): Promise<SpanSummary[]>
   sendChat(opts: SendChatOptions): Promise<void>
   /** Abort the in-flight stream-run request, if any. */
   cancel(): void
@@ -266,6 +278,13 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
         trimBase(getBase()),
         `/v1/produced-files?limit=${limit}`,
       )
+    },
+    async spans(limit = 500) {
+      // The endpoint responds with a bare JSON array; a 503 body means the
+      // collector is not wired on the server (面板显示"观测未启用"空态).
+      const res = await fetch(`${trimBase(getBase())}/v1/observability/spans?limit=${limit}`)
+      if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => ''))}`)
+      return (await res.json()) as SpanSummary[]
     },
     async sendChat(opts) {
       const streamed = await sendChatSSE(opts)

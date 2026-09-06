@@ -5,12 +5,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	agentpkg "github.com/inferglow/orchestrator/agent"
 	"github.com/inferglow/model"
+	"github.com/inferglow/observability"
 )
 
 // ToolStreamEvent represents a streaming event sent via SSE.
@@ -86,7 +88,7 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	eventCh := make(chan ToolStreamEvent, 256)
 	doneCh := make(chan struct{})
 
-	sc := newStreamCallbacks(eventCh)
+	sc := newStreamCallbacks(eventCh, s.spanCollector, req.SessionID)
 	runner, supportsCallbacks := agent.(CallbacksRunner)
 
 	// Run agent in background goroutine. Persistence of tool/assistant
@@ -99,6 +101,7 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 
 		var resp string
 		var runErr error
+		runStart := time.Now()
 		if supportsCallbacks {
 			cbs := mergeCallbacks(sc.agentCallbacks(), persistedCallbacks(agent))
 			resp, runErr = runner.RunWithCallbacks(r.Context(), req.Message, agentpkg.WithCallbacks(cbs))
@@ -107,6 +110,8 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			sc.emit("run_start", "", 0, 0, "")
 			resp, runErr = agent.Run(r.Context(), req.Message)
 		}
+		sc.recordSpan(observability.SpanKindAgent, "inferglow.agent.run", runStart, runErr != nil,
+			map[string]string{"inferglow.agent_id": id})
 
 		if runErr == nil {
 			sc.persistMessages(s, req.SessionID, resp)
@@ -148,10 +153,16 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// streamCallbacks bridges agentpkg.AgentCallbacks to SSE events and collects
-// the settled records persisted once the run completes.
+// streamCallbacks bridges agentpkg.AgentCallbacks to SSE events, collects the
+// settled records persisted once the run completes, and records observability
+// spans (plain SpanSummary, no OTel round-trip) for the 轨迹 panel.
 type streamCallbacks struct {
-	eventCh chan<- ToolStreamEvent
+	eventCh    chan<- ToolStreamEvent
+	collector  *observability.SpanCollector
+	sessionID  string
+	runStart   time.Time
+	llmStart   time.Time
+	toolStarts map[string]time.Time
 
 	mu    sync.Mutex
 	tools []toolRecord
@@ -162,8 +173,13 @@ type toolRecord struct {
 	status string // "ok" | "error"
 }
 
-func newStreamCallbacks(eventCh chan<- ToolStreamEvent) *streamCallbacks {
-	return &streamCallbacks{eventCh: eventCh}
+func newStreamCallbacks(eventCh chan<- ToolStreamEvent, collector *observability.SpanCollector, sessionID string) *streamCallbacks {
+	return &streamCallbacks{
+		eventCh:    eventCh,
+		collector:  collector,
+		sessionID:  sessionID,
+		toolStarts: make(map[string]time.Time),
+	}
 }
 
 func (c *streamCallbacks) emit(typ, toolName string, round, tokens int, errMsg string) {
@@ -187,17 +203,52 @@ func (c *streamCallbacks) send(ev ToolStreamEvent) {
 	}
 }
 
+// recordSpan pushes a finished span into the collector when one is wired.
+func (c *streamCallbacks) recordSpan(kind observability.SpanKind, name string, start time.Time, hasError bool, extra map[string]string) {
+	if c.collector == nil {
+		return
+	}
+	attrs := map[string]string{}
+	if c.sessionID != "" {
+		attrs["inferglow.session_id"] = c.sessionID
+	}
+	for k, v := range extra {
+		attrs[k] = v
+	}
+	c.collector.OnEnd(observability.SpanSummary{
+		Name:     name,
+		Kind:     kind,
+		Duration: time.Since(start),
+		EndTime:  time.Now().UTC(),
+		HasError: hasError,
+		Attrs:    attrs,
+	})
+}
+
 // agentCallbacks renders the SSE bridging as an agentpkg.AgentCallbacks for
-// injection via WithCallbacks.
+// injection via WithCallbacks. Lifecycle timing also feeds the span recorder.
 func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 	return &agentpkg.AgentCallbacks{
 		OnRunStart: func(ctx context.Context, userMessage string) {
+			c.mu.Lock()
+			c.runStart = time.Now()
+			c.mu.Unlock()
 			c.emit("run_start", "", 0, 0, "")
 		},
 		OnLLMCallStart: func(ctx context.Context, round int) {
+			c.mu.Lock()
+			c.llmStart = time.Now()
+			c.mu.Unlock()
 			c.emit("llm_start", "", round, 0, "")
 		},
 		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
+			c.mu.Lock()
+			start := c.llmStart
+			c.llmStart = time.Time{}
+			c.mu.Unlock()
+			if !start.IsZero() {
+				c.recordSpan(observability.SpanKindLLM, fmt.Sprintf("inferglow.llm.call.%d", round), start, false, nil)
+			}
 			c.send(ToolStreamEvent{
 				Type:      "llm_end",
 				Round:     round,
@@ -207,6 +258,12 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 			})
 		},
 		OnToolCallStart: func(ctx context.Context, toolName string) {
+			c.mu.Lock()
+			if c.toolStarts == nil {
+				c.toolStarts = make(map[string]time.Time)
+			}
+			c.toolStarts[toolName] = time.Now()
+			c.mu.Unlock()
 			c.emit("tool_start", toolName, 0, 0, "")
 		},
 		OnToolCallEnd: func(ctx context.Context, toolName string, err error) {
@@ -217,8 +274,13 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 				errMsg = err.Error()
 			}
 			c.mu.Lock()
+			start := c.toolStarts[toolName]
+			delete(c.toolStarts, toolName)
 			c.tools = append(c.tools, toolRecord{name: toolName, status: status})
 			c.mu.Unlock()
+			if !start.IsZero() {
+				c.recordSpan(observability.SpanKindTool, "inferglow.tool."+toolName, start, err != nil, nil)
+			}
 			c.emit("tool_end", toolName, 0, 0, errMsg)
 		},
 		OnToken: func(ctx context.Context, delta string) {

@@ -28,6 +28,7 @@ export interface ChatMessage {
   content: string
   tool_name?: string
   tool_call_id?: string
+  tool_status?: string
   created_at: string
 }
 
