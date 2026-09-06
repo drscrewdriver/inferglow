@@ -75,6 +75,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   const [composerTouched, setComposerTouched] = useState(store.composerTouched)
   const [activeWs, setActiveWs] = useState(store.activeWorkspace)
   const [heroPickerOpen, setHeroPickerOpen] = useState(false)
+  const heroPickerAnchorRef = useRef<HTMLSpanElement | null>(null)
 
   /* Subscribe to store */
   useEffect(() => {
@@ -133,7 +134,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
-              <span style={{ position: 'relative', display: 'inline-flex' }}>
+              <span ref={heroPickerAnchorRef} style={{ position: 'relative', display: 'inline-flex' }}>
               <button
                 type="button"
                 className="dsh-hero-agent-btn"
@@ -153,7 +154,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
-              {heroPickerOpen && <AgentPicker onClose={() => setHeroPickerOpen(false)} />}
+              {heroPickerOpen && <AgentPicker anchor={heroPickerAnchorRef.current} onClose={() => setHeroPickerOpen(false)} />}
               </span>
             </div>
             <ChatInput sessionId={activeSessionId} />

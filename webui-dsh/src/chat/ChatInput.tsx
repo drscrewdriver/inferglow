@@ -26,6 +26,7 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [modelLabel, setModelLabel] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const pickerAnchorRef = useRef<HTMLSpanElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   /* Model chip reflects the resolved agent (settings.model / first agent). */
@@ -244,7 +245,7 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
               <span className="dsh-composer-freeze-label">冻结会话</span>
             </button>
             <span className="dsh-composer-status" title="周末 · Asia/Shanghai · 周末模式">周末</span>
-            <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <span ref={pickerAnchorRef} style={{ position: 'relative', display: 'inline-flex' }}>
             <button
               className="dsh-composer-model"
               type="button"
@@ -260,7 +261,7 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
                 <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            {pickerOpen && <AgentPicker onClose={() => setPickerOpen(false)} />}
+            {pickerOpen && <AgentPicker anchor={pickerAnchorRef.current} onClose={() => setPickerOpen(false)} />}
             </span>
             {isStreaming ? (
               <button
