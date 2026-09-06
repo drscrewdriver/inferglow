@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
-	agentpkg "github.com/inferglow/orchestrator/agent"
 	"github.com/inferglow/model"
 	"github.com/inferglow/observability"
+	"github.com/inferglow/orchestrator/actionruntime"
+	agentpkg "github.com/inferglow/orchestrator/agent"
 )
 
 // ToolStreamEvent represents a streaming event sent via SSE.
@@ -27,8 +29,8 @@ type ToolStreamEvent struct {
 	Round     int              `json:"round,omitempty"`     // iteration round (for LLM events)
 	Tokens    int              `json:"tokens,omitempty"`    // token count (for LLM end events)
 	Error     string           `json:"error,omitempty"`
-	Delta     string           `json:"delta,omitempty"`     // incremental text for delta/reasoning
-	Usage     *model.UsageInfo `json:"usage,omitempty"`     // provider-reported usage (llm_end)
+	Delta     string           `json:"delta,omitempty"` // incremental text for delta/reasoning
+	Usage     *model.UsageInfo `json:"usage,omitempty"` // provider-reported usage (llm_end)
 	Timestamp string           `json:"timestamp"`
 }
 
@@ -114,7 +116,7 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"inferglow.agent_id": id})
 
 		if runErr == nil {
-			sc.persistMessages(s, req.SessionID, resp)
+			sc.persistMessages(s, req.SessionID, sanitizeAgentReply(resp))
 		}
 
 		if runErr != nil {
@@ -122,8 +124,10 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Contract quirk kept for compatibility: run_end carries the full
-		// assistant reply in its ToolName field.
-		sc.emit("run_end", resp, 0, 0, "")
+		// assistant reply in its ToolName field. Sanitized so an LLM that
+		// answers in the planning-decision envelope doesn't leak raw JSON
+		// into the transcript.
+		sc.emit("run_end", sanitizeAgentReply(resp), 0, 0, "")
 	}()
 
 	// Stream events to client.
@@ -166,6 +170,16 @@ type streamCallbacks struct {
 
 	mu    sync.Mutex
 	tools []toolRecord
+
+	// Decision-envelope gating (per LLM round). Some served models answer in
+	// the framework's planning-decision JSON ({"action_calls":[...],
+	// "final_response":"..."}) — raw deltas would render as JSON soup in the
+	// chat. While a round's output still looks like a potential envelope
+	// (first non-space char `{` or a code fence), deltas are buffered; the
+	// verdict happens at OnLLMCallEnd: envelope → emit extracted
+	// final_response, anything else → flush the raw buffer unchanged.
+	roundBuf strings.Builder
+	roundRaw bool // true once the round is decided plain (pass-through)
 }
 
 type toolRecord struct {
@@ -238,14 +252,36 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 		OnLLMCallStart: func(ctx context.Context, round int) {
 			c.mu.Lock()
 			c.llmStart = time.Now()
+			c.roundBuf.Reset()
+			c.roundRaw = false
 			c.mu.Unlock()
 			c.emit("llm_start", "", round, 0, "")
 		},
 		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
+			// Resolve the round's buffered output BEFORE llm_end so the
+			// extracted reply lands on the client ahead of the round marker.
 			c.mu.Lock()
+			buf := c.roundBuf.String()
+			wasRaw := c.roundRaw
+			c.roundBuf.Reset()
+			c.roundRaw = false
 			start := c.llmStart
 			c.llmStart = time.Time{}
 			c.mu.Unlock()
+			if !wasRaw {
+				// Verdict time: envelope → emit its user-facing text (the
+				// extracted final_response, or the tool-call notice); not an
+				// envelope → flush raw so nothing the model said is lost.
+				if text, ok := envelopeDisplayText(buf); ok {
+					if text != "" {
+						c.send(ToolStreamEvent{Type: "delta", Delta: text, Round: round,
+							Timestamp: time.Now().UTC().Format(time.RFC3339)})
+					}
+				} else if strings.TrimSpace(buf) != "" {
+					c.send(ToolStreamEvent{Type: "delta", Delta: buf, Round: round,
+						Timestamp: time.Now().UTC().Format(time.RFC3339)})
+				}
+			}
 			if !start.IsZero() {
 				c.recordSpan(observability.SpanKindLLM, fmt.Sprintf("inferglow.llm.call.%d", round), start, false, nil)
 			}
@@ -284,9 +320,33 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 			c.emit("tool_end", toolName, 0, 0, errMsg)
 		},
 		OnToken: func(ctx context.Context, delta string) {
+			c.mu.Lock()
+			if c.roundRaw {
+				c.mu.Unlock()
+				c.send(ToolStreamEvent{
+					Type:      "delta",
+					Delta:     delta,
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+				})
+				return
+			}
+			c.roundBuf.WriteString(delta)
+			buf := c.roundBuf.String()
+			trimmed := strings.TrimLeft(buf, " \t\r\n")
+			if trimmed == "" {
+				c.mu.Unlock()
+				return
+			}
+			if trimmed[0] == '{' || strings.HasPrefix(trimmed, "```") {
+				// Potential decision envelope — hold until the round ends.
+				c.mu.Unlock()
+				return
+			}
+			c.roundRaw = true
+			c.mu.Unlock()
 			c.send(ToolStreamEvent{
 				Type:      "delta",
-				Delta:     delta,
+				Delta:     buf,
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			})
 		},
@@ -302,6 +362,88 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 
 // persistMessages records the settled tool calls and the assistant reply for
 // the session. Called once per run from the agent goroutine.
+// agentDecision is the lenient view of the framework's planning-decision
+// envelope. Only final_response being present as a JSON string is required —
+// served models routinely omit next_action, which fails the engine's strict
+// ParseDecision and leaves the raw JSON as the run's reply.
+type agentDecision struct {
+	nextAction string
+	toolNames  []string
+	final      *string
+}
+
+// extractAgentDecision reports whether s is a planning-decision envelope
+// ({"next_action":...,"action_calls":[...],"final_response":"..."}) and
+// returns its fields. Fences and trailing-comma noise are repaired first
+// (same pipeline the engine uses before strict parsing).
+func extractAgentDecision(s string) (agentDecision, bool) {
+	t := strings.TrimSpace(s)
+	if t == "" || (t[0] != '{' && !strings.HasPrefix(t, "```")) {
+		return agentDecision{}, false
+	}
+	repaired := actionruntime.RepairLLMJSON(t)
+	var probe struct {
+		NextAction  string `json:"next_action"`
+		ActionCalls []struct {
+			Name string `json:"name"`
+		} `json:"action_calls"`
+		FinalResponse *string `json:"final_response"`
+	}
+	if err := json.Unmarshal([]byte(repaired), &probe); err != nil {
+		return agentDecision{}, false
+	}
+	// Envelope shape requires at least one of the three decision fields; a
+	// random JSON object without any is not a decision.
+	if probe.NextAction == "" && probe.ActionCalls == nil && probe.FinalResponse == nil {
+		return agentDecision{}, false
+	}
+	d := agentDecision{nextAction: probe.NextAction, final: probe.FinalResponse}
+	for _, c := range probe.ActionCalls {
+		if c.Name != "" {
+			d.toolNames = append(d.toolNames, c.Name)
+		}
+	}
+	return d, true
+}
+
+// envelopeDisplayText is the streaming-side twin of sanitizeAgentReply: the
+// user-facing text for an envelope-shaped round output. ok=false means s is
+// not an envelope (caller flushes it raw).
+func envelopeDisplayText(s string) (string, bool) {
+	d, ok := extractAgentDecision(s)
+	if !ok {
+		return "", false
+	}
+	if d.final != nil && *d.final != "" {
+		return *d.final, true
+	}
+	if len(d.toolNames) > 0 {
+		return fmt.Sprintf("（模型请求调用工具：%s — 当前会话为纯聊天模式，未启用工具执行，因此没有文本回复）",
+			strings.Join(d.toolNames, ", ")), true
+	}
+	return "", true
+}
+
+// sanitizeAgentReply turns a run reply that arrived as a decision envelope
+// into user-facing text: final_response verbatim; an execute-only decision
+// (action_calls without text) as an honest notice — the pure-chat session
+// has no tool runtime, so there is nothing else to show. Plain replies pass
+// through unchanged.
+func sanitizeAgentReply(reply string) string {
+	d, ok := extractAgentDecision(reply)
+	if !ok {
+		return reply
+	}
+	if d.final != nil && *d.final != "" {
+		return *d.final
+	}
+	if len(d.toolNames) > 0 {
+		return fmt.Sprintf("（模型请求调用工具：%s — 当前会话为纯聊天模式，未启用工具执行，因此没有文本回复）",
+			strings.Join(d.toolNames, ", "))
+	}
+	return ""
+}
+
 func (c *streamCallbacks) persistMessages(s *Server, sessionID, reply string) {
 	if sessionID == "" {
 		return
@@ -320,7 +462,9 @@ func (c *streamCallbacks) persistMessages(s *Server, sessionID, reply string) {
 // persistedCallbacks reads the agent's construction-time callbacks so run-level
 // injection does not replace them (ConfigAgent promotes *agent.Agent.Callbacks).
 func persistedCallbacks(agent AgentLike) *agentpkg.AgentCallbacks {
-	type callbacksReader interface{ Callbacks() *agentpkg.AgentCallbacks }
+	type callbacksReader interface {
+		Callbacks() *agentpkg.AgentCallbacks
+	}
 	if cr, ok := agent.(callbacksReader); ok {
 		return cr.Callbacks()
 	}
