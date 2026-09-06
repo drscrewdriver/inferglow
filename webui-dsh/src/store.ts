@@ -32,6 +32,8 @@ export interface Session {
   messages: Message[]
   createdAt: number
   updatedAt: number
+  /** Backend agent this session is bound to (from agent_id, when known). */
+  agentId?: string
   /** True once history has been fetched from the backend (InferGlow bridge). */
   messagesLoaded?: boolean
   /** True for sessions that only exist locally and are not yet persisted. */

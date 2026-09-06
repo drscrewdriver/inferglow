@@ -40,6 +40,7 @@ export function getAgents(): Agent[] {
 function toDshSession(s: {
   id: string
   title: string
+  agent_id?: string
   created_at: string
   updated_at: string
 }): Session {
@@ -49,6 +50,7 @@ function toDshSession(s: {
     messages: [],
     createdAt: Date.parse(s.created_at) || Date.now(),
     updatedAt: Date.parse(s.updated_at) || Date.now(),
+    agentId: s.agent_id || undefined,
     messagesLoaded: false,
     localOnly: false,
   }

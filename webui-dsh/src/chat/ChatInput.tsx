@@ -76,7 +76,9 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
       textareaRef.current.style.height = 'auto'
     }
 
-    const agentId = getActiveAgentId()
+    // Prefer the agent the session is bound to (mirrors the host webui),
+    // falling back to the settings/first-agent resolution.
+    const agentId = store.sessions.find(s => s.id === sid)?.agentId || getActiveAgentId()
     if (!agentId) {
       store.updateMessage(sid, assistantMsg.id, {
         status: 'error' as const,
