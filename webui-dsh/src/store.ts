@@ -40,13 +40,19 @@ export interface Session {
   localOnly?: boolean
 }
 
+export type ThemeSetting = 'dark' | 'light' | 'system'
+
 export interface Settings {
-  darkMode: boolean
+  /** 'system' follows prefers-color-scheme (matchMedia). */
+  theme: ThemeSetting
   /** InferGlow agent id backing new sessions (resolved from GET /v1/agents). */
   model: string
   /** Backend base URL; empty = same origin (vite proxy / go:embed host). */
   apiEndpoint: string
+  /** Bearer token for /v1/* when the server runs with -api-key. */
+  apiKey: string
   autoScroll: boolean
+  /** Chat area zoom (real effect: applied to the conversation container). */
   fontSize: 'small' | 'medium' | 'large'
 }
 
@@ -118,23 +124,36 @@ function genTitle(content: string): string {
 
 /* ── Default settings ── */
 const defaultSettings: Settings = {
-  darkMode: true,
+  theme: 'dark',
   model: '',
   apiEndpoint: '',
+  apiKey: '',
   autoScroll: true,
   fontSize: 'medium',
 }
 
-/* ── Settings persistence (localStorage JSON; in-memory fallback) ──
- * Mirrors gui/src/settings convention: versioned key, defaults-merged
- * read, silent no-op when storage is unavailable (private mode etc.). */
+/* ── Theme application ── */
 const SETTINGS_KEY = 'inferglow.webui-dsh.settings.v1'
+const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)')
 
+function applyTheme(theme: ThemeSetting): void {
+  const dark = theme === 'system' ? (systemDark?.matches ?? true) : theme === 'dark'
+  if (dark) document.body.setAttribute('data-ds-dark-theme', '')
+  else document.body.removeAttribute('data-ds-dark-theme')
+}
+
+/** Persisted-settings loader with defaults-merge and darkMode→theme migration. */
 function loadPersistedSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return { ...defaultSettings }
-    return { ...defaultSettings, ...(JSON.parse(raw) as Partial<Settings>) }
+    const parsed = JSON.parse(raw) as Partial<Settings> & { darkMode?: boolean }
+    // Migration: pre-third-round settings stored a darkMode boolean.
+    if (parsed.theme === undefined && typeof parsed.darkMode === 'boolean') {
+      parsed.theme = parsed.darkMode ? 'dark' : 'light'
+    }
+    delete (parsed as Record<string, unknown>).darkMode
+    return { ...defaultSettings, ...parsed }
   } catch {
     return { ...defaultSettings }
   }
@@ -146,6 +165,13 @@ function persistSettings(s: Settings): void {
   } catch {
     // localStorage unavailable — keep in-memory state only.
   }
+}
+
+/** Clear persisted settings (设置 → 会话管理). */
+export function clearPersistedSettings(): void {
+  try {
+    localStorage.removeItem(SETTINGS_KEY)
+  } catch { /* ignore */ }
 }
 
 /* ── Store implementation ── */
@@ -295,12 +321,8 @@ const actions: AppState = {
     state.settings = s
     persistSettings(s)
     // Apply theme change immediately
-    if (key === 'darkMode') {
-      if (value) {
-        document.body.setAttribute('data-ds-dark-theme', '')
-      } else {
-        document.body.removeAttribute('data-ds-dark-theme')
-      }
+    if (key === 'theme') {
+      applyTheme(s.theme)
     }
     notify()
   },
@@ -335,4 +357,4 @@ function subscribe(fn: () => void): () => void {
   return () => { listeners.delete(fn) }
 }
 
-export { actions as store, subscribe, defaultSettings }
+export { actions as store, subscribe, defaultSettings, applyTheme }

@@ -24,6 +24,8 @@ function formatRunDuration(ms: number): string {
     : `${seconds}秒`
 }
 
+const FONT_ZOOM: Record<string, number> = { small: 0.9, medium: 1, large: 1.15 }
+
 /**
  * TurnStatus — displays "Deep diving..." during a running turn,
  * with a shimmer gradient animation and an optional running-clock
@@ -68,6 +70,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingStartTime, setStreamingStartTime] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState(store.settings.autoScroll)
+  const [fontZoom, setFontZoom] = useState(FONT_ZOOM[store.settings.fontSize] ?? 1)
   const [composerTouched, setComposerTouched] = useState(store.composerTouched)
 
   /* Subscribe to store */
@@ -78,6 +81,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
       setIsStreaming(store.isStreaming)
       setStreamingStartTime(store.streamingStartTime)
       setAutoScroll(store.settings.autoScroll)
+      setFontZoom(FONT_ZOOM[store.settings.fontSize] ?? 1)
       setComposerTouched(store.composerTouched)
     })
     return unsub
@@ -152,7 +156,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   }
 
   return (
-    <div className="dsh-chat-area">
+    <div className="dsh-chat-area" style={{ zoom: fontZoom }}>
       {convTab === '轨迹' ? (
         <TracePanel session={activeSessionId} />
       ) : convTab === '上下文' ? (

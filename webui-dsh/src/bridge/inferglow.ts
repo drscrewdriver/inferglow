@@ -10,7 +10,10 @@ import { store, type Message, type Session } from '../store.ts'
 import { createInferGlowApi, type InferGlowApi } from '../api/client.ts'
 import type { Agent, ChatMessage } from '../api/types.ts'
 
-export const api: InferGlowApi = createInferGlowApi(() => store.settings.apiEndpoint)
+export const api: InferGlowApi = createInferGlowApi(
+  () => store.settings.apiEndpoint,
+  () => store.settings.apiKey,
+)
 
 let agents: Agent[] = []
 

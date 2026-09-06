@@ -5,7 +5,7 @@
  */
 
 import { useLayoutEffect, useEffect, useState, useRef, type PointerEvent as ReactPointerEvent } from 'react'
-import { store, subscribe } from '../store.ts'
+import { store, subscribe, applyTheme } from '../store.ts'
 import { bootstrap } from '../bridge/inferglow.ts'
 import { Sidebar } from './layout/Sidebar.tsx'
 import { DetailsPanel } from './layout/DetailsPanel.tsx'
@@ -49,11 +49,15 @@ export function AppShell() {
     void bootstrap()
   }, [])
 
-  /* Apply initial theme */
+  /* Apply persisted theme + follow system when theme = 'system'. */
   useEffect(() => {
-    if (store.settings.darkMode) {
-      document.body.setAttribute('data-ds-dark-theme', '')
+    applyTheme(store.settings.theme)
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => {
+      if (store.settings.theme === 'system') applyTheme('system')
     }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
   }, [])
 
   function handleOpenSettings() {

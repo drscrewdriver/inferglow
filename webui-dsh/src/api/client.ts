@@ -102,10 +102,19 @@ function trimBase(raw: string | undefined): string {
   return base.endsWith('/') ? base.slice(0, -1) : base
 }
 
-async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+function authHeaders(getApiKey: () => string, init?: RequestInit): RequestInit {
+  // Attach Bearer when the user stored an API key (server -api-key mode).
+  const key = (getApiKey() ?? '').trim()
+  if (!key) return init ?? {}
+  const headers = new Headers(init?.headers)
+  headers.set('Authorization', `Bearer ${key}`)
+  return { ...init, headers }
+}
+
+async function request<T>(base: string, path: string, getApiKey: () => string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${base}${path}`, {
+    ...authHeaders(getApiKey, init),
     headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
   })
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
@@ -114,23 +123,28 @@ async function request<T>(base: string, path: string, init?: RequestInit): Promi
   return res.json() as Promise<T>
 }
 
-export function createInferGlowApi(getBase: () => string = () => ''): InferGlowApi {
+export function createInferGlowApi(
+  getBase: () => string = () => '',
+  getApiKey: () => string = () => '',
+): InferGlowApi {
   let controller: AbortController | null = null
+  const base = () => trimBase(getBase())
 
   async function listAgents(): Promise<Agent[]> {
-    const data = await request<{ agents: Agent[] }>(trimBase(getBase()), '/v1/agents')
+    const data = await request<{ agents: Agent[] }>(base(), '/v1/agents', getApiKey)
     return data.agents ?? []
   }
 
   async function listSessions(): Promise<Session[]> {
-    const data = await request<{ sessions: Session[] }>(trimBase(getBase()), '/v1/sessions')
+    const data = await request<{ sessions: Session[] }>(base(), '/v1/sessions', getApiKey)
     return data.sessions ?? []
   }
 
   async function listMessages(sessionId: string, limit = 50): Promise<ChatMessage[]> {
     const data = await request<{ messages: ChatMessage[] }>(
-      trimBase(getBase()),
+      base(),
       `/v1/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+      getApiKey,
     )
     // Backend returns newest-first; the chat view is chronological.
     return (data.messages ?? []).slice().reverse()
@@ -141,8 +155,8 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
     let res: Response
     try {
       res = await fetch(
-        `${trimBase(getBase())}/v1/agents/${encodeURIComponent(opts.agentId)}/stream-run`,
-        {
+        `${base()}/v1/agents/${encodeURIComponent(opts.agentId)}/stream-run`,
+        authHeaders(getApiKey, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -150,7 +164,7 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
             session_id: opts.sessionId || undefined,
           }),
           signal: controller.signal,
-        },
+        }),
       )
     } catch (err) {
       controller = null
@@ -235,7 +249,7 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
   return {
     async health() {
       try {
-        const res = await fetch(`${trimBase(getBase())}/health`)
+        const res = await fetch(`${base()}/health`)
         return res.ok
       } catch {
         return false
@@ -244,45 +258,49 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
     listAgents,
     listSessions,
     async createSession(agentId, title) {
-      return request<Session>(trimBase(getBase()), '/v1/sessions', {
+      return request<Session>(base(), '/v1/sessions', getApiKey, {
         method: 'POST',
         body: JSON.stringify({ agent_id: agentId, title }),
       })
     },
     async deleteSession(sessionId) {
-      await fetch(`${trimBase(getBase())}/v1/sessions/${encodeURIComponent(sessionId)}`, {
+      await fetch(`${base()}/v1/sessions/${encodeURIComponent(sessionId)}`, authHeaders(getApiKey, {
         method: 'DELETE',
-      })
+      }))
     },
     listMessages,
     async fsTree(path = '') {
       return request<FsTreeResult>(
-        trimBase(getBase()),
+        base(),
         `/v1/fs/tree${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+        getApiKey,
       )
     },
     async fsRead(path: string) {
       return request<FsReadResult>(
-        trimBase(getBase()),
+        base(),
         `/v1/fs/read?path=${encodeURIComponent(path)}`,
+        getApiKey,
       )
     },
     async fsSearch(q: string, limit = 200) {
       return request<{ query: string; matches: string[]; truncated: boolean }>(
-        trimBase(getBase()),
+        base(),
         `/v1/fs/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+        getApiKey,
       )
     },
     async producedFiles(limit = 10) {
       return request<{ files: ProducedFile[]; count: number }>(
-        trimBase(getBase()),
+        base(),
         `/v1/produced-files?limit=${limit}`,
+        getApiKey,
       )
     },
     async spans(limit = 500) {
       // The endpoint responds with a bare JSON array; a 503 body means the
       // collector is not wired on the server (面板显示"观测未启用"空态).
-      const res = await fetch(`${trimBase(getBase())}/v1/observability/spans?limit=${limit}`)
+      const res = await fetch(`${base()}/v1/observability/spans?limit=${limit}`, authHeaders(getApiKey))
       if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => ''))}`)
       return (await res.json()) as SpanSummary[]
     },
@@ -291,8 +309,9 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
       if (streamed) return
       // Fallback: non-streaming chat.
       const data = await request<{ response: string }>(
-        trimBase(getBase()),
+        base(),
         `/v1/agents/${encodeURIComponent(opts.agentId)}/chat`,
+        getApiKey,
         {
           method: 'POST',
           body: JSON.stringify({
