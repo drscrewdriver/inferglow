@@ -35,11 +35,15 @@ import (
 var webUIDshFS embed.FS
 
 // handleWebUIDsh serves the embedded WebUI DSH shell, mounted at /webui-dsh/.
+// Responses are marked no-cache: the shell is an index.html pointing at
+// content-hashed assets, and heuristic caching of a stale shell makes the
+// browser load bundles that no longer exist on disk.
 func (s *Server) handleWebUIDsh(w http.ResponseWriter, r *http.Request) {
 	sub, err := fs.Sub(webUIDshFS, "webui-dsh")
 	if err != nil {
 		http.Error(w, "webui-dsh assets unavailable", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	http.StripPrefix("/webui-dsh/", http.FileServer(http.FS(sub))).ServeHTTP(w, r)
 }

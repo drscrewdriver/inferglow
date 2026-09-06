@@ -124,10 +124,12 @@ function authHeaders(getApiKey: () => string, init?: RequestInit): RequestInit {
 }
 
 async function request<T>(base: string, path: string, getApiKey: () => string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${base}${path}`, {
-    ...authHeaders(getApiKey, init),
+  // authHeaders must run LAST so its Authorization survives the literal
+  // headers spread (a trailing literal would clobber it — the 401 bug).
+  const res = await fetch(`${base}${path}`, authHeaders(getApiKey, {
+    ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
-  })
+  }))
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(`${res.status} ${text}`)
