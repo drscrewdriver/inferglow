@@ -125,6 +125,29 @@ const defaultSettings: Settings = {
   fontSize: 'medium',
 }
 
+/* ── Settings persistence (localStorage JSON; in-memory fallback) ──
+ * Mirrors gui/src/settings convention: versioned key, defaults-merged
+ * read, silent no-op when storage is unavailable (private mode etc.). */
+const SETTINGS_KEY = 'inferglow.webui-dsh.settings.v1'
+
+function loadPersistedSettings(): Settings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (!raw) return { ...defaultSettings }
+    return { ...defaultSettings, ...(JSON.parse(raw) as Partial<Settings>) }
+  } catch {
+    return { ...defaultSettings }
+  }
+}
+
+function persistSettings(s: Settings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
+  } catch {
+    // localStorage unavailable — keep in-memory state only.
+  }
+}
+
 /* ── Store implementation ── */
 const listeners = new Set<() => void>()
 const state: Omit<Partial<AppState>, 'actions'> = {
@@ -133,7 +156,7 @@ const state: Omit<Partial<AppState>, 'actions'> = {
   sidebarCollapsed: false,
   searchQuery: '',
   settingsOpen: false,
-  settings: { ...defaultSettings },
+  settings: loadPersistedSettings(),
   isStreaming: false,
   streamingMessageId: null,
   streamingStartTime: null,
@@ -264,6 +287,7 @@ const actions: AppState = {
     const s = { ...(state.settings ?? defaultSettings) }
     s[key] = value
     state.settings = s
+    persistSettings(s)
     // Apply theme change immediately
     if (key === 'darkMode') {
       if (value) {

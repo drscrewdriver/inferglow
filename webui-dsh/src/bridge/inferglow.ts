@@ -85,7 +85,12 @@ async function refreshSessions(): Promise<boolean> {
 /** Startup hydration. Safe to call once from the app root. */
 export async function bootstrap(): Promise<void> {
   await refreshSessions()
-  if (!store.settings.model && agents[0]) {
+  // Reconcile the persisted agent choice with what the server actually has:
+  // a stale id (config from another backend / deleted agent) falls back to
+  // the first listed agent instead of failing at send time.
+  const ids = agents.map(a => a.id)
+  const current = store.settings.model.trim()
+  if (agents.length > 0 && (!current || !ids.includes(current))) {
     store.updateSetting('model', agents[0].id)
   }
 }
