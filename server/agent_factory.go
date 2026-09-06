@@ -124,11 +124,51 @@ func NewConfigAgentStore(llm config.MultiLLMConfig, toolDirs []string) (*ConfigA
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
+		if lc.EnableThinking {
+			req = optionsInjectRequester{inner: req, opts: map[string]any{
+				"chat_template_kwargs": map[string]any{"enable_thinking": true},
+			}}
+		}
 		sess := session.NewSession("sess-"+name, defaultAgentWindowTokens)
 		ag := agentpkg.New(sess, actExt, req)
 		s.agents[name] = &ConfigAgent{Agent: ag, ID: name, Name: name, Model: lc.Model}
 	}
 	return s, nil
+}
+
+// optionsInjectRequester merges per-provider default options into every
+// request's Options (caller keys win). Used for vLLM chat_template_kwargs —
+// Qwen3-family models gate reasoning output on enable_thinking, and with
+// --reasoning-parser the split-out thinking rides the reasoning field.
+type optionsInjectRequester struct {
+	inner model.ModelRequester
+	opts  map[string]any
+}
+
+func (w optionsInjectRequester) Name() string { return w.inner.Name() }
+
+func (w optionsInjectRequester) GenerateRequestData(ctx context.Context, req *model.ModelRequest) (*model.RequestData, error) {
+	d, err := w.inner.GenerateRequestData(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if d.Options == nil {
+		d.Options = make(map[string]any, len(w.opts))
+	}
+	for k, v := range w.opts {
+		if _, exists := d.Options[k]; !exists {
+			d.Options[k] = v
+		}
+	}
+	return d, nil
+}
+
+func (w optionsInjectRequester) RequestModel(ctx context.Context, data *model.RequestData) (<-chan *model.StreamChunk, error) {
+	return w.inner.RequestModel(ctx, data)
+}
+
+func (w optionsInjectRequester) BroadcastResponse(ctx context.Context, stream <-chan *model.StreamChunk) (<-chan *model.ResultEvent, error) {
+	return w.inner.BroadcastResponse(ctx, stream)
 }
 
 // registerWorkspaceTools wires the builtins file tools (list_dir, file_read,
@@ -209,8 +249,8 @@ type nativeGrepRunner struct {
 
 const (
 	grepMaxFileSize    = 512 << 10 // skip files above this
-	grepMaxMatches     = 200
-	grepMaxFilesWalked = 5000
+	grepMaxMatches     = 400
+	grepMaxFilesWalked = 50000
 )
 
 func (r *nativeGrepRunner) Run(ctx context.Context, req actions.GrepRequest) ([]actions.GrepMatch, error) {
@@ -242,30 +282,51 @@ func (r *nativeGrepRunner) Run(ctx context.Context, req actions.GrepRequest) ([]
 	}
 	skipNames := map[string]bool{".git": true, "node_modules": true, ".gobuild": true}
 	matches := make([]actions.GrepMatch, 0, 32)
-	walked := 0
+
+	// Breadth-first with files-before-subdirs: at equal depth every file of
+	// a directory is matched before any nested tree is entered, so the
+	// workspace's own top-level files (the ones the model is usually asking
+	// about) can never be starved by a huge subtree — a depth-first walk
+	// with a file budget did exactly that (pr-checker.md sat unvisited while
+	// earlier directories consumed thousands of entries).
+	type dirReq struct{ root, path string }
+	queue := make([]dirReq, 0, 64)
 	for _, root := range base {
-		walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // unreadable entries are skipped, not fatal
+		queue = append(queue, dirReq{root: root, path: root})
+	}
+	walked := 0
+	for len(queue) > 0 && len(matches) < grepMaxMatches && walked < grepMaxFilesWalked {
+		cur := queue[0]
+		queue = queue[1:]
+		entries, err := os.ReadDir(cur.path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if len(matches) >= grepMaxMatches || walked >= grepMaxFilesWalked {
+				return matches, nil
 			}
-			if d.IsDir() {
-				if skipNames[d.Name()] && path != root {
-					return filepath.SkipDir
+			if ctx.Err() != nil {
+				return matches, nil
+			}
+			path := filepath.Join(cur.path, entry.Name())
+			if entry.IsDir() {
+				if skipNames[entry.Name()] {
+					continue
 				}
-				return nil
+				queue = append(queue, dirReq{root: cur.root, path: path})
+				continue
 			}
-			if walked++; walked > grepMaxFilesWalked {
-				return filepath.SkipAll
-			}
-			info, err := d.Info()
+			walked++
+			info, err := entry.Info()
 			if err != nil || info.Size() > grepMaxFileSize {
-				return nil
+				continue
 			}
 			data, err := os.ReadFile(path)
 			if err != nil || bytes.IndexByte(data, 0) >= 0 {
-				return nil // binary
+				continue // binary
 			}
-			rel, _ := filepath.Rel(root, path)
+			rel, _ := filepath.Rel(cur.root, path)
 			for i, line := range strings.Split(string(data), "\n") {
 				if re.MatchString(line) {
 					matches = append(matches, actions.GrepMatch{
@@ -273,14 +334,10 @@ func (r *nativeGrepRunner) Run(ctx context.Context, req actions.GrepRequest) ([]
 						Content: strings.TrimSpace(line),
 					})
 					if len(matches) >= grepMaxMatches {
-						return filepath.SkipAll
+						break
 					}
 				}
 			}
-			return ctx.Err()
-		})
-		if walkErr != nil {
-			break
 		}
 	}
 	return matches, nil

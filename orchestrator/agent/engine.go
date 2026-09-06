@@ -1248,7 +1248,10 @@ func (e *Engine) ToolDefsHash() string {
 // defaultToolResultMaxBytes is the maximum byte size of a tool result
 // content before it is truncated. 4096 bytes keeps individual tool results
 // (especially file_read) from dominating the context window.
-const defaultToolResultMaxBytes = 4096
+// 16KB: directory listings of real workspaces run 200+ entries (~15KB JSON);
+// a 4KB cap silently dropped half the listing and the model "could not see"
+// files that exist. Tool results are per-call; the session window compresses.
+const defaultToolResultMaxBytes = 16 << 10
 
 // truncateToolResult shortens s to at most maxBytes bytes. When truncation
 // occurs the head (first half) and tail (last quarter) are preserved with a
