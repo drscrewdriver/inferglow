@@ -10,7 +10,8 @@ import { useRef, useEffect, useState } from 'react'
 import type { Message } from '../store.ts'
 import { MessageItem } from './MessageItem.tsx'
 import { ChatInput } from './ChatInput.tsx'
-import { AgentPicker } from '../panels/AgentPicker.tsx'
+import { ConfigPopover } from '../panels/ConfigPopover.tsx'
+import { WorkspacePicker } from '../panels/WorkspacePicker.tsx'
 import { store, subscribe } from '../store.ts'
 import { TracePanel, ContextPanel } from '../app/layout/ConvPanels.tsx'
 import { ConversationWidthHandles } from './ConversationWidthHandles.tsx'
@@ -76,6 +77,9 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   const [activeWs, setActiveWs] = useState(store.activeWorkspace)
   const [heroPickerOpen, setHeroPickerOpen] = useState(false)
   const heroPickerAnchorRef = useRef<HTMLSpanElement | null>(null)
+  const [authRequired, setAuthRequired] = useState(store.authRequired)
+  const [wsPickerOpen, setWsPickerOpen] = useState(false)
+  const wsPickerAnchorRef = useRef<HTMLButtonElement | null>(null)
 
   /* Subscribe to store */
   useEffect(() => {
@@ -88,6 +92,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
       setFontZoom(FONT_ZOOM[store.settings.fontSize] ?? 1)
       setComposerTouched(store.composerTouched)
       setActiveWs(store.activeWorkspace)
+      setAuthRequired(store.authRequired)
     })
     return unsub
   }, [activeSessionId])
@@ -116,14 +121,25 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
             <h1 className="dsh-hero-title">探索未至之境</h1>
             <span className="dsh-hero-badge">预览版</span>
           </div>
+          {authRequired && (
+            <button type="button" onClick={() => store.openSettings()}
+              style={{ margin: '0 auto 10px', display: 'block', padding: '6px 14px', borderRadius: 8,
+                border: '1px solid color-mix(in srgb, #d4544a 40%, transparent)', cursor: 'pointer',
+                background: 'color-mix(in srgb, #d4544a 12%, transparent)', color: '#e0857d', font: 'inherit', fontSize: 12 }}>
+              ⚠ API Key 未配置或无效 — 数据列表不可用，点击打开设置
+            </button>
+          )}
           <div className="dsh-hero-workspace-row">
             <div className="dsh-hero-toolbar">
               <button
+                ref={wsPickerAnchorRef}
                 type="button"
                 className="dsh-hero-workspace-btn"
                 aria-label="选择工作区"
-                aria-haspopup="menu"
-                aria-expanded="false"
+                aria-haspopup="listbox"
+                aria-expanded={wsPickerOpen}
+                title="切换当前工作区(全部注册候选)"
+                onClick={() => setWsPickerOpen(o => !o)}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M2.3 3.5a1.2 1.2 0 011.2-1.2h3l1.1 1.4h5.2a1.2 1.2 0 011.2 1.2v1h.2a1.2 1.2 0 011 1.7l-1.1 3.2a1.2 1.2 0 01-1.1.8H3.2a1.2 1.2 0 01-1.2-1.5l.3-4.6z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
@@ -134,13 +150,14 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
+              {wsPickerOpen && <WorkspacePicker anchor={wsPickerAnchorRef.current} onClose={() => setWsPickerOpen(false)} />}
               <span ref={heroPickerAnchorRef} style={{ position: 'relative', display: 'inline-flex' }}>
               <button
                 type="button"
                 className="dsh-hero-agent-btn"
                 aria-haspopup="listbox"
                 aria-expanded={heroPickerOpen}
-                title="即将开始的这个会话所用的 Agent"
+                title="会话模式 — 会话开始后固定(配置列表待接入)"
                 onClick={() => setHeroPickerOpen(o => !o)}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -149,12 +166,16 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <circle cx="12.6" cy="11.4" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
                   <path d="M5.1 9.2c.8-.6 1.8-1 2.9-1s2.1.4 2.9 1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
                 </svg>
-                <span className="dsh-hero-agent-label">标准模式 (Windows)</span>
+                <span className="dsh-hero-agent-label">{store.settings.mode || '默认模式'}</span>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
-              {heroPickerOpen && <AgentPicker anchor={heroPickerAnchorRef.current} onClose={() => setHeroPickerOpen(false)} />}
+              {heroPickerOpen && (
+                <ConfigPopover anchor={heroPickerAnchorRef.current} items={[]} width={240}
+                  emptyText="暂无可用模式 — 配置列表待接入(会话开始后模式固定)"
+                  onPick={() => setHeroPickerOpen(false)} onClose={() => setHeroPickerOpen(false)} />
+              )}
               </span>
             </div>
             <ChatInput sessionId={activeSessionId} />

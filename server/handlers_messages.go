@@ -86,3 +86,23 @@ func (s *Server) handleListSessionMessages(w http.ResponseWriter, r *http.Reques
 		"next_before": nextBefore,
 	})
 }
+
+// handleGetSessionTrace handles GET /v1/sessions/{id}/trace — the session's
+// persisted run summaries (trace-role records, newest first). The 轨迹/上下文
+// panels rebuild from this after restarts and session restores; empty trace
+// list = the session predates trace persistence (panels render "—").
+func (s *Server) handleGetSessionTrace(w http.ResponseWriter, r *http.Request) {
+	if s.msgStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "message store not configured")
+		return
+	}
+	id := r.PathValue("id")
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = min(n, 500)
+		}
+	}
+	traces := s.msgStore.ListTraces(id, limit)
+	writeJSON(w, http.StatusOK, map[string]any{"traces": traces})
+}

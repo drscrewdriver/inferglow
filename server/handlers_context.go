@@ -26,6 +26,26 @@ import (
 )
 
 // handleContextSearch performs a semantic or keyword search via ContextProvider.
+
+// contextModeInfo is one selectable context-management mode.
+type contextModeInfo struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+}
+
+// handleContextModes lists the context management modes the engine supports
+// (context.Mode constants). The webui context chip renders this list; the
+// per-run engine switch itself is a planned follow-up.
+func (s *Server) handleContextModes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, []contextModeInfo{
+		{"passthrough", "直通 — 不压缩,前缀缓存最优"},
+		{"three_zone", "三分区 — 会话适配器分区管理"},
+		{"summary", "摘要压缩 — 超阈值时旧消息 LLM 摘要替换"},
+		{"hybrid", "混合 — L0-L4 分层压缩(默认,前缀优化+分层)"},
+		{"assembly", "9 层装配引擎 — 检索/渲染/衰减全管线"},
+	})
+}
+
 // GET /v1/context/search?q=...&limit=10&scope=session|task_group|global
 func (s *Server) handleContextSearch(w http.ResponseWriter, r *http.Request) {
 	if s.ctxProvider == nil {

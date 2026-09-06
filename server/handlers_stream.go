@@ -91,6 +91,7 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	doneCh := make(chan struct{})
 
 	sc := newStreamCallbacks(eventCh, s.spanCollector, req.SessionID)
+	sc.agentID = id
 	runner, supportsCallbacks := agent.(CallbacksRunner)
 
 	// Run agent in background goroutine. Persistence of tool/assistant
@@ -118,6 +119,7 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 		if runErr == nil {
 			sc.persistMessages(s, req.SessionID, sanitizeAgentReply(resp))
 		}
+		sc.persistTrace(s, req.SessionID, runErr)
 
 		if runErr != nil {
 			sc.emit("error", "", 0, 0, runErr.Error())
@@ -164,12 +166,19 @@ type streamCallbacks struct {
 	eventCh    chan<- ToolStreamEvent
 	collector  *observability.SpanCollector
 	sessionID  string
-	runStart   time.Time
 	llmStart   time.Time
 	toolStarts map[string]time.Time
 
 	mu    sync.Mutex
 	tools []toolRecord
+
+	// Run summary accumulation — persisted as a MessageRoleTrace record at
+	// run completion so 轨迹/上下文 survive restarts and session restores
+	// (the SpanCollector ring is in-memory only).
+	agentID  string
+	runStart time.Time
+	runSpans []runSpanRec
+	runUsage *model.UsageInfo
 
 	// Decision-envelope gating (per LLM round). Some served models answer in
 	// the framework's planning-decision JSON ({"action_calls":[...],
@@ -185,6 +194,14 @@ type streamCallbacks struct {
 type toolRecord struct {
 	name   string
 	status string // "ok" | "error"
+}
+
+// runSpanRec is one persisted span line of the run summary.
+type runSpanRec struct {
+	Kind       string `json:"kind"` // agent | llm | tool
+	Name       string `json:"name"`
+	DurationMs int64  `json:"duration_ms"`
+	HasError   bool   `json:"error,omitempty"`
 }
 
 func newStreamCallbacks(eventCh chan<- ToolStreamEvent, collector *observability.SpanCollector, sessionID string) *streamCallbacks {
@@ -217,8 +234,15 @@ func (c *streamCallbacks) send(ev ToolStreamEvent) {
 	}
 }
 
-// recordSpan pushes a finished span into the collector when one is wired.
+// recordSpan records a finished span: into the collector when one is wired,
+// and always into the run summary that becomes the persisted trace record.
 func (c *streamCallbacks) recordSpan(kind observability.SpanKind, name string, start time.Time, hasError bool, extra map[string]string) {
+	c.mu.Lock()
+	c.runSpans = append(c.runSpans, runSpanRec{
+		Kind: string(kind), Name: name,
+		DurationMs: time.Since(start).Milliseconds(), HasError: hasError,
+	})
+	c.mu.Unlock()
 	if c.collector == nil {
 		return
 	}
@@ -284,6 +308,11 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 			}
 			if !start.IsZero() {
 				c.recordSpan(observability.SpanKindLLM, fmt.Sprintf("inferglow.llm.call.%d", round), start, false, nil)
+			}
+			if usage != nil {
+				c.mu.Lock()
+				c.runUsage = usage
+				c.mu.Unlock()
 			}
 			c.send(ToolStreamEvent{
 				Type:      "llm_end",
@@ -404,6 +433,34 @@ func extractAgentDecision(s string) (agentDecision, bool) {
 		}
 	}
 	return d, true
+}
+
+// persistTrace stores one run summary (agent, timing, spans, usage) as a
+// trace-role message so the 轨迹/上下文 panels can rebuild from history.
+func (c *streamCallbacks) persistTrace(s *Server, sessionID string, runErr error) {
+	if sessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	summary := map[string]any{
+		"agent_id": c.agentID,
+		"start":    c.runStart.UTC().Format(time.RFC3339),
+		"duration": time.Since(c.runStart).Round(time.Millisecond).String(),
+		"spans":    c.runSpans,
+		"error":    "",
+	}
+	if runErr != nil {
+		summary["error"] = runErr.Error()
+	}
+	if c.runUsage != nil {
+		summary["usage"] = c.runUsage
+	}
+	c.mu.Unlock()
+	b, err := json.Marshal(summary)
+	if err != nil {
+		return
+	}
+	s.recordMessage(sessionID, MessageRoleTrace, string(b), "", "")
 }
 
 // envelopeDisplayText is the streaming-side twin of sanitizeAgentReply: the

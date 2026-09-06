@@ -46,6 +46,40 @@ export interface FsEntry {
   hidden?: boolean
 }
 
+/** One todo item (shared with the model's task_tracker tools). */
+export interface TaskItem {
+  id: string
+  title: string
+  status: string // pending | in_progress | done | cancelled
+  description?: string
+  priority: number
+  created_at: number
+  updated_at: number
+}
+
+export interface TraceSpanLine {
+  kind: string // agent | llm | tool
+  name: string
+  duration_ms: number
+  error?: boolean
+}
+
+/** One persisted run summary (trace-role record). */
+export interface SessionTrace {
+  id: string
+  session_id: string
+  content: string // JSON: {agent_id,start,duration,spans,usage,error}
+  created_at: string
+}
+
+/** Tagged 401 — the caller's key is missing or invalid. */
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuthError'
+  }
+}
+
 export interface FsTreeResult {
   root: string
   path: string
@@ -79,13 +113,20 @@ export interface InferGlowApi {
   health(): Promise<boolean>
   listAgents(): Promise<Agent[]>
   listSessions(): Promise<Session[]>
-  createSession(agentId: string, title?: string): Promise<Session>
+  createSession(agentId: string, title?: string, workspace?: string): Promise<Session>
   deleteSession(sessionId: string): Promise<void>
+  renameSession(sessionId: string, title: string): Promise<void>
   listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
   /** One-level directory listing (lazy-loading friendly). */
   fsTree(path?: string, workspace?: string): Promise<FsTreeResult>
   /** Whole-file read (server caps at 10MB). */
   fsRead(path: string, workspace?: string): Promise<FsReadResult>
+  sessionTrace(sessionId: string, limit?: number): Promise<SessionTrace[]>
+  contextModes(): Promise<{ id: string; description: string }[]>
+  listTasks(status?: string): Promise<TaskItem[]>
+  createTask(title: string): Promise<TaskItem>
+  updateTask(id: string, changes: { status?: string; title?: string }): Promise<TaskItem>
+  deleteTask(id: string): Promise<void>
   /** Recursive filename substring search. */
   fsSearch(q: string, limit?: number, workspace?: string): Promise<{ query: string; matches: string[]; truncated: boolean }>
   /** Most recently modified files under the workspace. */
@@ -132,6 +173,11 @@ async function request<T>(base: string, path: string, getApiKey: () => string, i
   }))
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
+    // Tag 401s so the bridge can surface "API key missing/invalid" instead
+    // of a silent empty list (the fresh-browser bug).
+    if (res.status === 401) {
+      throw new AuthError(`401 ${text}`)
+    }
     throw new Error(`${res.status} ${text}`)
   }
   return res.json() as Promise<T>
@@ -271,10 +317,16 @@ export function createInferGlowApi(
     },
     listAgents,
     listSessions,
-    async createSession(agentId, title) {
+    async createSession(agentId, title, workspace) {
       return request<Session>(base(), '/v1/sessions', getApiKey, {
         method: 'POST',
-        body: JSON.stringify({ agent_id: agentId, title }),
+        body: JSON.stringify({ agent_id: agentId, title, workspace: workspace || undefined }),
+      })
+    },
+    async renameSession(sessionId, title) {
+      await request<void>(base(), `/v1/sessions/${encodeURIComponent(sessionId)}`, getApiKey, {
+        method: 'PATCH',
+        body: JSON.stringify({ title }),
       })
     },
     async deleteSession(sessionId) {
@@ -289,6 +341,40 @@ export function createInferGlowApi(
       if (workspace) qs.set('workspace', workspace)
       const q = qs.toString()
       return request<FsTreeResult>(base(), `/v1/fs/tree${q ? `?${q}` : ''}`, getApiKey)
+    },
+    async contextModes() {
+      return request<{ id: string; description: string }[]>(
+        base(),
+        '/v1/context/modes',
+        getApiKey,
+      )
+    },
+    async listTasks(status?: string) {
+      return request<{ tasks: TaskItem[] }>(base(), '/v1/tasks' + (status ? `?status=${status}` : ''), getApiKey)
+        .then(d => d.tasks ?? [])
+    },
+    async createTask(title: string) {
+      return request<TaskItem>(base(), '/v1/tasks', getApiKey, {
+        method: 'POST',
+        body: JSON.stringify({ title }),
+      })
+    },
+    async updateTask(id: string, changes: { status?: string; title?: string }) {
+      return request<TaskItem>(base(), `/v1/tasks/${encodeURIComponent(id)}`, getApiKey, {
+        method: 'PATCH',
+        body: JSON.stringify(changes),
+      })
+    },
+    async deleteTask(id: string) {
+      await fetch(`${base()}/v1/tasks/${encodeURIComponent(id)}`, authHeaders(getApiKey, { method: 'DELETE' }))
+    },
+    async sessionTrace(sessionId: string, limit = 100) {
+      const data = await request<{ traces: SessionTrace[] }>(
+        base(),
+        `/v1/sessions/${encodeURIComponent(sessionId)}/trace?limit=${limit}`,
+        getApiKey,
+      )
+      return data.traces ?? []
     },
     async fsRead(path: string, workspace?: string) {
       return request<FsReadResult>(

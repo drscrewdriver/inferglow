@@ -70,3 +70,18 @@ func TestNamedWorkspaceSelection(t *testing.T) {
 	}
 }
 
+
+// TestContextModesEndpoint — the context chip's config list source.
+func TestContextModesEndpoint(t *testing.T) {
+	srv := NewServer(DefaultConfig(), newMockStore())
+	w := doJSON(t, srv, "GET", "/v1/context/modes", "")
+	if w.Code != 200 {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, mode := range []string{"passthrough", "three_zone", "summary", "hybrid", "assembly"} {
+		if !strings.Contains(body, `"`+mode+`"`) {
+			t.Fatalf("mode %q missing: %s", mode, body)
+		}
+	}
+}

@@ -12,11 +12,24 @@ import { IconStop } from '../components/Icons.tsx'
 import { store, subscribe, type Message } from '../store.ts'
 import { api, ensureSession, getActiveAgentId, agentName, recordUsage } from '../bridge/inferglow.ts'
 import { AgentPicker } from '../panels/AgentPicker.tsx'
+import { ConfigPopover } from '../panels/ConfigPopover.tsx'
 
 interface ChatInputProps {
   sessionId: string | null
   placeholder?: string
 }
+
+/** DSH access levels — the composer permission chip's config list. */
+const PERMISSION_ITEMS = [
+  { id: 'readonly', label: 'Readonly', detail: '只读 — 仅允许读取工作区，不执行写操作' },
+  { id: 'workspace-write', label: 'Workspace Write', detail: '工作区内可写(推荐)' },
+  { id: 'permissive', label: 'Permissive', detail: '宽松 — 工作区外读、有限写' },
+  { id: 'full-access', label: 'Full Access', detail: '完全访问 — 无工作区边界(慎用)' },
+] as const
+
+const PERM_LABELS: Record<string, string> = Object.fromEntries(
+  PERMISSION_ITEMS.map(i => [i.id, i.label]),
+)
 
 function genMsgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -27,6 +40,12 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   const [modelLabel, setModelLabel] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerAnchorRef = useRef<HTMLSpanElement | null>(null)
+  const [chipOpen, setChipOpen] = useState<null | 'permission' | 'context'>(null)
+  const permChipRef = useRef<HTMLButtonElement | null>(null)
+  const ctxChipRef = useRef<HTMLButtonElement | null>(null)
+  const [perm, setPerm] = useState(store.settings.permission)
+  const [ctxMode, setCtxMode] = useState(store.settings.contextMode)
+  const [ctxModes, setCtxModes] = useState<{ id: string; description: string }[] | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   /* Model chip reflects the resolved agent (settings.model / first agent). */
@@ -227,17 +246,51 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
               </svg>
             </button>
             <div className="dsh-composer-modes">
-              <button className="dsh-composer-mode" type="button" title="访问模式，当前：Workspace Write">
+              <button ref={permChipRef} className="dsh-composer-mode" type="button"
+                title={`访问级别，当前：${PERM_LABELS[perm]}`} aria-haspopup="listbox" aria-expanded={chipOpen === 'permission'}
+                onClick={() => setChipOpen(o => (o === 'permission' ? null : 'permission'))}>
                 <span className="dsh-composer-mode-icon">
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path d="M4 9l3 3 5-6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                 </span>
-                <span className="dsh-composer-mode-label">Workspace Write</span>
+                <span className="dsh-composer-mode-label">{PERM_LABELS[perm]}</span>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
+              {chipOpen === 'permission' && (
+                <ConfigPopover anchor={permChipRef.current} items={PERMISSION_ITEMS.map(i => ({
+                  id: i.id, label: i.label, detail: i.detail, selected: i.id === perm,
+                }))} footer="DSH 访问级别 · 后端工具门槛映射二期"
+                  onPick={id => { const v = id as typeof perm; setPerm(v); store.updateSetting('permission', v); setChipOpen(null) }}
+                  onClose={() => setChipOpen(null)} />
+              )}
+              <button ref={ctxChipRef} className="dsh-composer-mode" type="button"
+                title={`上下文管理模式，当前：${ctxMode}`} aria-haspopup="listbox" aria-expanded={chipOpen === 'context'}
+                onClick={() => {
+                  setChipOpen(o => (o === 'context' ? null : 'context'))
+                  if (ctxModes === null) {
+                    void api.contextModes().then(ms => setCtxModes(ms)).catch(() => setCtxModes([]))
+                  }
+                }}>
+                <span className="dsh-composer-mode-icon">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M3 3h10M3 6.5h10M3 10h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </svg>
+                </span>
+                <span className="dsh-composer-mode-label">上下文:{ctxMode}</span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              {chipOpen === 'context' && (
+                <ConfigPopover anchor={ctxChipRef.current}
+                  items={(ctxModes ?? []).map(m => ({ id: m.id, label: m.id, detail: m.description, selected: m.id === ctxMode }))}
+                  emptyText="后端未提供上下文模式列表" footer="GET /v1/context/modes · 引擎 per-run 切换二期"
+                  onPick={id => { setCtxMode(id); store.updateSetting('contextMode', id); setChipOpen(null) }}
+                  onClose={() => setChipOpen(null)} />
+              )}
             </div>
           </div>
           <div className="dsh-composer-trailing">

@@ -7,6 +7,7 @@
  * of touching the client directly, keeping store.ts free of fetch logic.
  */
 import { store, type Message, type Session } from '../store.ts'
+import { AuthError } from '../api/client.ts'
 import { createInferGlowApi, type InferGlowApi } from '../api/client.ts'
 import type { Agent, ChatMessage } from '../api/types.ts'
 
@@ -58,7 +59,12 @@ export async function refreshWorkspaces(): Promise<void> {
   try {
     const list = await api.listWorkspaces()
     store.setWorkspaces(list.length > 0 ? list : [{ name: 'default', root: '' }])
+    store.setAuthRequired(false) // server may have switched to auth-open
   } catch (err) {
+    if (err instanceof AuthError) {
+      store.setAuthRequired(true)
+      return // keep whatever is already rendered; the banner explains why
+    }
     console.warn('[webui-dsh] load workspaces failed:', err)
   }
 }
@@ -104,6 +110,7 @@ function toDshSession(s: {
   id: string
   title: string
   agent_id?: string
+  workspace?: string
   created_at: string
   updated_at: string
 }): Session {
@@ -114,6 +121,7 @@ function toDshSession(s: {
     createdAt: Date.parse(s.created_at) || Date.now(),
     updatedAt: Date.parse(s.updated_at) || Date.now(),
     agentId: s.agent_id || undefined,
+    workspace: s.workspace || undefined,
     messagesLoaded: false,
     localOnly: false,
   }
@@ -139,8 +147,12 @@ async function refreshSessions(): Promise<boolean> {
     const sessions = await api.listSessions()
     store.replaceAllSessions(sessions.map(toDshSession))
     await refreshWorkspaces()
+    store.setAuthRequired(false)
     return true
   } catch (err) {
+    // A 401 here means the key is missing/invalid (fresh browser): surface
+    // it instead of rendering silent empty lists.
+    store.setAuthRequired(err instanceof AuthError)
     console.warn('[webui-dsh] bootstrap failed:', err)
     return false
   }
@@ -174,7 +186,7 @@ export async function ensureSession(firstMessage: string): Promise<string> {
 
   const title = firstMessage.replace(/[#*`]/g, '').trim().slice(0, 40) || '新对话'
   try {
-    const created = await api.createSession(getActiveAgentId(), title)
+    const created = await api.createSession(getActiveAgentId(), title, getActiveWorkspace())
     const dsh = toDshSession(created)
     // Preserve any locally typed state: the new backend session replaces the
     // local placeholder; the caller then targets the backend id.
@@ -204,16 +216,21 @@ export async function selectSession(id: string): Promise<void> {
 }
 
 /** Create a session immediately (sidebar "新会话"); falls back to local-only. */
-export async function createSession(): Promise<void> {
+export async function createSession(forWorkspace?: string): Promise<void> {
   const title = ''
   try {
-    const created = await api.createSession(getActiveAgentId(), title)
+    const created = await api.createSession(getActiveAgentId(), title, forWorkspace ?? getActiveWorkspace())
     const dsh = toDshSession(created)
     store.replaceAllSessions([dsh, ...store.sessions])
     store.selectSession(dsh.id)
   } catch {
     store.createSession()
   }
+}
+
+/** Rename on the backend (fire-and-forget); local state is already updated. */
+export function renameSession(id: string, title: string): void {
+  void api.renameSession(id, title).catch(() => {})
 }
 
 /** Delete on the backend (fire-and-forget) and remove locally. */

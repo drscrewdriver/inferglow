@@ -38,6 +38,8 @@ export interface Session {
   messagesLoaded?: boolean
   /** True for sessions that only exist locally and are not yet persisted. */
   localOnly?: boolean
+  /** Workspace this conversation belongs to (R8 sidebar grouping). */
+  workspace?: string
 }
 
 export type ThemeSetting = 'dark' | 'light' | 'system'
@@ -54,6 +56,15 @@ export interface Settings {
   autoScroll: boolean
   /** Chat area zoom (real effect: applied to the conversation container). */
   fontSize: 'small' | 'medium' | 'large'
+  /** Session mode placeholder — the chip is a mount point for a future
+   * mode config list; empty string until that list is defined. */
+  mode: string
+  /** Access level for the session (DSH levels). UI-facing for now: the
+   * backend tool-gate mapping is a planned follow-up. */
+  permission: 'readonly' | 'workspace-write' | 'permissive' | 'full-access'
+  /** Context management mode (context.Mode: passthrough/three_zone/
+   * summary/hybrid/assembly). UI-facing; per-run engine switch is planned. */
+  contextMode: string
 }
 
 /** One registered server workspace (GET /v1/workspaces). */
@@ -64,6 +75,9 @@ export interface WorkspaceInfo {
 
 export interface AppState {
   /* ── Workspaces ── */
+  /** True when a bootstrap call hit 401 — the key is missing/invalid. */
+  authRequired: boolean
+  setAuthRequired: (v: boolean) => void
   workspaces: WorkspaceInfo[]
   activeWorkspace: string
 
@@ -95,6 +109,8 @@ export interface AppState {
   /* ── Actions: Sessions ── */
   createSession: () => void
   selectSession: (id: string) => void
+  /** Rename a session locally; the caller fires the backend PATCH. */
+  renameSession: (id: string, title: string) => void
   deleteSession: (id: string) => void
   updateSessionTitle: (id: string, title: string) => void
   /** Bridge: swap in the backend session list (maps to DSH sessions). */
@@ -144,6 +160,9 @@ const defaultSettings: Settings = {
   apiKey: '',
   autoScroll: true,
   fontSize: 'medium',
+  mode: '',
+  permission: 'workspace-write',
+  contextMode: 'hybrid',
 }
 
 /* ── Theme application ── */
@@ -191,6 +210,7 @@ export function clearPersistedSettings(): void {
 /* ── Store implementation ── */
 const listeners = new Set<() => void>()
 const state: Omit<Partial<AppState>, 'actions'> = {
+  authRequired: false,
   workspaces: [],
   activeWorkspace: '',
   sessions: [],
@@ -210,6 +230,13 @@ const state: Omit<Partial<AppState>, 'actions'> = {
 const actions: AppState = {
   /* Workspaces */
   get workspaces() { return state.workspaces ?? [] },
+  get authRequired() { return state.authRequired ?? false },
+  setAuthRequired(v: boolean) {
+    if (state.authRequired !== v) {
+      state.authRequired = v
+      notify()
+    }
+  },
   get activeWorkspace() { return state.activeWorkspace ?? '' },
   setWorkspaces(list) {
     state.workspaces = list
@@ -264,6 +291,14 @@ const actions: AppState = {
   selectSession(id) {
     state.activeSessionId = id
     state.composerTouched = false
+    notify()
+  },
+
+  renameSession(id, title) {
+    const sess = state.sessions?.find(x => x.id === id)
+    if (!sess) return
+    const updated = { ...sess, title }
+    state.sessions = (state.sessions ?? []).map(x => (x.id === id ? updated : x))
     notify()
   },
   
