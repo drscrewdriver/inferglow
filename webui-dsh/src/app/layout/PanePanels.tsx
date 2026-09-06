@@ -8,6 +8,7 @@
 import type { TabKind } from './PaneEmptyCards.tsx'
 import { FilesPanel } from '../../panels/FilesPanel.tsx'
 import { BrowserPanel } from '../../panels/BrowserPanel.tsx'
+import { TerminalPanel } from '../../panels/TerminalPanel.tsx'
 
 /* ── 1) 文件树 (Files) — real workspace tree (panels/FilesPanel) ── */
 function FilesTree() {
@@ -85,17 +86,7 @@ function SubagentTree() {
   )
 }
 
-/* ── 4) 终端 (modal terminal session) ── */
-function TerminalPanel() {
-  return (
-    <div className="dsh-pane dsh-pane-terminal">
-      <div className="dsh-pane-terminal-output">
-        <div className="dsh-pane-terminal-line">PS C:\workspace&gt; </div>
-        <div className="dsh-pane-terminal-caret">▌</div>
-      </div>
-    </div>
-  )
-}
+/* ── 4) 终端 — gated real exec (panels/TerminalPanel) ── */
 
 /* ── 5) 侧边对话 (新对话态) ── */
 function SidechatPanel() {

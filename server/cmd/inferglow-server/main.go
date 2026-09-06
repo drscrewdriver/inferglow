@@ -46,6 +46,7 @@ func main() {
 		usageDir   = flag.String("usage-dir", "data", "Directory holding sessions/*.usage.jsonl")
 		demoAgent  = flag.Bool("demo-agent", false, "Wire a local echo agent (id a1) so the GUI chat can be exercised without a real model provider")
 		configPath = flag.String("config", "", "Server YAML config: llm.providers are wired as real chat agents (one per provider, pure-chat)")
+		execEnable = flag.Bool("exec", false, "Enable POST /v1/exec gated command execution for the webui terminal (requires -api-key)")
 	)
 	flag.Parse()
 
@@ -54,6 +55,7 @@ func main() {
 	cfg.APIKey = *apiKey
 	cfg.ReadTimeout = *timeout
 	cfg.UsageDataDir = *usageDir
+	cfg.ExecEnabled = *execEnable
 
 	if *cors != "" {
 		cfg.CORSOrigins = splitComma(*cors)

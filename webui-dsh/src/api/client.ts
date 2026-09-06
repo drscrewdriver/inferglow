@@ -92,6 +92,14 @@ export interface InferGlowApi {
   producedFiles(limit?: number): Promise<{ files: ProducedFile[]; count: number }>
   /** Recent finished spans (bare JSON array; 503 when collector disabled). */
   spans(limit?: number): Promise<SpanSummary[]>
+  /** Gated one-command execution (POST /v1/exec; server -api-key + -exec). */
+  execRun(argv: string[], workdir?: string, timeoutMs?: number): Promise<{
+    exit_code: number
+    stdout: string
+    stderr: string
+    duration_ms: number
+    truncated: boolean
+  }>
   sendChat(opts: SendChatOptions): Promise<void>
   /** Abort the in-flight stream-run request, if any. */
   cancel(): void
@@ -303,6 +311,17 @@ export function createInferGlowApi(
       const res = await fetch(`${base()}/v1/observability/spans?limit=${limit}`, authHeaders(getApiKey))
       if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => ''))}`)
       return (await res.json()) as SpanSummary[]
+    },
+    async execRun(argv: string[], workdir?: string, timeoutMs?: number) {
+      return request<{ exit_code: number; stdout: string; stderr: string; duration_ms: number; truncated: boolean }>(
+        base(),
+        '/v1/exec',
+        getApiKey,
+        {
+          method: 'POST',
+          body: JSON.stringify({ argv, workdir: workdir || undefined, timeout_ms: timeoutMs || undefined }),
+        },
+      )
     },
     async sendChat(opts) {
       const streamed = await sendChatSSE(opts)

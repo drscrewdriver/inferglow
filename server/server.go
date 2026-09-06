@@ -45,6 +45,9 @@ type Config struct {
 	APIKey       string        // Optional Bearer token for auth (empty = disabled)
 	CORSOrigins  []string      // Allowed CORS origins (empty = disabled)
 	UsageDataDir string        // Directory holding sessions/*.usage.jsonl for usage reports
+	// ExecEnabled gates POST /v1/exec (webui terminal). Fail-closed: the
+	// route is registered only when ExecEnabled AND APIKey are both set.
+	ExecEnabled bool
 }
 
 // DefaultConfig returns a sensible default configuration.

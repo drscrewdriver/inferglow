@@ -219,6 +219,13 @@ func (s *Server) registerRoutes() {
 	// Produced files (Spec B)
 	api.HandleFunc("GET /v1/produced-files", s.handleProducedFiles)
 
+	// Exec — webui terminal (v1: one command per request, allowlisted).
+	// Fail-closed: the route exists only when BOTH an API key and the -exec
+	// switch are configured (no key / no flag ⇒ 404, not 401).
+	if s.cfg.APIKey != "" && s.cfg.ExecEnabled {
+		api.HandleFunc("POST /v1/exec", s.handleExec)
+	}
+
 	// Skill Hub management (C-10)
 	api.HandleFunc("GET /v1/skill-hub", s.handleListSkills)
 	api.HandleFunc("GET /v1/skill-hub/{name}", s.handleGetSkill)
