@@ -74,7 +74,7 @@ export function TodoPanel() {
   }
 
   return (
-    <div style={{ padding: '10px 14px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+    <div style={{ padding: '10px 14px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)' }}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         <input
           value={draft}
@@ -84,15 +84,15 @@ export function TodoPanel() {
           style={{
             flex: 1, padding: '6px 10px', borderRadius: 8, fontSize: 12.5,
             border: '1px solid color-mix(in srgb, currentColor 18%, transparent)',
-            background: 'transparent', color: 'inherit', outline: 'none',
+            background: 'transparent', color: 'var(--dsw-alias-label-primary)', outline: 'none',
           }}
         />
         <button type="button" className="dsh-pane-iconbtn" title="刷新（含模型侧新增）" onClick={reload}>↻</button>
       </div>
       {err && <div style={{ color: '#d4544a', fontSize: 12, marginBottom: 8 }}>⚠ {err}</div>}
-      {tasks === null && <div style={{ opacity: 0.6, fontSize: 12 }}>加载中…</div>}
+      {tasks === null && <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 12 }}>加载中…</div>}
       {tasks !== null && tasks.length === 0 && (
-        <div style={{ opacity: 0.6, fontSize: 12, lineHeight: 1.7 }}>
+        <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.7 }}>
           暂无待办。对话框里让模型 task_add，或直接在上方输入。
         </div>
       )}
@@ -103,7 +103,7 @@ export function TodoPanel() {
             key={t.id}
             style={{
               display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 6,
-              borderRadius: 8, background: 'color-mix(in srgb, currentColor 5%, transparent)',
+              borderRadius: 8, background: 'color-mix(in srgb, var(--dsw-alias-label-secondary) 8%, transparent)',
             }}
           >
             <button
@@ -136,15 +136,16 @@ export function TodoPanel() {
               <span
                 style={{
                   flex: 1, fontSize: 12.5,
+                  color: 'var(--dsw-alias-label-primary)',
                   textDecoration: t.status === 'done' ? 'line-through' : 'none',
-                  opacity: t.status === 'done' ? 0.55 : 1,
+                  opacity: t.status === 'done' ? 0.7 : 1,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
                 {t.title}
                 {t.priority >= 1 && <span style={{ color: '#e5c07b', marginLeft: 6, fontSize: 11 }}>高优</span>}
               </span>
             )}
-            <span style={{ fontSize: 11, color: meta.color, flexShrink: 0 }}>{meta.label}</span>
+            <span style={{ fontSize: 11, color: meta.color, flexShrink: 0, opacity: 0.95 }}>{meta.label}</span>
             <button
               type="button"
               className="dsh-ws-row-delete"

@@ -136,13 +136,13 @@ export function SubagentPanel() {
   const empty = spawnRows.length === 0 && runRows.length === 0
 
   return (
-    <div style={{ padding: '10px 14px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', fontSize: 12.5 }}>
+    <div style={{ padding: '10px 14px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', fontSize: 12.5, color: 'var(--dsw-alias-label-primary)' }}>
       {spawnErr && <div style={{ color: '#d4544a', marginBottom: 8 }}>⚠ {spawnErr}</div>}
 
       {/* ── 子代理 ── */}
-      <div style={{ opacity: 0.7, fontSize: 11.5, margin: '2px 0 6px' }}>子代理（spawn_agent）</div>
+      <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5, margin: '2px 0 6px' }}>子代理（spawn_agent）</div>
       {spawnRows.length === 0 && (
-        <div style={{ opacity: 0.55, fontSize: 12, lineHeight: 1.7, marginBottom: 14 }}>
+        <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.7, marginBottom: 14 }}>
           暂无子代理。会话中让模型调用 spawn_agent 派生子任务，这里实时显示其状态与耗时。
         </div>
       )}
@@ -154,7 +154,7 @@ export function SubagentPanel() {
             key={sp.id}
             style={{
               display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px', marginBottom: 6,
-              borderRadius: 8, background: 'color-mix(in srgb, currentColor 5%, transparent)',
+              borderRadius: 8, background: 'color-mix(in srgb, var(--dsw-alias-label-secondary) 8%, transparent)',
             }}
           >
             <span style={{ paddingTop: 4 }}><Dot state={running ? 'ongoing' : sp.status === 'error' ? 'error' : 'done'} /></span>
@@ -162,14 +162,14 @@ export function SubagentPanel() {
               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {sp.task}
               </div>
-              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2, display: 'flex', gap: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginTop: 2, display: 'flex', gap: 8 }}>
                 <span>{running ? '运行中' : sp.status === 'error' ? '失败' : '已完成'}</span>
                 <span>· {fmtDuration(dur)}{running ? '…' : ''}</span>
                 <span>· {fmtClock(sp.started_at)}</span>
               </div>
               {sp.error && <div style={{ fontSize: 11, color: '#d4544a', marginTop: 2, wordBreak: 'break-all' }}>{sp.error}</div>}
               {!sp.error && sp.result && (
-                <div style={{ fontSize: 11, opacity: 0.65, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {sp.result}
                 </div>
               )}
@@ -179,9 +179,9 @@ export function SubagentPanel() {
       })}
 
       {/* ── 运行记录 ── */}
-      <div style={{ opacity: 0.7, fontSize: 11.5, margin: '10px 0 6px' }}>运行记录（每次 agent run）</div>
+      <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5, margin: '10px 0 6px' }}>运行记录（每次 agent run）</div>
       {runRows.length === 0 && (
-        <div style={{ opacity: 0.55, fontSize: 12, lineHeight: 1.7 }}>
+        <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.7 }}>
           {empty ? '当前会话暂无运行记录，发送消息后这里显示每次 agent run。' : '暂无已完成的运行。'}
         </div>
       )}
@@ -195,7 +195,7 @@ export function SubagentPanel() {
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
                 padding: '7px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: 'color-mix(in srgb, currentColor 5%, transparent)',
+                background: 'color-mix(in srgb, var(--dsw-alias-label-secondary) 8%, transparent)',
                 color: 'inherit', font: 'inherit', fontSize: 12.5,
               }}
             >
@@ -203,7 +203,7 @@ export function SubagentPanel() {
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {run.agentId} · {fmtClock(run.startMs)}
               </span>
-              <span style={{ fontSize: 11, opacity: 0.6, flexShrink: 0 }}>
+              <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', flexShrink: 0 }}>
                 {fmtDuration(run.endMs - run.startMs)}
                 {run.usage?.total_tokens ? ` · ${run.usage.total_tokens} tok` : ''}
                 {run.error ? ' · 出错' : ''}
@@ -214,14 +214,14 @@ export function SubagentPanel() {
             </button>
             {isOpen && (
               <div style={{ margin: '4px 0 0 20px', borderLeft: '2px solid color-mix(in srgb, currentColor 15%, transparent)', paddingLeft: 10 }}>
-                {run.spans.length === 0 && <div style={{ opacity: 0.55, fontSize: 11.5 }}>该 run 无 span 明细</div>}
+                {run.spans.length === 0 && <div style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5 }}>该 run 无 span 明细</div>}
                 {run.spans.map((sp, i) => (
                   <div key={i} style={{ display: 'flex', gap: 8, padding: '3px 0', fontSize: 11.5 }}>
-                    <span style={{ opacity: 0.55, width: 30, flexShrink: 0 }}>{sp.kind}</span>
+                    <span style={{ color: 'var(--dsw-alias-label-secondary)', width: 30, flexShrink: 0 }}>{sp.kind}</span>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: sp.error ? '#d4544a' : undefined }}>
                       {sp.name}
                     </span>
-                    <span style={{ opacity: 0.6, flexShrink: 0 }}>{fmtDuration(sp.duration_ms ?? 0)}</span>
+                    <span style={{ color: 'var(--dsw-alias-label-secondary)', flexShrink: 0 }}>{fmtDuration(sp.duration_ms ?? 0)}</span>
                   </div>
                 ))}
                 {run.error && <div style={{ fontSize: 11.5, color: '#d4544a', padding: '3px 0', wordBreak: 'break-all' }}>{run.error}</div>}
