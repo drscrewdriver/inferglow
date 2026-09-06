@@ -39,6 +39,20 @@ export function getAgents(): Agent[] {
   return agents
 }
 
+/** Re-fetch agents from the server (picker 打开时保持与配置同步). */
+export async function refreshAgents(): Promise<Agent[]> {
+  try {
+    agents = await api.listAgents()
+    // Keep the selection valid against the fresh list.
+    const ids = agents.map(a => a.id)
+    const cur = store.settings.model.trim()
+    if (agents.length > 0 && cur && !ids.includes(cur)) {
+      store.updateSetting('model', agents[0].id)
+    }
+  } catch { /* keep previous list on failure */ }
+  return agents
+}
+
 /** Workspace registry for the selector; empty server registry → default. */
 export async function refreshWorkspaces(): Promise<void> {
   try {

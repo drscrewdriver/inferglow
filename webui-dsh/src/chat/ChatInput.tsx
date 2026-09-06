@@ -11,6 +11,7 @@ import { useState, useRef, useEffect, type FormEvent } from 'react'
 import { IconStop } from '../components/Icons.tsx'
 import { store, subscribe, type Message } from '../store.ts'
 import { api, ensureSession, getActiveAgentId, agentName, recordUsage } from '../bridge/inferglow.ts'
+import { AgentPicker } from '../panels/AgentPicker.tsx'
 
 interface ChatInputProps {
   sessionId: string | null
@@ -24,6 +25,7 @@ function genMsgId(): string {
 export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [modelLabel, setModelLabel] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   /* Model chip reflects the resolved agent (settings.model / first agent). */
@@ -242,11 +244,15 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
               <span className="dsh-composer-freeze-label">冻结会话</span>
             </button>
             <span className="dsh-composer-status" title="周末 · Asia/Shanghai · 周末模式">周末</span>
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
             <button
               className="dsh-composer-model"
               type="button"
               title={modelLabel ? `Agent: ${modelLabel}` : '选择 Agent'}
               aria-label={modelLabel ? `选择 Agent，当前 ${modelLabel}` : '选择 Agent'}
+              aria-haspopup="listbox"
+              aria-expanded={pickerOpen}
+              onClick={() => setPickerOpen(o => !o)}
             >
               <span className="dsh-composer-model-name">{modelLabel || '…'}</span>
               <span className="dsh-composer-model-effort">On</span>
@@ -254,6 +260,8 @@ export function ChatInput({ sessionId, placeholder }: ChatInputProps) {
                 <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
+            {pickerOpen && <AgentPicker onClose={() => setPickerOpen(false)} />}
+            </span>
             {isStreaming ? (
               <button
                 className="dsh-composer-primary"

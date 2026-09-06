@@ -10,6 +10,7 @@ import { useRef, useEffect, useState } from 'react'
 import type { Message } from '../store.ts'
 import { MessageItem } from './MessageItem.tsx'
 import { ChatInput } from './ChatInput.tsx'
+import { AgentPicker } from '../panels/AgentPicker.tsx'
 import { store, subscribe } from '../store.ts'
 import { TracePanel, ContextPanel } from '../app/layout/ConvPanels.tsx'
 import { ConversationWidthHandles } from './ConversationWidthHandles.tsx'
@@ -73,6 +74,7 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
   const [fontZoom, setFontZoom] = useState(FONT_ZOOM[store.settings.fontSize] ?? 1)
   const [composerTouched, setComposerTouched] = useState(store.composerTouched)
   const [activeWs, setActiveWs] = useState(store.activeWorkspace)
+  const [heroPickerOpen, setHeroPickerOpen] = useState(false)
 
   /* Subscribe to store */
   useEffect(() => {
@@ -131,12 +133,14 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
+              <span style={{ position: 'relative', display: 'inline-flex' }}>
               <button
                 type="button"
                 className="dsh-hero-agent-btn"
-                aria-haspopup="menu"
-                aria-expanded="false"
-                title="即将开始的这个会话所用的 Agent 预设"
+                aria-haspopup="listbox"
+                aria-expanded={heroPickerOpen}
+                title="即将开始的这个会话所用的 Agent"
+                onClick={() => setHeroPickerOpen(o => !o)}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <circle cx="8" cy="3.2" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
@@ -149,6 +153,8 @@ export function ChatArea({ activeSessionId, convTab = '对话' }: ChatAreaProps)
                   <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
+              {heroPickerOpen && <AgentPicker onClose={() => setHeroPickerOpen(false)} />}
+              </span>
             </div>
             <ChatInput sessionId={activeSessionId} />
           </div>
