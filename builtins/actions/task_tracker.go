@@ -144,7 +144,13 @@ func (ts *TaskStore) List(statusFilter string) []*Task {
 		}
 		result = append(result, t)
 	}
+	// CreatedAt is unix seconds: Adds within the same second tie, so break
+	// ties by ID ("t-0002" < "t-0003") to keep the order deterministic —
+	// sort.Slice is not stable and otherwise shuffles same-second rows.
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt == result[j].CreatedAt {
+			return result[i].ID < result[j].ID
+		}
 		return result[i].CreatedAt < result[j].CreatedAt
 	})
 	return result

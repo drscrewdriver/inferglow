@@ -224,6 +224,12 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("PATCH /v1/tasks/{id}", s.handlePatchTask)
 	api.HandleFunc("DELETE /v1/tasks/{id}", s.handleDeleteTask)
 
+	// R9 Phase 0: sub-agent spawn observation (任务管理 panel data source).
+	api.HandleFunc("GET /v1/subagents", s.handleListSubagents)
+
+	// R9: workspace registry rename (binding name change, root preserved).
+	api.HandleFunc("PATCH /v1/workspaces/{id}", s.handleRenameWorkspace)
+
 	// Produced files (Spec B)
 	api.HandleFunc("GET /v1/produced-files", s.handleProducedFiles)
 

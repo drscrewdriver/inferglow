@@ -111,6 +111,7 @@ function toDshSession(s: {
   title: string
   agent_id?: string
   workspace?: string
+  status?: string
   created_at: string
   updated_at: string
 }): Session {
@@ -122,6 +123,7 @@ function toDshSession(s: {
     updatedAt: Date.parse(s.updated_at) || Date.now(),
     agentId: s.agent_id || undefined,
     workspace: s.workspace || undefined,
+    status: s.status || undefined,
     messagesLoaded: false,
     localOnly: false,
   }
@@ -237,4 +239,39 @@ export function renameSession(id: string, title: string): void {
 export function deleteSession(id: string): void {
   store.deleteSession(id)
   void api.deleteSession(id).catch(() => {})
+}
+
+/** Fork a session (history copied server-side); selects the new copy. */
+export async function forkSession(id: string): Promise<void> {
+  const created = await api.forkSession(id)
+  const dsh = toDshSession(created)
+  store.replaceAllSessions([dsh, ...store.sessions])
+  store.selectSession(dsh.id)
+  // Backfill the copied history so the fork reads like its origin.
+  try {
+    const messages = await api.listMessages(dsh.id)
+    store.replaceMessages(dsh.id, messages.map(toDshMessage))
+  } catch { /* empty history is visible to the user */ }
+}
+
+/** Archive / unarchive a session: optimistic local toggle + backend PATCH. */
+export function setSessionArchived(id: string, archived: boolean): void {
+  store.setSessionStatus(id, archived ? 'archived' : 'active')
+  void api.setSessionStatus(id, archived ? 'archived' : 'active').catch(err => {
+    // Revert on failure so the row doesn't silently lie.
+    store.setSessionStatus(id, archived ? 'active' : 'archived')
+    console.warn('[webui-dsh] set session status failed:', err)
+  })
+}
+
+/** Rename a workspace binding; sessions and selectors follow. */
+export async function renameWorkspace(oldName: string, newName: string): Promise<void> {
+  await api.workspaceRename(oldName, newName)
+  await refreshSessions()
+}
+
+/** Remove a workspace binding; its sessions fall into 未分组. */
+export async function deleteWorkspace(name: string): Promise<void> {
+  await api.workspaceDelete(name)
+  await refreshSessions()
 }

@@ -143,6 +143,10 @@ func main() {
 	// task_tracker tools register only when the store is non-nil.
 	server.SetTaskStore(actions.NewTaskStore(filepath.Join(*usageDir, "tasks.json")))
 
+	// R9 Phase 0: shared sub-agent spawn registry — must exist BEFORE agent
+	// wiring so the spawn_agent registration sees a non-nil store.
+	server.SetSubagentRegistry(actions.NewSubagentRegistry())
+
 	var agentStore server.AgentStore
 	if len(merged.Providers) > 0 {
 		// Tool roots: every workspace root known at startup (flags + shared

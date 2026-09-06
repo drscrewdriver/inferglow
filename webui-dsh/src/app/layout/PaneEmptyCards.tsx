@@ -10,6 +10,7 @@ export const TAB_TYPES: { kind: TabKind; label: string }[] = [
   { kind: 'files', label: '文件' },
   { kind: 'scm', label: '源代码管理' },
   { kind: 'tasks', label: '待办' },
+  { kind: 'subagent', label: '任务管理' },
   { kind: 'sidechat', label: '侧边对话(beta)' },
   { kind: 'terminal', label: '终端' },
   { kind: 'browser', label: '浏览器' },
@@ -37,6 +38,15 @@ export function TabIcon({ kind }: { kind: TabKind }) {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.4"/>
           <path d="M8 4.5v3.5l2.5 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+        </svg>
+      )
+    case 'subagent':
+      return (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="4" cy="4" r="2.2" stroke="currentColor" strokeWidth="1.4"/>
+          <circle cx="12" cy="12" r="2.2" stroke="currentColor" strokeWidth="1.4"/>
+          <path d="M4 6.2v3.3a2.3 2.3 0 002.3 2.3H9.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          <path d="M12 9.8V8a2 2 0 00-2-2H6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.55"/>
         </svg>
       )
     case 'sidechat':

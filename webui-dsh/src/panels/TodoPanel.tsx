@@ -21,6 +21,9 @@ export function TodoPanel() {
   const [tasks, setTasks] = useState<TaskItem[] | null>(null)
   const [draft, setDraft] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  /** Inline title editor: the id of the task being renamed. */
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
 
   const reload = () => {
     api.listTasks()
@@ -52,6 +55,18 @@ export function TodoPanel() {
   const remove = async (id: string) => {
     try {
       await api.deleteTask(id)
+      reload()
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e))
+    }
+  }
+  /** Commit the inline title edit (PATCH title — server-side supported). */
+  const commitEdit = async (id: string) => {
+    const title = editDraft.trim()
+    setEditingId(null)
+    if (!title) return
+    try {
+      await api.updateTask(id, { title })
       reload()
     } catch (e) {
       setErr(String((e as Error)?.message ?? e))
@@ -101,15 +116,46 @@ export function TodoPanel() {
                 background: t.status === 'done' ? meta.color : 'transparent',
               }}
             />
-            <span style={{
-              flex: 1, fontSize: 12.5,
-              textDecoration: t.status === 'done' ? 'line-through' : 'none',
-              opacity: t.status === 'done' ? 0.55 : 1,
-            }}>
-              {t.title}
-              {t.priority >= 1 && <span style={{ color: '#e5c07b', marginLeft: 6, fontSize: 11 }}>高优</span>}
-            </span>
+            {editingId === t.id ? (
+              <input
+                autoFocus
+                value={editDraft}
+                onChange={e => setEditDraft(e.target.value)}
+                onBlur={() => void commitEdit(t.id)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void commitEdit(t.id)
+                  else if (e.key === 'Escape') setEditingId(null)
+                }}
+                style={{
+                  flex: 1, minWidth: 0, fontSize: 12.5, padding: '2px 6px',
+                  background: 'transparent', color: 'inherit', outline: 'none',
+                  border: '1px solid color-mix(in srgb, currentColor 30%, transparent)', borderRadius: 4,
+                }}
+              />
+            ) : (
+              <span
+                style={{
+                  flex: 1, fontSize: 12.5,
+                  textDecoration: t.status === 'done' ? 'line-through' : 'none',
+                  opacity: t.status === 'done' ? 0.55 : 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                {t.title}
+                {t.priority >= 1 && <span style={{ color: '#e5c07b', marginLeft: 6, fontSize: 11 }}>高优</span>}
+              </span>
+            )}
             <span style={{ fontSize: 11, color: meta.color, flexShrink: 0 }}>{meta.label}</span>
+            <button
+              type="button"
+              className="dsh-ws-row-delete"
+              title="编辑"
+              aria-label={`编辑「${t.title}」`}
+              onClick={() => { setEditingId(t.id); setEditDraft(t.title) }}
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                <path d="M8.5 1.5l2 2L4 10l-2.5.5L2 8l6.5-6.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+              </svg>
+            </button>
             <button type="button" className="dsh-ws-row-delete" title="删除" onClick={() => void remove(t.id)}>
               <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
                 <path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>

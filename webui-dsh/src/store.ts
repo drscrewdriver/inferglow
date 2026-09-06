@@ -40,6 +40,8 @@ export interface Session {
   localOnly?: boolean
   /** Workspace this conversation belongs to (R8 sidebar grouping). */
   workspace?: string
+  /** Backend lifecycle status (active/archived/…); archived rows gray out. */
+  status?: string
 }
 
 export type ThemeSetting = 'dark' | 'light' | 'system'
@@ -65,6 +67,11 @@ export interface Settings {
   /** Context management mode (context.Mode: passthrough/three_zone/
    * summary/hybrid/assembly). UI-facing; per-run engine switch is planned. */
   contextMode: string
+  /** Sidebar list organization (R9 view-options menu). flat = one ungrouped
+   * list; workspace = one group per registered workspace. */
+  sidebarGroupBy: 'workspace' | 'flat'
+  /** Sidebar sort: recent = updatedAt desc; manual = creation order. */
+  sidebarSort: 'recent' | 'manual'
 }
 
 /** One registered server workspace (GET /v1/workspaces). */
@@ -111,6 +118,8 @@ export interface AppState {
   selectSession: (id: string) => void
   /** Rename a session locally; the caller fires the backend PATCH. */
   renameSession: (id: string, title: string) => void
+  /** Archive/unarchive locally (status field); the caller fires the PATCH. */
+  setSessionStatus: (id: string, status: string) => void
   deleteSession: (id: string) => void
   updateSessionTitle: (id: string, title: string) => void
   /** Bridge: swap in the backend session list (maps to DSH sessions). */
@@ -163,6 +172,8 @@ const defaultSettings: Settings = {
   mode: '',
   permission: 'workspace-write',
   contextMode: 'hybrid',
+  sidebarGroupBy: 'workspace',
+  sidebarSort: 'recent',
 }
 
 /* ── Theme application ── */
@@ -299,6 +310,12 @@ const actions: AppState = {
     if (!sess) return
     const updated = { ...sess, title }
     state.sessions = (state.sessions ?? []).map(x => (x.id === id ? updated : x))
+    notify()
+  },
+
+  setSessionStatus(id, status) {
+    state.sessions = (state.sessions ?? []).map(x =>
+      x.id === id ? { ...x, status, updatedAt: Date.now() } : x)
     notify()
   },
   

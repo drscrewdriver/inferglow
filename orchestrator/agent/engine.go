@@ -34,6 +34,7 @@ import (
 
 	"github.com/inferglow/action"
 	"github.com/inferglow/audit"
+	"github.com/inferglow/flow"
 	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/actionruntime"
 	"github.com/inferglow/session"
@@ -374,6 +375,26 @@ func (e *Engine) preemptDrainNext() bool {
 // executeLoop runs the PLAN → EXECUTE loop until the LLM returns a response
 // or maxRounds is reached.
 func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds int, systemPrompt string) (dec *actionruntime.Decision, err error) {
+	// 裸聊天环（Agent.Run 不经 flow 编排）此前不带 flow 上下文，依赖
+	// flow.Context 的内建 action（如 spawn_agent）会因 ContextFrom 失败而
+	// 不可用。此处统一安装：已有上下文（executeFlow / RunAgent 嵌套路径）
+	// 时不覆盖。
+	if _, ok := flow.ContextFrom(ctx); !ok {
+		modelReq := e.modelReq
+		if e.modelReqOverride != nil {
+			modelReq = e.modelReqOverride
+		}
+		fc := &flowContextImpl{
+			session:   e.session,
+			actionExt: e.actionExt,
+			modelReq:  modelReq,
+			auditHook: e.auditHook,
+			tracer:    e.tracer,
+			engine:    e,
+		}
+		ctx = flow.WithFlowContext(ctx, fc)
+	}
+
 	// Fire OnRunStart callback.
 	fireOnRunStart(e.callbacks, ctx, userMessage)
 

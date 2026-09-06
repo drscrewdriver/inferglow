@@ -38,6 +38,23 @@ import (
 	"github.com/inferglow/session"
 )
 
+// ctxKeyRunSessionID carries the chat session id inside a run context so
+// tools can attribute side effects (sub-agent spawns) to the session without
+// importing the server's types.
+type ctxKeyRunSessionID struct{}
+
+// WithRunSessionID attaches the chat session id to a run context.
+func WithRunSessionID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxKeyRunSessionID{}, id)
+}
+
+// runSessionIDFromCtx returns the chat session id previously attached with
+// WithRunSessionID, or "" when absent.
+func runSessionIDFromCtx(ctx context.Context) string {
+	id, _ := ctx.Value(ctxKeyRunSessionID{}).(string)
+	return id
+}
+
 // defaultAgentWindowTokens mirrors the CLI default window size; the server
 // YAML config has no dedicated knob yet.
 const defaultAgentWindowTokens = 32000
@@ -112,6 +129,18 @@ func NewConfigAgentStore(llm config.MultiLLMConfig, toolDirs []string) (*ConfigA
 	// One shared action extension: the tools are stateless and safe to share
 	// across provider agents.
 	actExt := agentpkg.NewActionExtension()
+	// Sub-agent delegation (R9 Phase 0): spawn_agent records into the shared
+	// registry (wired in main.go before this call); attribution reads the
+	// chat session id injected into the run context by handlers_stream.
+	if subagentRegistry != nil {
+		spawn := actions.NewSubAgentAction(actions.SubAgentConfig{
+			Registry:        subagentRegistry,
+			ParentSessionFn: runSessionIDFromCtx,
+		})
+		if err := actExt.Register(spawn); err != nil {
+			return nil, fmt.Errorf("register %s: %w", spawn.Name, err)
+		}
+	}
 	if len(toolDirs) > 0 {
 		if err := registerWorkspaceTools(actExt, toolDirs); err != nil {
 			return nil, err

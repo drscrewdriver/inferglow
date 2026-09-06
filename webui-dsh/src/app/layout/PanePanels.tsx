@@ -10,6 +10,7 @@ import { FilesPanel } from '../../panels/FilesPanel.tsx'
 import { BrowserPanel } from '../../panels/BrowserPanel.tsx'
 import { TerminalPanel } from '../../panels/TerminalPanel.tsx'
 import { TodoPanel } from '../../panels/TodoPanel.tsx'
+import { SubagentPanel } from '../../panels/SubagentPanel.tsx'
 
 /* ── 1) 文件树 (Files) — real workspace tree (panels/FilesPanel) ── */
 function FilesTree() {
@@ -65,27 +66,8 @@ function ScmPanel() {
   )
 }
 
-/* ── 3) 子代理树 (任务管理 — 后台运行的子代理) ── */
-function SubagentTree() {
-  return (
-    <div className="dsh-pane dsh-pane-agent">
-      <div className="dsh-pane-agent-header">任务管理 · rewrite-agently</div>
-      <div className="dsh-pane-agent-body" role="tree" aria-label="任务管理">
-        <div className="dsh-pane-agent-row is-active" role="treeitem" aria-selected="true">
-          <span className="dsh-pane-agent-dot" data-state="done" aria-hidden="true" />
-          <span className="dsh-pane-agent-content">
-            <span className="dsh-pane-agent-label">rewrite-agently</span>
-            <span className="dsh-pane-agent-secondary">主代理 · 空闲</span>
-          </span>
-        </div>
-        <div className="dsh-pane-agent-empty">
-          <div>暂无子代理</div>
-          <div className="dsh-pane-agent-empty-hint">当前主代理派生的子代理将显示在这里</div>
-        </div>
-      </div>
-    </div>
-  )
-}
+/* ── 3) 子代理树 (任务管理 — R9: real spawn registry + run summaries) ──
+ * The static demo tree moved to panels/SubagentPanel.tsx. */
 
 /* ── 4) 终端 — gated real exec (panels/TerminalPanel) ── */
 
@@ -124,7 +106,7 @@ export function PaneContent({ kind }: { kind: TabKind }) {
     case 'tasks':
       return <TodoPanel />
     case 'subagent':
-      return <SubagentTree />
+      return <SubagentPanel />
     case 'terminal':
       return <TerminalPanel />
     case 'sidechat':
@@ -132,6 +114,6 @@ export function PaneContent({ kind }: { kind: TabKind }) {
     case 'browser':
       return <BrowserPanel />
     default:
-      return <SubagentTree />
+      return <SubagentPanel />
   }
 }

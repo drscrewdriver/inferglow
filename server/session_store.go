@@ -279,3 +279,26 @@ func (ss *SessionStore) UpdateMeta(id string, patch SessionPatch) bool {
 	rec.UpdatedAt = time.Now()
 	return true
 }
+
+// RenameWorkspace rewrites the workspace field of every session bound to
+// oldName (R9 workspace rename follow-along) and snapshots. Returns the
+// number of records updated.
+func (ss *SessionStore) RenameWorkspace(oldName, newName string) int {
+	n := 0
+	for _, k := range ss.Keys() {
+		rec, ok := ss.Map.Get(k)
+		if !ok || rec == nil {
+			continue
+		}
+		if rec.Workspace == oldName {
+			rec.Workspace = newName
+			rec.UpdatedAt = time.Now()
+			ss.Set(k, rec)
+			n++
+		}
+	}
+	if n > 0 {
+		ss.snapshot()
+	}
+	return n
+}

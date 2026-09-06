@@ -105,13 +105,16 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 		var resp string
 		var runErr error
 		runStart := time.Now()
+		// R9: run ctx carries the chat session id so tools (spawn_agent)
+		// can attribute their side effects to this session.
+		runCtx := WithRunSessionID(r.Context(), req.SessionID)
 		if supportsCallbacks {
 			cbs := mergeCallbacks(sc.agentCallbacks(), persistedCallbacks(agent))
-			resp, runErr = runner.RunWithCallbacks(r.Context(), req.Message, agentpkg.WithCallbacks(cbs))
+			resp, runErr = runner.RunWithCallbacks(runCtx, req.Message, agentpkg.WithCallbacks(cbs))
 		} else {
 			// Demo/legacy agents expose no callback surface.
 			sc.emit("run_start", "", 0, 0, "")
-			resp, runErr = agent.Run(r.Context(), req.Message)
+			resp, runErr = agent.Run(runCtx, req.Message)
 		}
 		sc.recordSpan(observability.SpanKindAgent, "inferglow.agent.run", runStart, runErr != nil,
 			map[string]string{"inferglow.agent_id": id})

@@ -124,6 +124,73 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed", "name": name})
 }
 
+// handleRenameWorkspace handles PATCH /v1/workspaces/{name} {"new_name"} —
+// rename a workspace binding while preserving its root (R9). Session records
+// bound to the old name are rewritten so the webui session groups follow the
+// rename instead of falling into 未分配.
+func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
+	if s.wsProvider == nil {
+		writeError(w, http.StatusServiceUnavailable, "workspace provider not configured")
+		return
+	}
+	name := r.PathValue("id")
+	if !s.canAccess(r, "workspace", name, "delete") {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+	var req struct {
+		NewName string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	newName := strings.TrimSpace(req.NewName)
+	if newName == "" {
+		writeError(w, http.StatusBadRequest, "new_name is required")
+		return
+	}
+	if newName == name {
+		writeError(w, http.StatusBadRequest, "new_name must differ from the current name")
+		return
+	}
+	if strings.ContainsAny(newName, "/\\") {
+		writeError(w, http.StatusBadRequest, "new_name must not contain path separators")
+		return
+	}
+	info, ok := s.wsProvider.Get(name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if _, exists := s.wsProvider.Get(newName); exists {
+		writeError(w, http.StatusConflict, "workspace name already in use")
+		return
+	}
+	created := info.Created
+	if _, err := s.wsProvider.Open(newName, info.Root); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.wsProvider.Close(name); err != nil {
+		// Roll back the new binding so the old name stays authoritative.
+		_, _ = s.wsProvider.Open(name, info.Root)
+		_ = s.wsProvider.Close(newName)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if s.sessionStore != nil {
+		s.sessionStore.RenameWorkspace(name, newName)
+	}
+	if s.cfg.UsageDataDir != "" {
+		s.PersistWorkspaces(filepath.Join(s.cfg.UsageDataDir, "workspaces.json"))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"from": name, "to": newName, "root": info.Root,
+		"created_at": created, "status": "renamed",
+	})
+}
+
 // handleListWorkspaceFiles handles GET /v1/workspaces/{name}/files — list the
 // entries underneath an optional path within the named workspace (spec C-7,
 // optional file-listing surface, routed via ListDir).

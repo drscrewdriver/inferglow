@@ -3316,3 +3316,50 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .lc-br-tokens { color: var(--dsw-alias-label-secondary); }
 .lc-br-pct { width: 34px; text-align: right; color: var(--dsw-alias-label-tertiary); }
 .lc-foot { font-size: 11px; color: var(--dsw-alias-label-tertiary); padding: 0 2px; }
+
+/* ── R9: DSH-aligned session tree (workspace groups + row actions) ── */
+
+/* Relative time label at the end of a session row (「3小时」style). */
+.dsh-ws-row-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  opacity: 0.85;
+}
+
+/* Hover-revealed action cluster at row end (⋯ / ＋). */
+.dsh-ws-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--ds-transition-duration-fast);
+}
+
+.dsh-ws-row:hover .dsh-ws-row-actions,
+.dsh-ws-row-actions:focus-within { opacity: 1; }
+
+.dsh-ws-row-actions .dsh-ws-row-delete { opacity: 1; }
+
+/* Archived sessions stay visible but read as inactive. */
+.dsh-ws-row-archived { opacity: 0.45; }
+.dsh-ws-row-archived .dsh-ws-row-title { text-decoration: line-through; }
+
+/* Inline rename input inside a row. */
+.dsh-ws-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+/* Group row reads slightly stronger than session rows (DSH folder row). */
+.dsh-ws-row-group { color: var(--dsw-alias-label-primary); }
+.dsh-ws-row-group .dsh-ws-row-icon { color: var(--dsw-alias-label-secondary); }

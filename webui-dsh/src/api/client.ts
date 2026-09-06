@@ -72,6 +72,19 @@ export interface SessionTrace {
   created_at: string
 }
 
+/** One spawn_agent invocation (server SubagentRegistry record). */
+export interface SpawnRecord {
+  id: string
+  parent_session?: string
+  task: string
+  status: string // running | done | error
+  system_prompt?: string
+  started_at: number // unix ms
+  ended_at?: number
+  result?: string
+  error?: string
+}
+
 /** Tagged 401 — the caller's key is missing or invalid. */
 export class AuthError extends Error {
   constructor(message: string) {
@@ -116,6 +129,12 @@ export interface InferGlowApi {
   createSession(agentId: string, title?: string, workspace?: string): Promise<Session>
   deleteSession(sessionId: string): Promise<void>
   renameSession(sessionId: string, title: string): Promise<void>
+  /** Fork a session (POST /v1/sessions/{id}/fork) — returns the new record. */
+  forkSession(sessionId: string): Promise<Session>
+  /** Archive / unarchive via PATCH status. */
+  setSessionStatus(sessionId: string, status: string): Promise<void>
+  /** Spawn-agent registry rows (GET /v1/subagents?session=), newest first. */
+  listSubagents(sessionId?: string): Promise<SpawnRecord[]>
   listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
   /** One-level directory listing (lazy-loading friendly). */
   fsTree(path?: string, workspace?: string): Promise<FsTreeResult>
@@ -137,6 +156,10 @@ export interface InferGlowApi {
   listWorkspaces(): Promise<{ name: string; root: string }[]>
   /** Register a new workspace (POST /v1/workspaces). */
   createWorkspace(name: string, root: string): Promise<{ name: string; root: string }>
+  /** Rename a workspace binding (PATCH /v1/workspaces/{name}; sessions follow). */
+  workspaceRename(name: string, newName: string): Promise<void>
+  /** Remove a workspace binding (DELETE /v1/workspaces/{name}). */
+  workspaceDelete(name: string): Promise<void>
   /** Gated one-command execution (POST /v1/exec; server -api-key + -exec). */
   execRun(opts: { argv: string[]; workspace?: string; workdir?: string; timeoutMs?: number }): Promise<{
     exit_code: number
@@ -334,6 +357,26 @@ export function createInferGlowApi(
         method: 'DELETE',
       }))
     },
+    async forkSession(sessionId) {
+      return request<Session>(base(), `/v1/sessions/${encodeURIComponent(sessionId)}/fork`, getApiKey, {
+        method: 'POST',
+        body: '{}',
+      })
+    },
+    async setSessionStatus(sessionId, status) {
+      await request<void>(base(), `/v1/sessions/${encodeURIComponent(sessionId)}`, getApiKey, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+    },
+    async listSubagents(sessionId) {
+      const data = await request<{ spawns: SpawnRecord[] }>(
+        base(),
+        '/v1/subagents' + (sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''),
+        getApiKey,
+      )
+      return data.spawns ?? []
+    },
     listMessages,
     async fsTree(path = '', workspace?: string) {
       const qs = new URLSearchParams()
@@ -412,6 +455,17 @@ export function createInferGlowApi(
         method: 'POST',
         body: JSON.stringify({ name, root_dir: root }),
       })
+    },
+    async workspaceRename(name: string, newName: string) {
+      await request<void>(base(), `/v1/workspaces/${encodeURIComponent(name)}`, getApiKey, {
+        method: 'PATCH',
+        body: JSON.stringify({ new_name: newName }),
+      })
+    },
+    async workspaceDelete(name: string) {
+      await fetch(`${base()}/v1/workspaces/${encodeURIComponent(name)}`, authHeaders(getApiKey, {
+        method: 'DELETE',
+      }))
     },
     async execRun(opts) {
       return request<{ exit_code: number; stdout: string; stderr: string; duration_ms: number; truncated: boolean }>(
