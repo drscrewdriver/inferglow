@@ -23,6 +23,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/inferglow/context/compress"
 	"github.com/inferglow/context/retrieval"
 	"github.com/inferglow/context/store/jsonl"
+	"github.com/inferglow/context/toolclean"
 	"github.com/inferglow/builtins/actions"
 	"github.com/inferglow/memory"
 	"github.com/inferglow/skill"
@@ -68,7 +70,18 @@ type MemoryBridge struct {
 	taskStore *actions.TaskStore
 	// BM25 index persistence path (B4).
 	bm25File string
+
+	// Orthogonal tool-output denoise gate (FeatureFlags.ToolDenoise).
+	// Independent of ContextMode: applied in IngestTool before any
+	// context manager — in any mode — sees the content.
+	toolDenoise bool
 }
+
+// maxDenoiseInput bounds the denoise scan. trusted_local bash output is
+// unbounded (cli/local_bash.go collects stdout into an unlimited buffer),
+// so the gate clamps before scanning; the 8192-byte ingest truncation
+// downstream makes anything beyond this bound moot anyway.
+const maxDenoiseInput = 1 << 20 // 1 MiB
 
 // NewMemoryBridge creates a fully wired memory bridge for the given session.
 func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
@@ -163,6 +176,7 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 		compressChain:   compressChain,
 		taskStore:       taskStore,
 		bm25File:        bm25File,
+		toolDenoise:     cfg.Features.ToolDenoise,
 	}, nil
 }
 
@@ -211,6 +225,7 @@ func (b *MemoryBridge) nextStepID() int {
 
 // IngestTool stores a tool result into the context manager and BM25 index.
 func (b *MemoryBridge) IngestTool(toolName, content string) {
+	content = b.denoiseToolOutput(toolName, content)
 	content = truncate(content, 8192)
 	step := contextmgr.StepRecord{
 		Type:       "tool",
@@ -227,6 +242,30 @@ func (b *MemoryBridge) IngestTool(toolName, content string) {
 	b.bm25.Add(stepID, content)
 	// Best-effort promotion check.
 	_ = b.promoter.EvaluateAndPromote(context.Background())
+}
+
+// denoiseToolOutput applies the orthogonal mechanical denoise gate to tool
+// output before it reaches any context manager or the BM25 index. It is
+// independent of ContextMode (the gate sits upstream of mode selection and
+// survives /mode switches) and fails open: when the flag is off, or when
+// the cleaner reports no change, the content passes through untouched.
+// TokenCount and the BM25 index below are computed from the returned
+// (cleaned) content, keeping measurements consistent with what is stored.
+func (b *MemoryBridge) denoiseToolOutput(toolName, content string) string {
+	if !b.toolDenoise {
+		return content
+	}
+	if len(content) > maxDenoiseInput {
+		content = content[:maxDenoiseInput]
+	}
+	cleaned, rep := toolclean.Clean(content)
+	if !rep.Changed {
+		return content
+	}
+	log.Printf("[tool_denoise] %s: %d -> %d bytes (ansi=%d cr=%d dup=%d err_kept=%d)",
+		toolName, rep.InputBytes, rep.OutputBytes,
+		rep.ANSIRemoved, rep.CRFolded, rep.DupLinesRemoved, rep.ErrorLinesKept)
+	return cleaned
 }
 
 // IngestUser stores a user message.
