@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { api, getActiveWorkspace } from '../bridge/inferglow.ts'
+import { fileIcon } from './fileIcons.tsx'
 import type { FsEntry } from '../api/client.ts'
 
 const PAGE = 200
@@ -204,7 +205,7 @@ export function FilesPanel() {
       >
         <span className="dsh-pane-tree-caret">{e.is_dir ? (isOpen ? '▾' : '▸') : ''}</span>
         <span className="dsh-pane-tree-name">
-          {e.is_dir ? '📁' : '📄'}
+          {fileIcon(e.name, e.is_dir, isOpen)}
           <span className="dsh-pane-tree-label" title={e.path}>{e.name}</span>
         </span>
         {!e.is_dir && (
@@ -262,7 +263,7 @@ export function FilesPanel() {
           {searchHits.matches.map(m => (
             <div key={m} className="dsh-pane-tree-row" onClick={() => void openPreview(m)}>
               <span className="dsh-pane-tree-caret" />
-              <span className="dsh-pane-tree-name">📄<span className="dsh-pane-tree-label" title={m}>{m}</span></span>
+              <span className="dsh-pane-tree-name">{fileIcon(m, false)}<span className="dsh-pane-tree-label" title={m}>{m}</span></span>
               <button type="button" className="dsh-pane-tree-act" aria-label={`预览 ${m}`}
                 onClick={ev => { ev.stopPropagation(); void openPreview(m) }}>…</button>
             </div>
@@ -280,7 +281,7 @@ export function FilesPanel() {
               {recent.map(f => (
                 <div key={f.path} className="dsh-pane-tree-row" onClick={() => void openPreview(f.path)}>
                   <span className="dsh-pane-tree-caret" />
-                  <span className="dsh-pane-tree-name">🕒<span className="dsh-pane-tree-label" title={f.path}>{f.path}</span></span>
+                  <span className="dsh-pane-tree-name">{fileIcon(f.path, false)}<span className="dsh-pane-tree-label" title={f.path}>{f.path}</span></span>
                 </div>
               ))}
             </>
