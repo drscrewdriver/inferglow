@@ -29,8 +29,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // Terminal v1 (POST /v1/exec): one-command-one-result execution, NOT an
@@ -127,9 +131,31 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Windows affordances: `dir` is a cmd builtin and `pwd` does not exist as
+	// an executable, so the bare forms get native handling. Both are restricted
+	// to the no-argument form — forwarding extra args through `cmd /c` would
+	// reintroduce shell metacharacter injection. POSIX needs neither.
+	argv := req.Argv
+	// cmd builtins emit the OEM code page (GBK on zh-CN), not UTF-8.
+	usedCmdBuiltin := false
+	if runtime.GOOS == "windows" && len(argv) == 1 {
+		switch strings.ToLower(argv[0]) {
+		case "dir":
+			argv = []string{"cmd", "/c", "dir"}
+			usedCmdBuiltin = true
+		case "pwd":
+			s.auditExec(req, 0, "native pwd")
+			writeJSON(w, http.StatusOK, execResult{
+				Stdout:     workdir + "\n",
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = workdir
 
 	var stdout, stderr strings.Builder
@@ -138,8 +164,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 
 	runErr := cmd.Run()
 	res := execResult{
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
+		Stdout:     decodeWindowsConsole(stdout.String(), usedCmdBuiltin),
+		Stderr:     decodeWindowsConsole(stderr.String(), usedCmdBuiltin),
 		DurationMs: time.Since(start).Milliseconds(),
 		Truncated:  stdout.Len() >= execOutputLimit || stderr.Len() >= execOutputLimit,
 	}
@@ -148,7 +174,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		res.ExitCode = exitErr.ExitCode()
 	} else if runErr != nil {
 		res.ExitCode = -1
-		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + runErr.Error())
+		hint := runErr.Error()
+		if strings.Contains(hint, "executable file not found") && strings.EqualFold(argv[0], "ls") {
+			hint += "（Windows 无 ls:用 dir,或把 Git\\usr\\bin 加入 PATH）"
+		}
+		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + hint)
 	}
 	s.auditExec(req, res.ExitCode, fmt.Sprintf("duration=%s", time.Since(start).Round(time.Millisecond)))
 	writeJSON(w, http.StatusOK, res)
@@ -195,6 +225,24 @@ func allowlistNames() []string {
 type limitedWriter struct {
 	b     *strings.Builder
 	limit int
+}
+
+// decodeWindowsConsole normalizes cmd-builtin output to UTF-8. The OEM code
+// page is system-dependent (65001 = already UTF-8 on machines with the
+// "Beta: Unicode UTF-8" option, GBK on stock zh-CN) — so try UTF-8 validity
+// first and only fall back to GBK decoding.
+func decodeWindowsConsole(s string, fromCmdBuiltin bool) string {
+	if !fromCmdBuiltin || runtime.GOOS != "windows" || s == "" {
+		return s
+	}
+	if utf8.ValidString(s) {
+		return s
+	}
+	out, err := simplifiedchinese.GBK.NewDecoder().Bytes([]byte(s))
+	if err != nil {
+		return s
+	}
+	return string(out)
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
