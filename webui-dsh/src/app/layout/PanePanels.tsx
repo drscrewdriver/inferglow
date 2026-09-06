@@ -1,41 +1,16 @@
 /**
  * PanePanels — the three pane content components shown under the bottom tab
  * bar, mirroring the reference layouts for 文件 / 源代码管理 / 任务管理.
+ * The files pane is wired to the real backend (/v1/fs/*); the rest are the
+ * upstream static demos.
  */
 
 import type { TabKind } from './PaneEmptyCards.tsx'
+import { FilesPanel } from '../../panels/FilesPanel.tsx'
 
-/* ── 1) 文件树 (Files) ── */
-const FILES_TREE = [
-  { name: 'src', folder: true, indent: 0 },
-  { name: 'app', folder: true, indent: 1 },
-  { name: 'App.tsx', folder: false, indent: 2 },
-  { name: 'main.tsx', folder: false, indent: 1 },
-  { name: 'styles', folder: true, indent: 0 },
-  { name: 'components.css', folder: false, indent: 1 },
-  { name: 'vite.config.ts', folder: false, indent: 0 },
-]
-
+/* ── 1) 文件树 (Files) — real workspace tree (panels/FilesPanel) ── */
 function FilesTree() {
-  return (
-    <div className="dsh-pane dsh-pane-files">
-      <div className="dsh-pane-files-toolbar">
-        <input className="dsh-pane-files-search" placeholder="按文件名搜索…" />
-        <button type="button" className="dsh-pane-iconbtn" title="刷新">↻</button>
-        <button type="button" className="dsh-pane-iconbtn" title="上传文件">↑</button>
-        <button type="button" className="dsh-pane-iconbtn" title="上传文件夹">📁</button>
-      </div>
-      <div className="dsh-pane-files-tree">
-        {FILES_TREE.map(n => (
-          <div key={n.name} className={`dsh-pane-tree-row${n.folder ? ' is-folder' : ''}`} style={{ paddingLeft: 8 + n.indent * 16 }}>
-            <span className="dsh-pane-tree-caret">{n.folder ? '▸' : ''}</span>
-            <span className="dsh-pane-tree-name">{n.folder ? '📁' : '📄'}<span className="dsh-pane-tree-label">{n.name}</span></span>
-            <button type="button" className="dsh-pane-tree-act" aria-label="操作">…</button>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
+  return <FilesPanel />
 }
 
 /* ── 2) 源代码管理 (SCM) ── */

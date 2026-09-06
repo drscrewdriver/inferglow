@@ -39,6 +39,32 @@ export interface SendChatOptions {
   handlers: SendChatHandlers
 }
 
+export interface FsEntry {
+  name: string
+  path: string
+  is_dir: boolean
+  hidden?: boolean
+}
+
+export interface FsTreeResult {
+  root: string
+  path: string
+  entries: FsEntry[]
+}
+
+export interface FsReadResult {
+  root: string
+  path: string
+  content: string
+  bytes: number
+}
+
+export interface ProducedFile {
+  path: string
+  bytes: number
+  modified: string
+}
+
 export interface InferGlowApi {
   health(): Promise<boolean>
   listAgents(): Promise<Agent[]>
@@ -46,6 +72,14 @@ export interface InferGlowApi {
   createSession(agentId: string, title?: string): Promise<Session>
   deleteSession(sessionId: string): Promise<void>
   listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
+  /** One-level directory listing (lazy-loading friendly). */
+  fsTree(path?: string): Promise<FsTreeResult>
+  /** Whole-file read (server caps at 10MB). */
+  fsRead(path: string): Promise<FsReadResult>
+  /** Recursive filename substring search. */
+  fsSearch(q: string, limit?: number): Promise<{ query: string; matches: string[]; truncated: boolean }>
+  /** Most recently modified files under the workspace. */
+  producedFiles(limit?: number): Promise<{ files: ProducedFile[]; count: number }>
   sendChat(opts: SendChatOptions): Promise<void>
   /** Abort the in-flight stream-run request, if any. */
   cancel(): void
@@ -209,6 +243,30 @@ export function createInferGlowApi(getBase: () => string = () => ''): InferGlowA
       })
     },
     listMessages,
+    async fsTree(path = '') {
+      return request<FsTreeResult>(
+        trimBase(getBase()),
+        `/v1/fs/tree${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+      )
+    },
+    async fsRead(path: string) {
+      return request<FsReadResult>(
+        trimBase(getBase()),
+        `/v1/fs/read?path=${encodeURIComponent(path)}`,
+      )
+    },
+    async fsSearch(q: string, limit = 200) {
+      return request<{ query: string; matches: string[]; truncated: boolean }>(
+        trimBase(getBase()),
+        `/v1/fs/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      )
+    },
+    async producedFiles(limit = 10) {
+      return request<{ files: ProducedFile[]; count: number }>(
+        trimBase(getBase()),
+        `/v1/produced-files?limit=${limit}`,
+      )
+    },
     async sendChat(opts) {
       const streamed = await sendChatSSE(opts)
       if (streamed) return
