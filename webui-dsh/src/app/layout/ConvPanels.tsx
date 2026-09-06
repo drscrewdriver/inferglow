@@ -29,7 +29,7 @@ interface TraceData {
 function tracesToSpans(traces: { content: string; created_at: string }[]): SpanSummary[] {
   const out: SpanSummary[] = []
   for (const t of traces) {
-    let parsed: { start?: string; spans?: { kind: string; name: string; duration_ms: number; error?: boolean }[] } = {}
+    let parsed: { start?: string; spans?: { kind: string; name: string; duration_ms: number; error?: boolean }[] }
     try { parsed = JSON.parse(t.content) } catch { continue }
     const startMs = parsed.start ? Date.parse(parsed.start) : Date.parse(t.created_at)
     for (const sp of parsed.spans ?? []) {

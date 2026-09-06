@@ -192,7 +192,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       })),
       { id: '(unassigned)', label: '未分组', ws: false, sessions: sortedSessions.filter(s => !s.workspace) },
     ]
-  }, [workspaces, activeWs, sortedSessions, settings.sidebarGroupBy])
+  }, [workspaces, sortedSessions, settings.sidebarGroupBy])
 
   function handleNewSession() { void createSession() }
   function handleSelectSession(id: string) { void selectSession(id) }

@@ -67,7 +67,7 @@ function parseRuns(traces: SessionTrace[]): RunRow[] {
       spans?: { kind: string; name: string; duration_ms: number; error?: boolean }[]
       usage?: RunRow['usage']
       error?: string
-    } = {}
+    }
     try { parsed = JSON.parse(t.content) } catch { continue }
     const startMs = parsed.start ? Date.parse(parsed.start) : Date.parse(t.created_at)
     let durMs = 0
