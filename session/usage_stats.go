@@ -23,10 +23,18 @@ package session
 import "time"
 
 // UsageRecord is a single LLM call record within a session.
+//
+// Turn/Round/SessionSeq locate the call inside the run: Round is the engine
+// LLM-call index within a run, Turn the user-message-scoped turn number, and
+// SessionSeq the session rollout seq the call answered. All three are
+// optional (older usage.jsonl lines predate them) and omitted when zero.
 type UsageRecord struct {
 	Timestamp        time.Time `json:"timestamp"`
 	Model            string    `json:"model"`
 	Provider         string    `json:"provider"`
+	Turn             int       `json:"turn,omitempty"`
+	Round            int       `json:"round,omitempty"`
+	SessionSeq       int64     `json:"session_seq,omitempty"`
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
 	CachedTokens     int       `json:"cached_tokens"`
@@ -38,14 +46,14 @@ type UsageRecord struct {
 
 // SessionUsageStats aggregates all usage for a session.
 type SessionUsageStats struct {
-	SessionID              string        `json:"session_id"`
-	TotalPromptTokens      int           `json:"total_prompt_tokens"`
-	TotalCompletionTokens  int           `json:"total_completion_tokens"`
-	TotalCachedTokens      int           `json:"total_cached_tokens"`
-	TotalReasoningTokens   int           `json:"total_reasoning_tokens"`
-	TotalTokens            int           `json:"total_tokens"`
-	TotalCost              float64       `json:"total_cost"`
-	Currency               string        `json:"currency"`
-	RecordCount            int           `json:"record_count"`
-	Records                []UsageRecord `json:"records,omitempty"`
+	SessionID             string        `json:"session_id"`
+	TotalPromptTokens     int           `json:"total_prompt_tokens"`
+	TotalCompletionTokens int           `json:"total_completion_tokens"`
+	TotalCachedTokens     int           `json:"total_cached_tokens"`
+	TotalReasoningTokens  int           `json:"total_reasoning_tokens"`
+	TotalTokens           int           `json:"total_tokens"`
+	TotalCost             float64       `json:"total_cost"`
+	Currency              string        `json:"currency"`
+	RecordCount           int           `json:"record_count"`
+	Records               []UsageRecord `json:"records,omitempty"`
 }

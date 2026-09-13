@@ -105,6 +105,58 @@ export function getUsageTotals(): {
   return { ...usageTotals }
 }
 
+/* ── Persisted usage totals (P4) ──
+ * Server-side per-request records are the authoritative cross-restart
+ * accounting; the in-memory usageTotals above only counts calls made from
+ * this page and serves as the live increment on top. Returns null when the
+ * session has no persisted records (or the endpoint is unavailable). */
+export interface PersistedUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  llmCalls: number
+  cachedTokens: number
+}
+
+export async function fetchPersistedUsage(sessionId: string): Promise<PersistedUsage | null> {
+  try {
+    const requests = await api.sessionRequests(sessionId, { limit: 1000 })
+    if (requests.length === 0) return null
+    const totals: PersistedUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, llmCalls: requests.length, cachedTokens: 0 }
+    for (const req of requests) {
+      totals.totalTokens += req.tokens ?? req.usage?.total_tokens ?? 0
+      totals.promptTokens += req.usage?.prompt_tokens ?? 0
+      totals.completionTokens += req.usage?.completion_tokens ?? 0
+      totals.cachedTokens += req.cached_tokens ?? 0
+    }
+    return totals
+  } catch {
+    return null
+  }
+}
+
+/** Prepend one older history page (before-cursor pagination). Returns false
+ * when there is nothing older (top of history reached / local-only session). */
+export async function loadOlderMessages(sessionId: string): Promise<boolean> {
+  const session = store.sessions.find(s => s.id === sessionId)
+  if (!session || session.localOnly || session.messages.length === 0) return false
+  const oldest = session.messages[0]?.timestamp
+  if (!oldest) return false
+  const before = new Date(oldest - 1).toISOString()
+  try {
+    const older = await api.listMessages(sessionId, 50, before)
+    if (older.length === 0) return false
+    const known = new Set(session.messages.map(m => m.id))
+    const fresh = older.map(toDshMessage).filter(m => !known.has(m.id))
+    if (fresh.length === 0) return false
+    store.prependMessages(sessionId, fresh)
+    return true
+  } catch (err) {
+    console.warn('[webui-dsh] load older messages failed:', err)
+    return false
+  }
+}
+
 /** Map a backend session record onto the DSH session shape (no messages yet). */
 function toDshSession(s: {
   id: string

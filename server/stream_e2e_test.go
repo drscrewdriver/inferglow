@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/inferglow/model"
 	"github.com/inferglow/orchestrator/agent"
+	"github.com/inferglow/session"
 	"github.com/inferglow/server/config"
 )
 
@@ -24,12 +26,22 @@ import (
 // fixtures use), letting the real provider+engine path be exercised without a
 // network LLM.
 func fakeOpenAIStreamLLM(chunks []string) *httptest.Server {
+	return fakeOpenAIStreamLLMWithUsage(chunks, false)
+}
+
+// fakeOpenAIStreamLLMWithUsage is fakeOpenAIStreamLLM with an optional
+// OpenAI-style usage chunk (empty choices, usage object) before [DONE] —
+// the wire shape stream_options.include_usage produces.
+func fakeOpenAIStreamLLMWithUsage(chunks []string, withUsage bool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, c := range chunks {
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":null}]}\n\n", c)
 		}
 		w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"))
+		if withUsage {
+			w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":40,\"total_tokens\":160,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n"))
+		}
 		w.Write([]byte("data: [DONE]\n"))
 	}))
 }
@@ -364,5 +376,88 @@ func TestAgentFunctionCallLoop(t *testing.T) {
 	}
 	if assistant != want {
 		t.Fatalf("assistant record = %q, want %q", assistant, want)
+	}
+}
+
+// TestStreamRunPerRequestUsagePersisted drives the per-request usage wiring:
+// a streaming run with a chat session and a configured usage data dir must
+// persist one UsageRecord per LLM round (turn/round dimensions included) into
+// sessions/<id>.usage.jsonl, plus a trace summary carrying the schema:2
+// requests array — not just the last round's usage.
+func TestStreamRunPerRequestUsagePersisted(t *testing.T) {
+	chunks := []string{"你好", "世界"}
+	llmSrv := fakeOpenAIStreamLLMWithUsage(chunks, true)
+	defer llmSrv.Close()
+
+	store, err := NewConfigAgentStore(config.MultiLLMConfig{
+		Providers: map[string]config.LLMConfig{
+			"fake": {Provider: "openai", BaseURL: llmSrv.URL, Model: "mock-1", APIKey: "test-key"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("config agent store: %v", err)
+	}
+
+	srv := NewServer(DefaultConfig(), store)
+	srv.SetMessageStore(NewMessageStore())
+	usageDir := t.TempDir()
+	srv.cfg.UsageDataDir = usageDir
+
+	req := httptest.NewRequest("POST", "/v1/agents/fake/stream-run", strings.NewReader(`{"message":"hi","session_id":"sess-usage"}`))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "event: llm_end") || !strings.Contains(body, `"prompt_tokens":120`) {
+		t.Fatalf("llm_end must carry provider usage:\n%s", body)
+	}
+	if !strings.Contains(body, "event: run_end") {
+		t.Fatalf("missing run_end:\n%s", body)
+	}
+
+	// Per-request usage persisted to sessions/sess-usage.usage.jsonl.
+	loaded, err := session.LoadUsage("sess-usage", usageDir)
+	if err != nil {
+		t.Fatalf("LoadUsage: %v", err)
+	}
+	if loaded.RecordCount != 1 {
+		t.Fatalf("expected 1 usage record, got %d", loaded.RecordCount)
+	}
+	rec := loaded.Records[0]
+	if rec.Model != "mock-1" {
+		t.Fatalf("usage record model = %q, want mock-1", rec.Model)
+	}
+	if rec.Round != 0 {
+		t.Fatalf("usage record round = %d, want 0", rec.Round)
+	}
+	if rec.PromptTokens != 120 || rec.CompletionTokens != 40 || rec.CachedTokens != 30 {
+		t.Fatalf("usage record tokens wrong: %+v", rec)
+	}
+
+	// Trace summary carries the schema:2 requests array.
+	traces := srv.msgStore.ListTraces("sess-usage", 10)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace record, got %d", len(traces))
+	}
+	var summary struct {
+		Schema   int `json:"schema"`
+		Requests []struct {
+			Round int               `json:"round"`
+			Model string            `json:"model"`
+			Usage *model.UsageInfo  `json:"usage"`
+		} `json:"requests"`
+		Usage *model.UsageInfo `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(traces[0].Content), &summary); err != nil {
+		t.Fatalf("parse trace content: %v", err)
+	}
+	if summary.Schema != 2 {
+		t.Fatalf("expected schema 2 in trace summary, got %d", summary.Schema)
+	}
+	if len(summary.Requests) != 1 || summary.Requests[0].Round != 0 || summary.Requests[0].Model != "mock-1" {
+		t.Fatalf("trace requests wrong: %+v", summary.Requests)
+	}
+	if summary.Usage == nil || summary.Usage.PromptTokens != 120 {
+		t.Fatalf("backward-compatible usage field wrong: %+v", summary.Usage)
 	}
 }

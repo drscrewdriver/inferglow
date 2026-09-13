@@ -52,10 +52,10 @@ type HybridManager struct {
 	renderCache *RenderedCache
 
 	// --- Phase 0: sweet-spot passthrough ---
-	sweetSpotTokens   int     // effective value (may be adjusted by tolerance)
-	sweetSpotOriginal int     // original config value (immutable after init)
+	sweetSpotTokens    int     // effective value (may be adjusted by tolerance)
+	sweetSpotOriginal  int     // original config value (immutable after init)
 	sweetSpotTolerance float64 // current multiplier (1.0 = original)
-	toleranceMu       sync.Mutex
+	toleranceMu        sync.Mutex
 
 	// sliding window for citation tracking
 	recentRefCounts []int
@@ -90,6 +90,17 @@ type HybridManager struct {
 	// reorgEngine is the LLM compression engine used by Reorganize when the
 	// caller passes nil; attach via SetReorganizeEngine.
 	reorgEngine CompressEngine
+
+	// compactionSink (P2, optional) receives every settled CompressResult so
+	// callers can emit context_event telemetry (CompactionID + shadowed
+	// range). Nil = disabled. Set via SetCompactionSink.
+	compactionSink func(*CompressResult)
+}
+
+// SetCompactionSink installs the post-compaction telemetry hook. Called with
+// the settled result after each TriggerCompression that compressed ≥1 step.
+func (h *HybridManager) SetCompactionSink(fn func(*CompressResult)) {
+	h.compactionSink = fn
 }
 
 // compactionRunInfo tracks one in-flight compression transaction.
@@ -653,6 +664,12 @@ func (h *HybridManager) TriggerCompression(ctx context.Context, opts CompressOpt
 			StartStep: result.ShadowedStepIDs[0],
 			EndStep:   result.ShadowedStepIDs[len(result.ShadowedStepIDs)-1],
 		}
+	}
+
+	// P2: settle the compaction — emit telemetry through the optional sink
+	// (context_event producer) before returning the result.
+	if h.compactionSink != nil && result.StepsCompressed > 0 {
+		h.compactionSink(result)
 	}
 
 	return result, nil

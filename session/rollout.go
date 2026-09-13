@@ -41,6 +41,24 @@ const (
 	RolloutToolCall RolloutItemType = "tool_call"
 	// RolloutToolResult 表示一次工具调用结果。
 	RolloutToolResult RolloutItemType = "tool_result"
+	// RolloutTurnStart 标识一次用户回合（turn）的开始：engine 收到用户消息、
+	// 进入 executeLoop 之时。Turn 字段自此处起生效。
+	RolloutTurnStart RolloutItemType = "turn_start"
+	// RolloutTurnEnd 标识该回合的结束（final / error / preempt），携带耗时
+	// 与轮次摘要。
+	RolloutTurnEnd RolloutItemType = "turn_end"
+	// RolloutLLMRequest 表示一次发出的 LLM 请求（含六分类上下文构成估算，
+	// Payload 为 model.LLMRequestPayload）。
+	RolloutLLMRequest RolloutItemType = "llm_request"
+	// RolloutLLMResponse 表示一次 LLM 请求的落定结果（usage/耗时/TTFT，
+	// Payload 为 model.LLMResponsePayload）。
+	RolloutLLMResponse RolloutItemType = "llm_response"
+	// RolloutContextEvent 表示上下文侧事件（压缩/注入/模型切换，Payload 为
+	// model.ContextEventPayload）。
+	RolloutContextEvent RolloutItemType = "context_event"
+	// RolloutFileOp 表示从工具调用折叠出的文件操作（Payload 为
+	// model.FileOpPayload，op = read | write | search）。
+	RolloutFileOp RolloutItemType = "file_op"
 )
 
 // RolloutItem 是会话级 Rollout 的单个条目。它以 JSONL 形式逐行追加落盘，
@@ -51,11 +69,17 @@ type RolloutItem struct {
 	Seq       int64           `json:"seq"`
 	Type      RolloutItemType `json:"type"`
 	Timestamp time.Time       `json:"timestamp"`
-	Content   string          `json:"content,omitempty"`
-	ToolName  string          `json:"tool_name,omitempty"`
-	Params    map[string]any  `json:"params,omitempty"`
-	Result    string          `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	// Turn 是用户回合编号（turn_start 自增；0 表示旧数据或未维护回合）。
+	Turn     int            `json:"turn,omitempty"`
+	Content  string         `json:"content,omitempty"`
+	ToolName string         `json:"tool_name,omitempty"`
+	Params   map[string]any `json:"params,omitempty"`
+	Result   string         `json:"result,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	// Payload 携带结构化事件负载（llm_request/llm_response/context_event/
+	// file_op/turn_end 等，见 model/telemetry.go 的契约类型）。旧消费方
+	// 忽略未知字段，天然向后兼容。
+	Payload any `json:"payload,omitempty"`
 	// AuditRecordID 关联 audit 链记录 ID。刻意不使用 omitempty：即使为空
 	// 也须以显式空串出现在 JSONL 中，保证外部工具可按字段探测。
 	AuditRecordID string `json:"audit_record_id"`

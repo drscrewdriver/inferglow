@@ -39,6 +39,10 @@ type UsageRecorder struct {
 	stats     SessionUsageStats
 	pricing   *model.Pricing // for cost calculation, can be nil
 	clock     func() time.Time
+	// file is the persistent handle to sessions/<id>.usage.jsonl, opened
+	// lazily on first Record and reused (O_APPEND) — replacing the previous
+	// open/write/close per record. Close releases it.
+	file *os.File
 }
 
 // NewUsageRecorder creates a UsageRecorder for the given session.
@@ -57,6 +61,13 @@ func NewUsageRecorder(sessionID, dataDir string, pricing *model.Pricing) *UsageR
 
 // Record records a single usage event.
 func (r *UsageRecorder) Record(usage model.UsageInfo, modelName, provider string) {
+	r.RecordAt(usage, modelName, provider, 0, 0, 0)
+}
+
+// RecordAt records a single usage event located inside the run: turn is the
+// user-message-scoped turn number, round the engine LLM-call index, and
+// sessionSeq the rollout seq the call answered (all optional; zero = unset).
+func (r *UsageRecorder) RecordAt(usage model.UsageInfo, modelName, provider string, turn, round int, sessionSeq int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -81,6 +92,9 @@ func (r *UsageRecorder) Record(usage model.UsageInfo, modelName, provider string
 		Timestamp:        r.clock(),
 		Model:            modelName,
 		Provider:         provider,
+		Turn:             turn,
+		Round:            round,
+		SessionSeq:       sessionSeq,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		CachedTokens:     cachedTokens,
@@ -116,26 +130,52 @@ func (r *UsageRecorder) Summary() SessionUsageStats {
 	return r.stats
 }
 
-// appendRecord writes a single UsageRecord as a JSON line to the usage.jsonl file.
-func (r *UsageRecorder) appendRecord(record UsageRecord) error {
-	dir := filepath.Join(r.dataDir, "sessions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create sessions dir: %w", err)
+// Flush syncs the persistent usage file handle to disk. Safe to call
+// concurrently with Record and repeatedly; a no-op when nothing was recorded.
+func (r *UsageRecorder) Flush() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
 	}
+	return r.file.Sync()
+}
 
-	path := filepath.Join(dir, r.sessionID+".usage.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open usage file: %w", err)
+// Close flushes and releases the persistent usage file handle. The recorder
+// must not be used for Record afterwards.
+func (r *UsageRecorder) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
 	}
-	defer f.Close()
+	err := r.file.Close()
+	r.file = nil
+	return err
+}
+
+// appendRecord writes a single UsageRecord as a JSON line to the usage.jsonl
+// file via the persistent O_APPEND handle (opened lazily on first record).
+func (r *UsageRecorder) appendRecord(record UsageRecord) error {
+	if r.file == nil {
+		dir := filepath.Join(r.dataDir, "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create sessions dir: %w", err)
+		}
+		f, err := os.OpenFile(filepath.Join(dir, r.sessionID+".usage.jsonl"),
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("open usage file: %w", err)
+		}
+		r.file = f
+	}
 
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshal usage record: %w", err)
 	}
 
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if _, err := r.file.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("write usage record: %w", err)
 	}
 

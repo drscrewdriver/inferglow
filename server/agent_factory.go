@@ -78,6 +78,10 @@ func (c *ConfigAgent) Run(ctx context.Context, userMessage string) (string, erro
 	return c.Agent.Run(ctx, userMessage)
 }
 
+// ModelName exposes the configured model name for per-request usage records
+// and span attribution (server.modelNamer).
+func (c *ConfigAgent) ModelName() string { return c.Model }
+
 // RunWithCallbacks exposes the underlying agent's variadic Run so
 // handleStreamRun can inject per-run SSE streaming callbacks.
 func (c *ConfigAgent) RunWithCallbacks(ctx context.Context, userMessage string, opts ...agentpkg.RunOption) (string, error) {

@@ -137,6 +137,12 @@ func (a *AssemblyManager) Surround(stepID int, before, after int) ([]RenderedBlo
 
 func (a *AssemblyManager) Stats() ContextStats { return a.engine.Stats() }
 
+// SetCompactionSink forwards the post-compaction telemetry hook to the
+// underlying engine (P2 context_event producer).
+func (a *AssemblyManager) SetCompactionSink(fn func(*CompressResult)) {
+	a.engine.SetCompactionSink(fn)
+}
+
 func (a *AssemblyManager) Close() error { return a.engine.Close() }
 
 // --- A-2: Two-phase assembly API (additive, not on frozen interface) ---

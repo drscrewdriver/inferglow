@@ -129,6 +129,8 @@ export interface AppState {
   replaceAllSessions: (sessions: Session[]) => void
   /** Bridge: backfill one session's history without re-triggering auto-title. */
   replaceMessages: (sessionId: string, messages: Message[]) => void
+  /** Bridge: prepend an older history page (chronological) to a session. */
+  prependMessages: (sessionId: string, messages: Message[]) => void
   
   /* ── Actions: Messages ── */
   addMessage: (sessionId: string, message: Message) => void
@@ -299,6 +301,15 @@ const actions: AppState = {
       session.messages = messages
       session.messagesLoaded = true
       session.localOnly = false
+      notify()
+    }
+  },
+
+  prependMessages(sessionId, messages) {
+    const sessions = state.sessions ?? []
+    const session = sessions.find(s => s.id === sessionId)
+    if (session && messages.length > 0) {
+      session.messages = [...messages, ...session.messages]
       notify()
     }
   },

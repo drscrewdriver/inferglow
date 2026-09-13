@@ -28,13 +28,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/inferglow/builtins/actions"
 	contextmgr "github.com/inferglow/context"
 	"github.com/inferglow/context/compress"
 	"github.com/inferglow/context/retrieval"
 	"github.com/inferglow/context/store/jsonl"
 	"github.com/inferglow/context/toolclean"
-	"github.com/inferglow/builtins/actions"
 	"github.com/inferglow/memory"
+	"github.com/inferglow/model"
+	"github.com/inferglow/session"
 	"github.com/inferglow/skill"
 )
 
@@ -42,26 +44,26 @@ import (
 // long-term memory systems. It handles recall (search → inject) and
 // ingest (store → index → promote) in a single abstraction.
 type MemoryBridge struct {
-	mgr       contextmgr.ContextManager
-	hybrid    *contextmgr.HybridManager // concrete type for AppendConstitutional
-	retriever *retrieval.FusionRetriever
-	bm25      *retrieval.BM25Index
-	promoter  *contextmgr.LongMemPromoter
-	store     *jsonl.Store
-	memStore  memory.Store  // file-based auto-memory store
-	skillStore *skill.Store // procedural memory (skill store)
-	projectRoot string      // project root for meta-memory scanning
-	topK      int
-	stepSeq   int
-	sessionID string
+	mgr         contextmgr.ContextManager
+	hybrid      *contextmgr.HybridManager // concrete type for AppendConstitutional
+	retriever   *retrieval.FusionRetriever
+	bm25        *retrieval.BM25Index
+	promoter    *contextmgr.LongMemPromoter
+	store       *jsonl.Store
+	memStore    memory.Store // file-based auto-memory store
+	skillStore  *skill.Store // procedural memory (skill store)
+	projectRoot string       // project root for meta-memory scanning
+	topK        int
+	stepSeq     int
+	sessionID   string
 
 	// Auto-background trigger state (CM-2).
 	autoBgThreshold int  // fire after this many steps (0 = disabled)
 	autoBgTriggered bool // once-only flag
 
 	// Optional injected backends (nil = use defaults).
-	externalStore   StepStoreInjector
-	vectorBackend   VectorBackendInjector
+	externalStore StepStoreInjector
+	vectorBackend VectorBackendInjector
 
 	// MC-2: compression model chain (nil = no dedicated compress model).
 	compressChain *compress.CompressModelChain
@@ -161,15 +163,15 @@ func NewMemoryBridge(cfg CLIConfig, sessionID string) (*MemoryBridge, error) {
 	taskStore := actions.NewTaskStore(taskFile)
 
 	return &MemoryBridge{
-		mgr:        mgr,
-		hybrid:     hybrid,
-		retriever:  fusion,
-		bm25:       bm25,
-		promoter:   promoter,
-		store:      store,
-		memStore:   memStore,
-		skillStore: skillStore,
-		projectRoot: ".",
+		mgr:             mgr,
+		hybrid:          hybrid,
+		retriever:       fusion,
+		bm25:            bm25,
+		promoter:        promoter,
+		store:           store,
+		memStore:        memStore,
+		skillStore:      skillStore,
+		projectRoot:     ".",
 		topK:            cfg.TopK,
 		sessionID:       sessionID,
 		autoBgThreshold: autoBgStepThreshold(cfg.Features.AutoBackground),
@@ -598,4 +600,28 @@ func estimateTokens(s string) int {
 		return 1
 	}
 	return tokens
+}
+
+// AttachRollout (P2) wires the bridge's context manager compaction sink to
+// the session rollout recorder: every settled compression becomes a
+// context_event rollout item carrying CompactionID and the shadowed step
+// range. Calling it more than once re-wires the sink to the latest recorder;
+// a nil recorder is a no-op.
+func (b *MemoryBridge) AttachRollout(r *session.RolloutRecorder) {
+	if r == nil {
+		return
+	}
+	if h := b.hybrid; h != nil {
+		h.SetCompactionSink(func(res *contextmgr.CompressResult) {
+			payload := model.ContextEventPayload{
+				Kind:            model.ContextEventCompaction,
+				CompactionID:    res.CompactionID,
+				StartStep:       res.ShadowedRange.StartStep,
+				EndStep:         res.ShadowedRange.EndStep,
+				StepsCompressed: res.StepsCompressed,
+				TokensSaved:     res.TokensSaved,
+			}
+			_ = r.Record(session.RolloutItem{Type: session.RolloutContextEvent, Payload: payload})
+		})
+	}
 }

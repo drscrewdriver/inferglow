@@ -82,12 +82,100 @@ export interface TraceSpanLine {
   error?: boolean
 }
 
+/** Six-category token composition of one LLM request (dsh-context style). */
+export interface ContextBreakdown {
+  system: number
+  tool_schemas: number
+  user: number
+  inject: number
+  assistant: number
+  tool_results: number
+  total: number
+}
+
+/** One per-request (per LLM round) usage record — GET /requests rows. */
+export interface RequestRecord {
+  round: number
+  turn?: number
+  model?: string
+  timestamp: string
+  duration_ms?: number
+  tokens: number
+  cached_tokens?: number
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+/** One turn summary entry of a run trace (server: one run = one turn). */
+export interface TraceTurn {
+  turn: number
+  rounds?: number
+  total_tokens?: number
+  wall_ms?: number
+  start?: string
+  error?: string
+}
+
+/** Structured summary embedded in a trace record when the content parses. */
+export interface RunTraceSummary {
+  schema?: number // 2 once requests[] present
+  agent_id: string
+  start: string
+  duration: string
+  duration_ms?: number
+  spans: TraceSpanLine[]
+  requests?: RequestRecord[]
+  turns?: TraceTurn[]
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  error: string
+}
+
+/** One rollout event of the session event stream (GET /events). */
+export interface SessionEvent {
+  session_id: string
+  seq: number
+  type: string // turn_start | turn_end | llm_request | llm_response | context_event | file_op | ...
+  timestamp: string
+  turn?: number
+  round?: number
+  content?: string
+  tool_name?: string
+  params?: Record<string, unknown>
+  result?: string
+  error?: string
+  payload?: unknown // typed per event kind (see model/telemetry.go)
+}
+
+/** Context event payload (context_event rollout items). */
+export interface ContextEventPayload {
+  kind: string // compaction | prune | inject | model_switch
+  compaction_id?: string
+  start_step?: number
+  end_step?: number
+  steps_compressed?: number
+  tokens_saved?: number
+  from_model?: string
+  to_model?: string
+}
+
+/** Per-session usage report (GET /usage/report?session_id=). */
+export interface SessionUsageReport {
+  session_id: string
+  total_tokens: number
+  total_cost: number
+  currency: string
+  record_count: number
+  by_turn: Record<string, { tokens: number; cost: number; count: number }>
+  by_billing_bucket: Record<string, { tokens: number; cost: number; count: number }>
+}
+
 /** One persisted run summary (trace-role record). */
 export interface SessionTrace {
   id: string
   session_id: string
-  content: string // JSON: {agent_id,start,duration,spans,usage,error}
+  content: string // JSON: {agent_id,start,duration,spans,usage,error[,schema,requests,turns]}
   created_at: string
+  /** Structured summary (present when content parses; old snapshots omit it). */
+  summary?: RunTraceSummary
 }
 
 /** One spawn_agent invocation (server SubagentRegistry record). */
@@ -153,12 +241,18 @@ export interface InferGlowApi {
   setSessionStatus(sessionId: string, status: string): Promise<void>
   /** Spawn-agent registry rows (GET /v1/subagents?session=), newest first. */
   listSubagents(sessionId?: string): Promise<SpawnRecord[]>
-  listMessages(sessionId: string, limit?: number): Promise<ChatMessage[]>
+  listMessages(sessionId: string, limit?: number, before?: string): Promise<ChatMessage[]>
   /** One-level directory listing (lazy-loading friendly). */
   fsTree(path?: string, workspace?: string): Promise<FsTreeResult>
   /** Whole-file read (server caps at 10MB). */
   fsRead(path: string, workspace?: string): Promise<FsReadResult>
   sessionTrace(sessionId: string, limit?: number): Promise<SessionTrace[]>
+  /** Per-request usage records (GET /sessions/{id}/requests?turn=&limit=). */
+  sessionRequests(sessionId: string, opts?: { turn?: number; limit?: number }): Promise<RequestRecord[]>
+  /** Rollout event stream (GET /sessions/{id}/events?kinds=&limit=). */
+  sessionEvents(sessionId: string, opts?: { kinds?: string[]; limit?: number }): Promise<SessionEvent[]>
+  /** Per-session usage report (GET /usage/report?session_id=). */
+  sessionUsageReport(sessionId: string): Promise<SessionUsageReport>
   contextModes(): Promise<{ modes: ContextModeInfo[]; improvements: ContextImprovement[] }>
   listTasks(status?: string): Promise<TaskItem[]>
   createTask(title: string): Promise<TaskItem>
@@ -241,10 +335,12 @@ export function createInferGlowApi(
     return data.sessions ?? []
   }
 
-  async function listMessages(sessionId: string, limit = 50): Promise<ChatMessage[]> {
+  async function listMessages(sessionId: string, limit = 50, before?: string): Promise<ChatMessage[]> {
+    const qs = new URLSearchParams({ limit: String(limit) })
+    if (before) qs.set('before', before)
     const data = await request<{ messages: ChatMessage[] }>(
       base(),
-      `/v1/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+      `/v1/sessions/${encodeURIComponent(sessionId)}/messages?${qs.toString()}`,
       getApiKey,
     )
     // Backend returns newest-first; the chat view is chronological.
@@ -437,6 +533,37 @@ export function createInferGlowApi(
         getApiKey,
       )
       return data.traces ?? []
+    },
+    async sessionRequests(sessionId, opts) {
+      const qs = new URLSearchParams()
+      if (opts?.turn !== undefined) qs.set('turn', String(opts.turn))
+      if (opts?.limit !== undefined) qs.set('limit', String(opts.limit))
+      const q = qs.toString()
+      const data = await request<{ requests: RequestRecord[] }>(
+        base(),
+        `/v1/sessions/${encodeURIComponent(sessionId)}/requests${q ? `?${q}` : ''}`,
+        getApiKey,
+      )
+      return data.requests ?? []
+    },
+    async sessionEvents(sessionId, opts) {
+      const qs = new URLSearchParams()
+      if (opts?.kinds?.length) qs.set('kinds', opts.kinds.join(','))
+      if (opts?.limit !== undefined) qs.set('limit', String(opts.limit))
+      const q = qs.toString()
+      const data = await request<{ events: SessionEvent[] }>(
+        base(),
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events${q ? `?${q}` : ''}`,
+        getApiKey,
+      )
+      return data.events ?? []
+    },
+    async sessionUsageReport(sessionId) {
+      return request<SessionUsageReport>(
+        base(),
+        `/v1/usage/report?session_id=${encodeURIComponent(sessionId)}`,
+        getApiKey,
+      )
     },
     async fsRead(path: string, workspace?: string) {
       return request<FsReadResult>(

@@ -32,9 +32,20 @@ import (
 // module's ReportGenerator.
 //
 // Query params:
+//   - session_id: return the per-session report instead (tokens/cost totals,
+//     by-turn buckets and peak/off-peak billing buckets from usage.jsonl)
 //   - from/to: RFC3339 range bounds (absent = current month)
 //   - model:   optional model filter
 func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request) {
+	if sid := r.URL.Query().Get("session_id"); sid != "" {
+		if s.cfg.UsageDataDir == "" {
+			writeError(w, http.StatusServiceUnavailable, "usage data dir not configured")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.sessionUsageReport(sid))
+		return
+	}
+
 	gen := s.reportGen
 	if gen == nil {
 		gen = session.NewReportGenerator(s.cfg.UsageDataDir)

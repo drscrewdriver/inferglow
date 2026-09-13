@@ -23,6 +23,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func fixedTime() time.Time {
 func TestUsageRecorder_RecordAndSummary(t *testing.T) {
 	dir := t.TempDir()
 	recorder := NewUsageRecorder("test-session-1", dir, nil)
+	defer recorder.Close()
 
 	usage1 := model.UsageInfo{
 		PromptTokens:     100,
@@ -87,6 +89,7 @@ func TestUsageRecorder_WithPricing(t *testing.T) {
 	}
 
 	recorder := NewUsageRecorder("test-session-2", dir, pricing)
+	defer recorder.Close()
 
 	usage := model.UsageInfo{
 		PromptTokens:     1000,
@@ -148,6 +151,7 @@ func TestUsageRecorder_WithReasoningTokens(t *testing.T) {
 	}
 
 	recorder := NewUsageRecorder("test-session-3", dir, pricing)
+	defer recorder.Close()
 
 	usage := model.UsageInfo{
 		PromptTokens:     500,
@@ -180,6 +184,7 @@ func TestUsageRecorder_Persistence(t *testing.T) {
 	}
 
 	recorder := NewUsageRecorder("test-persist", dir, pricing)
+	defer recorder.Close()
 
 	usage1 := model.UsageInfo{
 		PromptTokens:     100,
@@ -264,6 +269,7 @@ func TestUsageRecorder_EmptyState(t *testing.T) {
 func TestUsageRecorder_SummaryWithNoPricing(t *testing.T) {
 	dir := t.TempDir()
 	recorder := NewUsageRecorder("test-nopricing", dir, nil)
+	defer recorder.Close()
 
 	usage := model.UsageInfo{
 		PromptTokens:     100,
@@ -293,6 +299,7 @@ func TestUsageRecorder_RecordWithCachedAndReasoning(t *testing.T) {
 	}
 
 	recorder := NewUsageRecorder("test-cached-reasoning", dir, pricing)
+	defer recorder.Close()
 
 	usage := model.UsageInfo{
 		PromptTokens:     1000,
@@ -339,6 +346,7 @@ func TestUsageRecorder_RecordWithCachedAndReasoning(t *testing.T) {
 func TestUsageRecorder_ClockOverride(t *testing.T) {
 	dir := t.TempDir()
 	recorder := NewUsageRecorder("test-clock", dir, nil)
+	defer recorder.Close()
 	recorder.clock = fixedTime
 
 	usage := model.UsageInfo{
@@ -380,5 +388,76 @@ not-json
 	}
 	if loaded.TotalPromptTokens != 100 {
 		t.Fatalf("expected total_prompt_tokens 100, got %d", loaded.TotalPromptTokens)
+	}
+}
+func TestUsageRecorder_ConcurrentRecords(t *testing.T) {
+	dir := t.TempDir()
+	recorder := NewUsageRecorder("test-concurrent", dir, nil)
+	defer recorder.Close()
+
+	const n = 50
+	usage := model.UsageInfo{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			recorder.RecordAt(usage, "gpt-4", "openai", 0, i, 0)
+		}(i)
+	}
+	wg.Wait()
+
+	summary := recorder.Summary()
+	if summary.RecordCount != n {
+		t.Fatalf("expected record_count %d, got %d", n, summary.RecordCount)
+	}
+
+	if err := recorder.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	loaded, err := LoadUsage("test-concurrent", dir)
+	if err != nil {
+		t.Fatalf("LoadUsage failed: %v", err)
+	}
+	if loaded.RecordCount != n {
+		t.Fatalf("expected %d lines in usage.jsonl, got %d", n, loaded.RecordCount)
+	}
+	if loaded.TotalTokens != n*2 {
+		t.Fatalf("expected total_tokens %d, got %d", n*2, loaded.TotalTokens)
+	}
+	for _, rec := range loaded.Records {
+		if rec.Round < 0 || rec.Round >= n {
+			t.Fatalf("record round %d out of range", rec.Round)
+		}
+	}
+}
+
+func TestUsageRecorder_RecordAtDimensions(t *testing.T) {
+	dir := t.TempDir()
+	recorder := NewUsageRecorder("test-dims", dir, nil)
+	defer recorder.Close()
+	usage := model.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+
+	recorder.RecordAt(usage, "deepseek-chat", "deepseek", 3, 2, 42)
+	summary := recorder.Summary()
+	if summary.Records[0].Turn != 3 || summary.Records[0].Round != 2 || summary.Records[0].SessionSeq != 42 {
+		t.Fatalf("expected turn=3 round=2 seq=42, got %+v", summary.Records[0])
+	}
+
+	// Legacy Record keeps zero dimensions.
+	recorder.Record(usage, "deepseek-chat", "deepseek")
+	summary = recorder.Summary()
+	if summary.Records[1].Turn != 0 || summary.Records[1].Round != 0 || summary.Records[1].SessionSeq != 0 {
+		t.Fatalf("legacy Record must keep zero dimensions, got %+v", summary.Records[1])
+	}
+
+	// The persistent handle must be released so the file is not locked.
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
 }

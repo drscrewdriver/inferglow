@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/inferglow/action"
@@ -77,8 +78,8 @@ type Engine struct {
 	// of the current run (RF-2: /effort injection). Caller keys win over
 	// engine-built keys. Propagated from Agent.Run via WithModelOptions.
 	modelOptions map[string]any
-	auditHook audit.AuditHook
-	loopGuard *LoopGuard
+	auditHook    audit.AuditHook
+	loopGuard    *LoopGuard
 
 	// streamTimeout caps how long executeLoop will wait for the model
 	// stream channel to deliver the next chunk. Zero means "use the
@@ -146,6 +147,14 @@ type Engine struct {
 	// JSONL。通常经 RunOption WithRollout 注入；对 ephemeral 会话由调用方
 	// 以空目录构造 recorder 实现 no-op。
 	rollout *session.RolloutRecorder
+
+	// turnSeq 是用户回合编号器：executeLoop 开始时自增并作为本次回合的
+	// turn 编号，turn_end 后不复位（跨回合单调递增）。原子操作保证并发
+	// Run 安全；rollout 为 nil 时仍维护（零成本）。
+	turnSeq atomic.Int64
+	// currentTurn 是进行中回合的编号（0 = 无活跃回合），recordRollout 据此
+	// 给每条事件盖上 turn 归属。
+	currentTurn atomic.Int64
 
 	// cacheBudgetHook is called after each LLM response with the
 	// cached_tokens count from UsageInfo. nil disables (default).
@@ -421,7 +430,23 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 	} else {
 		e.session.AddUserMessage(userMessage)
 	}
-	// R3：记录本轮用户消息入口。
+	// R3：记录本轮用户消息入口；同时划定服务端 turn 边界——turn 编号跨
+	// 回合单调递增，turn_start/turn_end 之间即本回合的全部 LLM round、
+	// 工具与上下文事件（对齐 deepseek-harness 的 turn/start|end 溯源）。
+	turn := int(e.turnSeq.Add(1))
+	e.currentTurn.Store(int64(turn))
+	turnStart := time.Now()
+	e.recordRollout(session.RolloutItem{Type: session.RolloutTurnStart,
+		Payload: model.TurnStartPayload{Turn: turn, Message: userMessage}})
+	defer func() {
+		reason := "final"
+		if err != nil {
+			reason = "error"
+		}
+		e.recordRollout(session.RolloutItem{Type: session.RolloutTurnEnd,
+			Payload: model.TurnEndPayload{Turn: turn, WallMs: time.Since(turnStart).Milliseconds(), Reason: reason}})
+		e.currentTurn.Store(0)
+	}()
 	e.recordRollout(session.RolloutItem{Type: session.RolloutUserMessage, Content: userMessage})
 
 	// Ensure the TurnLoop is left in the idle phase no matter how the loop
@@ -611,11 +636,25 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 
+		// P2：llm_request 事件——六分类上下文构成（对标 dsh-context），
+		// 模型名取 RequestData.Model（provider 填充后）、请求方名兜底。
+		roundStart := time.Now()
+		var firstChunkAt time.Time
+		providerName := e.activeRequester().Name()
+
 		// Call LLM
 		data, err := e.activeRequester().GenerateRequestData(ctx, req)
 		if err != nil {
 			return nil, err
 		}
+		e.recordRollout(session.RolloutItem{Type: session.RolloutLLMRequest,
+			Payload: model.LLMRequestPayload{
+				Turn:      int(e.currentTurn.Load()),
+				Round:     round,
+				Model:     data.Model,
+				Provider:  providerName,
+				Breakdown: estimateContextBreakdown(req.System, req.Tools, req.ChatHistory),
+			}})
 
 		// BUG-8: cap stream consumption with a timeout so a stuck stream
 		// cannot block executeLoop forever. Default 5 minutes; overridable
@@ -645,6 +684,9 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			case chunk, ok := <-stream:
 				if !ok {
 					break streamLoop
+				}
+				if firstChunkAt.IsZero() && (chunk.Delta != "" || chunk.Reasoning != "" || len(chunk.Tools) > 0) {
+					firstChunkAt = time.Now() // TTFT 锚点（首个可见输出块）
 				}
 				content.WriteString(chunk.Delta)
 				// Emit token delta for real-time display.
@@ -686,6 +728,22 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 			}
 		}
 		cancelTimeout()
+
+		// P2：llm_response 事件——本 round 的落定结果（usage / 耗时 /
+		// TTFT）。成本由持有 pricing 的消费方（UsageRecorder）补充，引擎
+		// 侧留零。
+		respPayload := model.LLMResponsePayload{
+			Turn:       int(e.currentTurn.Load()),
+			Round:      round,
+			Model:      data.Model,
+			Provider:   providerName,
+			Usage:      lastUsage,
+			DurationMs: time.Since(roundStart).Milliseconds(),
+		}
+		if !firstChunkAt.IsZero() {
+			respPayload.TTFTMs = firstChunkAt.Sub(roundStart).Milliseconds()
+		}
+		e.recordRollout(session.RolloutItem{Type: session.RolloutLLMResponse, Payload: respPayload})
 
 		// Debug: log what the LLM returned
 		log.Printf("[agent-debug] round=%d contentLen=%d nativeToolCalls=%d content_preview=%q",
@@ -1104,6 +1162,12 @@ func (e *Engine) executeLoop(ctx context.Context, userMessage string, maxRounds 
 				}
 			}
 			e.recordRollout(item)
+			// P2：文件类工具折叠 file_op 事件（read/write/search + 路径），
+			// 供前端文件活动卡使用；非文件工具不产生事件。
+			if op, ok := fileOpForTool(ac.Name, ac.Params); ok {
+				e.recordRollout(session.RolloutItem{Type: session.RolloutFileOp,
+					ToolName: ac.Name, Payload: op})
+			}
 		}
 
 		// Add results to session using native tool message format when
@@ -1350,11 +1414,79 @@ func (e *Engine) capturePreemptState(round, toolCallRounds int) {
 
 // recordRollout 把一条 Rollout item 追加到会话级记录器，绕过时零成本。
 // 记录器为 nil 时该方法立即返回（向后兼容硬约束，不产生任何副作用）。
-// SessionID / Seq / Timestamp 由 recorder.Record 内部填充，这里只传类型
-// 与业务字段。属于 R3 的弱耦合接线点，失败（如落盘错误）不打断主流程。
+// SessionID / Seq / Timestamp 由 recorder.Record 内部填充，这里补盖 turn
+// 归属（进行中回合的编号，0 = 无活跃回合 / 旧数据）。属于 R3 的弱耦合
+// 接线点，失败（如落盘错误）不打断主流程。
 func (e *Engine) recordRollout(item session.RolloutItem) {
 	if e.rollout == nil {
 		return
 	}
+	if item.Turn == 0 {
+		item.Turn = int(e.currentTurn.Load())
+	}
 	_ = e.rollout.Record(item)
+}
+
+// estimateTokensLen 提供粗略 token 估算（≈4 字符 1 token），供六分类
+// 上下文构成统计使用。与 context 模块的 estimateTokensSimple 同口径。
+func estimateTokensLen(s string) int {
+	if s == "" {
+		return 0
+	}
+	return (len(s) + 3) / 4
+}
+
+// estimateContextBreakdown 按六分类（system / tool schemas / user / inject /
+// assistant / tool results）估算一次 LLM 请求的上下文构成，对标
+// dsh-context 的 RequestRecord。按消息 role 归类：tool → tool_results，
+// assistant → assistant，user → user，其余（system 等注入态）→ inject。
+func estimateContextBreakdown(system string, tools []model.ToolDefinition, history []model.ChatMessage) *model.ContextBreakdown {
+	b := &model.ContextBreakdown{}
+	b.System = estimateTokensLen(system)
+	if len(tools) > 0 {
+		if raw, err := json.Marshal(tools); err == nil {
+			b.ToolSchemas = estimateTokensLen(string(raw))
+		}
+	}
+	for _, m := range history {
+		switch m.Role {
+		case "tool":
+			b.ToolResults += estimateTokensLen(m.Content)
+		case "assistant":
+			b.Assistant += estimateTokensLen(m.Content)
+		case "user":
+			b.User += estimateTokensLen(m.Content)
+		default:
+			b.Inject += estimateTokensLen(m.Content)
+		}
+	}
+	b.Total = b.System + b.ToolSchemas + b.User + b.Inject + b.Assistant + b.ToolResults
+	return b
+}
+
+// fileOpForTool 从工具调用折叠出文件操作（task 11）：按工具名前缀识别
+// read/write/search 三类 op，路径取常见参数键。ok=false 表示与文件无关，
+// 不产生 file_op 事件。
+func fileOpForTool(name string, params map[string]any) (payload model.FileOpPayload, ok bool) {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "read"):
+		payload.Op = "read"
+	case strings.Contains(lower, "write") || strings.Contains(lower, "edit"):
+		payload.Op = "write"
+	case strings.Contains(lower, "search") || strings.Contains(lower, "grep") ||
+		strings.Contains(lower, "glob") || strings.Contains(lower, "list"):
+		payload.Op = "search"
+	default:
+		return payload, false
+	}
+	for _, key := range []string{"path", "file_path", "filepath", "file"} {
+		if v, ok := params[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				payload.Path = s
+				break
+			}
+		}
+	}
+	return payload, true
 }

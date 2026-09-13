@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,18 +21,23 @@ import (
 	"github.com/inferglow/observability"
 	"github.com/inferglow/orchestrator/actionruntime"
 	agentpkg "github.com/inferglow/orchestrator/agent"
+	"github.com/inferglow/session"
 )
 
 // ToolStreamEvent represents a streaming event sent via SSE.
 //
 // Event types: run_start, delta, reasoning, llm_start, llm_end, tool_start,
-// tool_end, run_end, error, done. delta/reasoning carry the incremental LLM
-// output in Delta (never persisted; the full reply arrives at run_end and is
-// the persistence contract). llm_end carries the provider-reported Usage.
+// tool_end, run_end, error, done, plus the P2 telemetry kinds turn_start,
+// turn_end, llm_request (additive; old clients ignore unknown events).
+// delta/reasoning carry the incremental LLM output in Delta (never persisted;
+// the full reply arrives at run_end and is the persistence contract). llm_end
+// carries the provider-reported Usage and the model name.
 type ToolStreamEvent struct {
 	Type      string           `json:"type"`                // event kind (see above)
 	ToolName  string           `json:"tool_name,omitempty"` // tool name (for tool events); full reply on run_end (contract quirk)
 	Round     int              `json:"round,omitempty"`     // iteration round (for LLM events)
+	Turn      int              `json:"turn,omitempty"`      // turn number (turn_start/turn_end; one run = one turn)
+	Model     string           `json:"model,omitempty"`     // model name (llm_start/llm_end/llm_request)
 	Tokens    int              `json:"tokens,omitempty"`    // token count (for LLM end events)
 	Error     string           `json:"error,omitempty"`
 	Delta     string           `json:"delta,omitempty"` // incremental text for delta/reasoning
@@ -93,8 +101,10 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 	eventCh := make(chan ToolStreamEvent, 256)
 	doneCh := make(chan struct{})
 
-	sc := newStreamCallbacks(eventCh, s.spanCollector, req.SessionID)
+	usageRec, modelName := s.usageRecorderFor(req.SessionID, id)
+	sc := newStreamCallbacks(eventCh, s.spanCollector, req.SessionID, usageRec)
 	sc.agentID = id
+	sc.modelName = modelName
 	runner, supportsCallbacks := agent.(CallbacksRunner)
 
 	// Run agent in background goroutine. Persistence of tool/assistant
@@ -144,6 +154,15 @@ func (s *Server) handleStreamRun(w http.ResponseWriter, r *http.Request) {
 			sc.persistMessages(s, req.SessionID, sanitizeAgentReply(resp))
 		}
 		sc.persistTrace(s, req.SessionID, runErr)
+		sc.closeUsage()
+
+		// P3 telemetry: close the run-scoped turn (one run = one turn).
+		errMsg := ""
+		if runErr != nil {
+			errMsg = runErr.Error()
+		}
+		sc.send(ToolStreamEvent{Type: "turn_end", Turn: 1,
+			Error: errMsg, Timestamp: time.Now().UTC().Format(time.RFC3339)})
 
 		if runErr != nil {
 			sc.emit("error", "", 0, 0, runErr.Error())
@@ -193,16 +212,25 @@ type streamCallbacks struct {
 	llmStart   time.Time
 	toolStarts map[string]time.Time
 
+	// usageRecorder (optional) persists one UsageRecord per LLM round into
+	// sessions/<id>.usage.jsonl; nil when no session or no usage data dir is
+	// configured. Closed once the run settles.
+	usage *session.UsageRecorder
+	// modelName is the agent's configured model name ("" when unknown),
+	// stamped onto per-request usage records and llm spans.
+	modelName string
+
 	mu    sync.Mutex
 	tools []toolRecord
 
 	// Run summary accumulation — persisted as a MessageRoleTrace record at
 	// run completion so 轨迹/上下文 survive restarts and session restores
-	// (the SpanCollector ring is in-memory only).
-	agentID  string
-	runStart time.Time
-	runSpans []runSpanRec
-	runUsage *model.UsageInfo
+	// (the SpanCollector ring is in-memory only). Spans/requests use the
+	// shared model contract types (model.RunTraceSummary).
+	agentID     string
+	runStart    time.Time
+	runSpans    []model.SpanRecord
+	runRequests []model.RequestUsageSummary
 
 	// Decision-envelope gating (per LLM round). Some served models answer in
 	// the framework's planning-decision JSON ({"action_calls":[...],
@@ -220,19 +248,23 @@ type toolRecord struct {
 	status string // "ok" | "error"
 }
 
-// runSpanRec is one persisted span line of the run summary.
-type runSpanRec struct {
-	Kind       string `json:"kind"` // agent | llm | tool
-	Name       string `json:"name"`
-	DurationMs int64  `json:"duration_ms"`
-	HasError   bool   `json:"error,omitempty"`
-}
+// runSpanRec is one persisted span line of the run summary (now the shared
+// model.SpanRecord contract). Round/Turn/Model/Usage are filled only for llm
+// spans (round indexes the LLM call within the run) and omitted otherwise, so
+// older consumers reading spans keep working unchanged.
+type runSpanRec = model.SpanRecord
 
-func newStreamCallbacks(eventCh chan<- ToolStreamEvent, collector *observability.SpanCollector, sessionID string) *streamCallbacks {
+// requestUsageRec is one per-request (per LLM round) usage line of the run
+// summary — the "requests" array that replaces the single last-round "usage"
+// field (kept for backward compatibility).
+type requestUsageRec = model.RequestUsageSummary
+
+func newStreamCallbacks(eventCh chan<- ToolStreamEvent, collector *observability.SpanCollector, sessionID string, usage *session.UsageRecorder) *streamCallbacks {
 	return &streamCallbacks{
 		eventCh:    eventCh,
 		collector:  collector,
 		sessionID:  sessionID,
+		usage:      usage,
 		toolStarts: make(map[string]time.Time),
 	}
 }
@@ -287,6 +319,42 @@ func (c *streamCallbacks) recordSpan(kind observability.SpanKind, name string, s
 	})
 }
 
+// recordLLMSpan records a finished LLM-call span, enriched with the round
+// index, model name and provider-reported usage so the persisted trace line
+// carries per-request dimensions (agent/tool spans use recordSpan).
+func (c *streamCallbacks) recordLLMSpan(round int, start, end time.Time, hasError bool, usage *model.UsageInfo) {
+	name := fmt.Sprintf("inferglow.llm.call.%d", round)
+	c.mu.Lock()
+	c.runSpans = append(c.runSpans, runSpanRec{
+		Kind: string(observability.SpanKindLLM), Name: name,
+		DurationMs: end.Sub(start).Milliseconds(), HasError: hasError,
+		Round: round, Model: c.modelName, Usage: usage,
+	})
+	modelName := c.modelName
+	c.mu.Unlock()
+	if c.collector == nil {
+		return
+	}
+	attrs := map[string]string{}
+	if c.sessionID != "" {
+		attrs["inferglow.session_id"] = c.sessionID
+	}
+	if modelName != "" {
+		attrs["inferglow.model"] = modelName
+	}
+	if round > 0 {
+		attrs["inferglow.round"] = strconv.Itoa(round)
+	}
+	c.collector.OnEnd(observability.SpanSummary{
+		Name:     name,
+		Kind:     observability.SpanKindLLM,
+		Duration: end.Sub(start),
+		EndTime:  end.UTC(),
+		HasError: hasError,
+		Attrs:    attrs,
+	})
+}
+
 // agentCallbacks renders the SSE bridging as an agentpkg.AgentCallbacks for
 // injection via WithCallbacks. Lifecycle timing also feeds the span recorder.
 func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
@@ -296,14 +364,22 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 			c.runStart = time.Now()
 			c.mu.Unlock()
 			c.emit("run_start", "", 0, 0, "")
+			// P3 telemetry: the server stream path defines one run = one
+			// turn, so turn boundaries ride the run lifecycle.
+			c.send(ToolStreamEvent{Type: "turn_start", Turn: 1,
+				Timestamp: time.Now().UTC().Format(time.RFC3339)})
 		},
 		OnLLMCallStart: func(ctx context.Context, round int) {
 			c.mu.Lock()
 			c.llmStart = time.Now()
 			c.roundBuf.Reset()
 			c.roundRaw = false
+			modelName := c.modelName
 			c.mu.Unlock()
-			c.emit("llm_start", "", round, 0, "")
+			c.send(ToolStreamEvent{Type: "llm_start", Round: round, Model: modelName,
+				Timestamp: time.Now().UTC().Format(time.RFC3339)})
+			c.send(ToolStreamEvent{Type: "llm_request", Round: round, Model: modelName,
+				Timestamp: time.Now().UTC().Format(time.RFC3339)})
 		},
 		OnLLMCallEnd: func(ctx context.Context, round int, tokens int, usage *model.UsageInfo) {
 			// Resolve the round's buffered output BEFORE llm_end so the
@@ -330,17 +406,33 @@ func (c *streamCallbacks) agentCallbacks() *agentpkg.AgentCallbacks {
 						Timestamp: time.Now().UTC().Format(time.RFC3339)})
 				}
 			}
+			now := time.Now()
 			if !start.IsZero() {
-				c.recordSpan(observability.SpanKindLLM, fmt.Sprintf("inferglow.llm.call.%d", round), start, false, nil)
+				c.recordLLMSpan(round, start, now, false, nil)
 			}
 			if usage != nil {
 				c.mu.Lock()
-				c.runUsage = usage
+				c.runRequests = append(c.runRequests, requestUsageRec{
+					Round:      round,
+					Model:      c.modelName,
+					Timestamp:  now.UTC().Format(time.RFC3339),
+					DurationMs: now.Sub(start).Milliseconds(),
+					Tokens:     tokens,
+					Usage:      usage,
+				})
+				recorder := c.usage
+				modelName := c.modelName
 				c.mu.Unlock()
+				if recorder != nil {
+					// Persist per-request usage; turn/sessionSeq stay 0 until
+					// the server gains turn boundaries (P2 wiring).
+					recorder.RecordAt(*usage, modelName, "", 0, round, 0)
+				}
 			}
 			c.send(ToolStreamEvent{
 				Type:      "llm_end",
 				Round:     round,
+				Model:     c.modelName,
 				Tokens:    tokens,
 				Usage:     usage,
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -466,25 +558,67 @@ func (c *streamCallbacks) persistTrace(s *Server, sessionID string, runErr error
 		return
 	}
 	c.mu.Lock()
-	summary := map[string]any{
-		"agent_id": c.agentID,
-		"start":    c.runStart.UTC().Format(time.RFC3339),
-		"duration": time.Since(c.runStart).Round(time.Millisecond).String(),
-		"spans":    c.runSpans,
-		"error":    "",
+	requests := append([]model.RequestUsageSummary(nil), c.runRequests...)
+	summary := model.RunTraceSummary{
+		AgentID:    c.agentID,
+		Start:      c.runStart.UTC().Format(time.RFC3339),
+		Duration:   time.Since(c.runStart).Round(time.Millisecond).String(),
+		DurationMs: time.Since(c.runStart).Milliseconds(),
+		Spans:      c.runSpans,
 	}
 	if runErr != nil {
-		summary["error"] = runErr.Error()
+		summary.Error = runErr.Error()
 	}
-	if c.runUsage != nil {
-		summary["usage"] = c.runUsage
+	if len(requests) > 0 {
+		// schema:2 marker + per-request array (new keys, additive only).
+		summary.Schema = 2
+		summary.Requests = requests
+		// turns[]: the server stream path defines one run = one turn, so the
+		// summary carries a single aggregated entry (rollout events carry the
+		// finer per-turn granularity).
+		totalTokens := 0
+		for _, req := range requests {
+			totalTokens += req.Tokens
+		}
+		summary.Turns = []model.TurnSummary{{
+			Turn: 1, Rounds: len(requests), TotalTokens: totalTokens,
+			WallMs: time.Since(c.runStart).Milliseconds(), Start: summary.Start,
+			Error: summary.Error,
+		}}
+		// Backward-compatible "usage": the last round's usage, matching the
+		// pre-per-request behavior of the field.
+		summary.Usage = requests[len(requests)-1].Usage
 	}
 	c.mu.Unlock()
 	b, err := json.Marshal(summary)
 	if err != nil {
 		return
 	}
+	// P2/P3: mirror the full run detail (spans + per-request usage) into a
+	// per-run JSONL file so the detail channel can serve it without parsing
+	// the trace message and so the message-store record can later be slimmed.
+	s.persistRunDetail(sessionID, b)
 	s.recordMessage(sessionID, MessageRoleTrace, string(b), "", "")
+}
+
+// persistRunDetail appends one settled run summary line to
+// <UsageDataDir>/sessions/<id>.run.<unixmilli>.jsonl. Best-effort: telemetry
+// persistence must never fail the run. No-op when no usage data dir is set.
+func (s *Server) persistRunDetail(sessionID string, line []byte) {
+	if s.cfg.UsageDataDir == "" {
+		return
+	}
+	dir := filepath.Join(s.cfg.UsageDataDir, "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	name := fmt.Sprintf("%s.run.%d.jsonl", sessionID, time.Now().UnixMilli())
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(line, '\n'))
 }
 
 // envelopeDisplayText is the streaming-side twin of sanitizeAgentReply: the
@@ -538,6 +672,44 @@ func (c *streamCallbacks) persistMessages(s *Server, sessionID, reply string) {
 	if reply != "" {
 		s.recordMessage(sessionID, MessageRoleAssistant, reply, "", "")
 	}
+}
+
+// closeUsage flushes and closes the per-run usage recorder (no-op when nil),
+// releasing the persistent usage.jsonl handle once the run has settled.
+func (c *streamCallbacks) closeUsage() {
+	c.mu.Lock()
+	recorder := c.usage
+	c.usage = nil
+	c.mu.Unlock()
+	if recorder != nil {
+		_ = recorder.Close()
+	}
+}
+
+// modelNamer is implemented by agents carrying their configured model name
+// (ConfigAgent); agents without one report per-request usage with an empty
+// model field.
+type modelNamer interface {
+	ModelName() string
+}
+
+// usageRecorderFor builds the per-run UsageRecorder backing per-request usage
+// persistence, resolving the agent's model name for cost pricing. Returns a
+// nil recorder when the run has no chat session or the server has no usage
+// data dir configured.
+func (s *Server) usageRecorderFor(sessionID, agentID string) (*session.UsageRecorder, string) {
+	if sessionID == "" || s.cfg.UsageDataDir == "" {
+		return nil, ""
+	}
+	modelName := ""
+	if mn, ok := s.agentStore.Get(agentID).(modelNamer); ok {
+		modelName = mn.ModelName()
+	}
+	var pricing *model.Pricing
+	if p, ok := model.LookupPricing(modelName); ok {
+		pricing = &p
+	}
+	return session.NewUsageRecorder(sessionID, s.cfg.UsageDataDir, pricing), modelName
 }
 
 // persistedCallbacks reads the agent's construction-time callbacks so run-level
